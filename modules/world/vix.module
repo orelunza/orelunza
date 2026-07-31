@@ -1,0 +1,15 @@
+name = "world"
+kind = "service"
+
+[routes]
+prefix = "/api/world"
+
+[deps]
+registry = [
+]
+
+links = [
+]
+
+[tests]
+enabled = true
