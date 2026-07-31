@@ -4,12 +4,15 @@ kind = "service"
 [routes]
 prefix = "/api/identity"
 
+[tests]
+enabled = true
+
 [deps]
 registry = [
+  "rix/auth@0.4.0",
 ]
 
 links = [
+  "rix::auth",
 ]
 
-[tests]
-enabled = true

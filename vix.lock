@@ -1,0 +1,16 @@
+{
+  "dependencies": [
+    {
+      "commit": "3c437e77d82b51b565f31b0d751867b08bafaacc",
+      "hash": "78b243f958b9f571bfe7517d439e48c55a5cc3cbb8929664a595008be9b6bff1",
+      "hash_algorithm": "vix-package-sha256",
+      "hash_version": 2,
+      "id": "rix/auth",
+      "repo": "https://github.com/rixcpp/auth",
+      "requested": "0.4.0",
+      "tag": "v0.4.0",
+      "version": "0.4.0"
+    }
+  ],
+  "lockVersion": 1
+}
