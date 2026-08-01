@@ -129,6 +129,17 @@ namespace orelunza::identity
     return runtime != nullptr;
   }
 
+  services::IdentityService &IdentityModule::service()
+  {
+    if (!runtime)
+    {
+      throw std::logic_error(
+          "The identity module is not initialized.");
+    }
+
+    return runtime->identity_service;
+  }
+
   void IdentityModule::register_routes(vix::App &app)
   {
     if (!runtime)

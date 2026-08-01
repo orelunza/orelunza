@@ -25,6 +25,11 @@ namespace vix::db
   class Database;
 }
 
+namespace orelunza::identity::services
+{
+  class IdentityService;
+}
+
 namespace orelunza::identity
 {
   /**
@@ -61,6 +66,18 @@ namespace orelunza::identity
      * @return true when initialization completed successfully.
      */
     [[nodiscard]] static bool initialized() noexcept;
+
+    /**
+     * @brief Return the initialized identity application service.
+     *
+     * This allows dependent modules such as world to use the public identity
+     * service without depending directly on Rix authentication internals.
+     *
+     * @return Identity application service.
+     *
+     * @throws std::logic_error when the module is not initialized.
+     */
+    [[nodiscard]] static services::IdentityService &service();
 
     /**
      * @brief Register the identity HTTP routes.
