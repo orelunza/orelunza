@@ -6,7 +6,6 @@ import type {
 } from './world/voxel-types';
 import type { InventorySnapshot } from './inventory/Inventory';
 import type { CharacterAppearanceV1 } from './character/CharacterAppearance';
-import type { PerformanceSnapshot } from './debug/PerformanceMonitor';
 
 export type GameStatus =
 	'booting' | 'loading-world' | 'playing' | 'paused' | 'inventory' | 'error' | 'destroyed';
@@ -43,8 +42,7 @@ export interface GameSnapshot {
 	message: string | null;
 	error: string | null;
 	mobileLimited: boolean;
-	debugPerformance: boolean;
-	performance: PerformanceSnapshot | null;
+	diagnostics?: GameDiagnosticsSnapshot;
 }
 
 export interface GameEngineOptions {
@@ -57,4 +55,24 @@ export interface GameEngineOptions {
 	onSnapshot?: (snapshot: GameSnapshot) => void;
 	onError?: (error: Error) => void;
 	onMove?: (position: WorldCoordinate, yaw: number, pitch: number) => void | Promise<void>;
+}
+
+export interface GameDiagnosticsSnapshot {
+	startCount: number;
+	activeLoops: number;
+	fps: number;
+	frameTimeMs: number;
+	physicsMs: number;
+	collisionCells: number;
+	cameraMs: number;
+	renderMs: number;
+	svelteCallbacksPerSecond: number;
+	backendCallsPerSecond: number;
+	hudUpdatesPerSecond: number;
+	chunksActive: number;
+	threeObjects: number;
+	drawCalls: number;
+	triangles: number;
+	worldRebuilds: number;
+	chunkRefreshes: number;
 }

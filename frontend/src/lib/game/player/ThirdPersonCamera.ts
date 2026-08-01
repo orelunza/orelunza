@@ -21,6 +21,11 @@ export class ThirdPersonCamera {
 	private correctedDistance = DEFAULT_CAMERA_DISTANCE;
 	private readonly current = new Vector3();
 	private readonly target = new Vector3();
+	private readonly direction = new Vector3();
+	private readonly desired = new Vector3();
+	private readonly sample = new Vector3();
+	private readonly origin = new Vector3();
+	private updateMs = 0;
 
 	constructor(
 		aspect: number,
@@ -33,6 +38,10 @@ export class ThirdPersonCamera {
 		return this.yaw;
 	}
 
+	get orientationPitch(): number {
+		return this.pitch;
+	}
+
 	get orbitDistance(): number {
 		return this.distance;
 	}
@@ -41,8 +50,8 @@ export class ThirdPersonCamera {
 		return this.correctedDistance;
 	}
 
-	get orientationPitch(): number {
-		return this.pitch;
+	get lastUpdateMs(): number {
+		return this.updateMs;
 	}
 
 	setOrientation(yaw: number, pitch = 0.34): void {
@@ -64,22 +73,21 @@ export class ThirdPersonCamera {
 	}
 
 	update(player: PlayerState): void {
+		const startedAt = performance.now();
 		this.target.set(player.position.x, player.position.y + TARGET_HEIGHT, player.position.z);
 		const horizontal = Math.cos(this.pitch);
-		const direction = new Vector3(
-			-Math.sin(this.yaw) * horizontal,
-			Math.sin(this.pitch),
-			-Math.cos(this.yaw) * horizontal
-		).normalize();
-		const safeDistance = this.safeDistance(this.target, direction, this.distance);
+		this.direction
+			.set(-Math.sin(this.yaw) * horizontal, Math.sin(this.pitch), -Math.cos(this.yaw) * horizontal)
+			.normalize();
+		const safeDistance = this.safeDistance(this.target, this.direction, this.distance);
 		const distanceLerp = safeDistance < this.correctedDistance ? 0.55 : 0.12;
 		this.correctedDistance += (safeDistance - this.correctedDistance) * distanceLerp;
-		const desired = this.target.clone().add(direction.multiplyScalar(this.correctedDistance));
+		this.desired.copy(this.direction).multiplyScalar(this.correctedDistance).add(this.target);
 
 		if (this.current.lengthSq() === 0) {
-			this.current.copy(desired);
+			this.current.copy(this.desired);
 		} else {
-			this.current.lerp(desired, 0.2);
+			this.current.lerp(this.desired, 0.2);
 		}
 
 		const floorY = this.world.terrainGenerator.heightAt(this.current.x, this.current.z) + 0.45;
@@ -90,6 +98,7 @@ export class ThirdPersonCamera {
 
 		this.camera.position.copy(this.current);
 		this.camera.lookAt(this.target);
+		this.updateMs = performance.now() - startedAt;
 	}
 
 	resize(width: number, height: number): void {
@@ -98,31 +107,38 @@ export class ThirdPersonCamera {
 	}
 
 	private safeDistance(target: Vector3, direction: Vector3, desiredDistance: number): number {
-		const offsets = [
-			new Vector3(0, 0, 0),
-			new Vector3(0.22, 0, 0),
-			new Vector3(-0.22, 0, 0),
-			new Vector3(0, 0.22, 0)
-		];
 		let safe = desiredDistance;
 
-		for (const offset of offsets) {
-			const origin = target.clone().add(offset);
-			const hit = this.castToObstacle(origin, direction, desiredDistance);
+		for (let index = 0; index < 4; index += 1) {
+			this.origin.copy(target);
+
+			if (index === 1) {
+				this.origin.x += 0.22;
+			} else if (index === 2) {
+				this.origin.x -= 0.22;
+			} else if (index === 3) {
+				this.origin.y += 0.22;
+			}
+
+			const hit = this.castToObstacle(this.origin, direction, desiredDistance);
 
 			if (hit !== null) {
 				safe = Math.min(safe, Math.max(MIN_CAMERA_DISTANCE, hit - CAMERA_MARGIN));
 			}
 		}
 
-		const desired = target.clone().add(direction.clone().multiplyScalar(safe));
-		const terrainFloor = this.world.terrainGenerator.heightAt(desired.x, desired.z) + 0.45;
+		this.desired.copy(direction).multiplyScalar(safe).add(target);
+		const terrainFloor =
+			this.world.terrainGenerator.heightAt(this.desired.x, this.desired.z) + 0.45;
 
-		if (desired.y < terrainFloor) {
+		if (this.desired.y < terrainFloor) {
 			for (let distance = safe; distance >= MIN_CAMERA_DISTANCE; distance -= 0.2) {
-				const candidate = target.clone().add(direction.clone().multiplyScalar(distance));
+				this.sample.copy(direction).multiplyScalar(distance).add(target);
 
-				if (candidate.y >= this.world.terrainGenerator.heightAt(candidate.x, candidate.z) + 0.45) {
+				if (
+					this.sample.y >=
+					this.world.terrainGenerator.heightAt(this.sample.x, this.sample.z) + 0.45
+				) {
 					return distance;
 				}
 			}
@@ -137,9 +153,9 @@ export class ThirdPersonCamera {
 		const step = 0.22;
 
 		for (let distance = MIN_CAMERA_DISTANCE; distance <= maxDistance; distance += step) {
-			const sample = origin.clone().add(direction.clone().multiplyScalar(distance));
+			this.sample.copy(direction).multiplyScalar(distance).add(origin);
 
-			if (this.world.isSolidAt({ x: sample.x, y: sample.y, z: sample.z })) {
+			if (this.world.isSolidLoadedAt({ x: this.sample.x, y: this.sample.y, z: this.sample.z })) {
 				return distance;
 			}
 		}

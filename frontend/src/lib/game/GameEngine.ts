@@ -1,6 +1,7 @@
 import { Vector3 } from 'three';
 import { GameLoop } from './GameLoop';
 import type {
+	GameDiagnosticsSnapshot,
 	GameEngineOptions,
 	GameSnapshot,
 	GameStatus,
@@ -15,7 +16,6 @@ import { Inventory } from './inventory/Inventory';
 import { KeyboardInput } from './input/KeyboardInput';
 import { MouseInput } from './input/MouseInput';
 import { PointerLockController } from './input/PointerLockController';
-import { PerformanceMonitor } from './debug/PerformanceMonitor';
 import { GamePersistence } from './persistence/GamePersistence';
 import { WorldSyncService } from './persistence/WorldSyncService';
 import { PlayerAvatar } from './player/PlayerAvatar';
@@ -23,6 +23,11 @@ import { PlayerController } from './player/PlayerController';
 import { GameRenderer } from './rendering/GameRenderer';
 import { createStarterWorld } from './world/WorldGenerator';
 import { STARTER_WORLD_SEED, worldToChunk } from './world/voxel-types';
+
+const CHUNK_RADIUS = 1;
+const SNAPSHOT_INTERVAL_MS = 100;
+const AUTO_SAVE_INTERVAL_MS = 1500;
+const BACKEND_SYNC_INTERVAL_MS = 5000;
 
 export class GameEngine {
 	private readonly renderer: GameRenderer;
@@ -38,7 +43,6 @@ export class GameEngine {
 	private readonly persistence: GamePersistence;
 	private readonly avatar: PlayerAvatar;
 	private readonly worldSync = new WorldSyncService();
-	private readonly performanceMonitor = new PerformanceMonitor();
 	private readonly resizeObserver: ResizeObserver;
 	private readonly handleVisibility = (): void => {
 		if (document.hidden) {
@@ -56,11 +60,40 @@ export class GameEngine {
 	private error: string | null = null;
 	private needsWorldRebuild = true;
 	private lastBackendSync = 0;
+	private lastBackendPosition = new Vector3(Number.POSITIVE_INFINITY, 0, 0);
+	private lastAutoSaveAttempt = 0;
+	private lastSnapshotAt = 0;
+	private lastSnapshotKey = '';
+	private lastChunk: { x: number; z: number } | null = null;
+	private startPromise: Promise<void> | null = null;
+	private destroyed = false;
 	private mobileLimited = false;
 	private buildMode = false;
 	private introVisible = true;
-	private debugPerformance = false;
-	private readonly chunkRadius = 3;
+	private diagnosticsWindowStartedAt = performance.now();
+	private diagnosticsFrameCount = 0;
+	private diagnosticsCallbacks = 0;
+	private diagnosticsBackendCalls = 0;
+	private diagnosticsHudUpdates = 0;
+	private diagnostics: GameDiagnosticsSnapshot = {
+		startCount: 0,
+		activeLoops: 0,
+		fps: 0,
+		frameTimeMs: 0,
+		physicsMs: 0,
+		collisionCells: 0,
+		cameraMs: 0,
+		renderMs: 0,
+		svelteCallbacksPerSecond: 0,
+		backendCallsPerSecond: 0,
+		hudUpdatesPerSecond: 0,
+		chunksActive: 0,
+		threeObjects: 0,
+		drawCalls: 0,
+		triangles: 0,
+		worldRebuilds: 0,
+		chunkRefreshes: 0
+	};
 
 	constructor(private readonly options: GameEngineOptions) {
 		this.world = createStarterWorld(options.seed || STARTER_WORLD_SEED);
@@ -103,19 +136,35 @@ export class GameEngine {
 	}
 
 	async start(): Promise<void> {
+		if (this.startPromise) {
+			return this.startPromise;
+		}
+
+		this.startPromise = this.startInternal();
+
+		return this.startPromise;
+	}
+
+	private async startInternal(): Promise<void> {
+		if (this.destroyed) {
+			return;
+		}
+
+		this.diagnostics.startCount += 1;
 		this.status = 'loading-world';
 		this.emitSnapshot();
 
 		try {
 			await this.persistence.load();
-			const generationStart = performance.now();
-			this.world.ensureChunksAround(this.player.state.position, this.chunkRadius);
-			this.performanceMonitor.recordInitialGeneration(performance.now() - generationStart);
+			this.refreshChunksForPlayer(true);
 			this.renderer.rebuildWorld(this.world);
+			this.diagnostics.worldRebuilds += 1;
 			this.needsWorldRebuild = false;
 			this.status = 'playing';
 			this.emitSnapshot();
 			this.loop.start();
+			this.diagnostics.activeLoops = this.loop.isRunning ? 1 : 0;
+			this.emitSnapshot();
 		} catch (error) {
 			this.status = 'error';
 			this.error = error instanceof Error ? error.message : 'Unable to open the game world.';
@@ -175,8 +224,14 @@ export class GameEngine {
 	}
 
 	destroy(): void {
+		if (this.destroyed) {
+			return;
+		}
+
+		this.destroyed = true;
 		this.status = 'destroyed';
 		this.loop.stop();
+		this.diagnostics.activeLoops = 0;
 		void this.persistence.save(true);
 		this.resizeObserver.disconnect();
 		document.removeEventListener('visibilitychange', this.handleVisibility);
@@ -190,7 +245,7 @@ export class GameEngine {
 	}
 
 	private update(deltaSeconds: number): void {
-		this.performanceMonitor.recordFrameStart();
+		const frameStartedAt = performance.now();
 		const commands = this.keyboard.consumeCommands();
 
 		if (commands.pause) {
@@ -210,10 +265,6 @@ export class GameEngine {
 			this.message = this.buildMode ? 'Build Mode' : 'Exploration Mode';
 		}
 
-		if (commands.debugPerformance && this.status === 'playing') {
-			this.debugPerformance = !this.debugPerformance;
-		}
-
 		if (commands.hotbarIndex !== null) {
 			this.hotbar.select(commands.hotbarIndex);
 		}
@@ -230,27 +281,27 @@ export class GameEngine {
 
 		if (this.status === 'playing' && this.pointerLock.isLocked) {
 			this.player.applyMouse(this.mouse.consumeDelta());
-			const physicsStart = performance.now();
-			this.player.state.yaw = this.player.camera.orientationYaw;
-			this.player.physics.step(this.player.state, this.keyboard.getMovement(), deltaSeconds);
-			this.performanceMonitor.recordPhysics(performance.now() - physicsStart);
-			const cameraStart = performance.now();
-			this.player.camera.update(this.player.state);
-			this.performanceMonitor.recordCamera(performance.now() - cameraStart);
+			const physicsStartedAt = performance.now();
+			this.player.step(this.keyboard.getMovement(), deltaSeconds);
+			this.diagnostics.physicsMs = performance.now() - physicsStartedAt;
+			this.diagnostics.collisionCells = this.player.physics.collider.lastCellsTested;
+			this.diagnostics.cameraMs = this.player.camera.lastUpdateMs;
 			this.introVisible = false;
 			this.syncBackendPosition();
 		} else {
 			this.mouse.consumeDelta();
+			this.diagnostics.physicsMs = 0;
+			this.diagnostics.collisionCells = 0;
+			this.diagnostics.cameraMs = 0;
 		}
 
-		if (this.world.ensureChunksAround(this.player.state.position, this.chunkRadius)) {
+		if (this.refreshChunksForPlayer(false)) {
 			this.needsWorldRebuild = true;
 		}
 
 		if (this.needsWorldRebuild) {
-			const rebuildStart = performance.now();
 			this.renderer.rebuildWorld(this.world);
-			this.performanceMonitor.recordChunkRebuild(performance.now() - rebuildStart);
+			this.diagnostics.worldRebuilds += 1;
 			this.needsWorldRebuild = false;
 		}
 
@@ -273,12 +324,16 @@ export class GameEngine {
 			this.placeSelectedBlock();
 		}
 
-		void this.persistence.save(false);
-		this.emitSnapshot();
+		this.autoSaveIfDirty(frameStartedAt);
+		this.emitSnapshotThrottled(frameStartedAt);
+		this.diagnostics.frameTimeMs = performance.now() - frameStartedAt + this.diagnostics.renderMs;
+		this.recordFrame(frameStartedAt);
 	}
 
 	private render(): void {
+		const renderStartedAt = performance.now();
 		this.renderer.render(this.player.camera.camera);
+		this.diagnostics.renderMs = performance.now() - renderStartedAt;
 	}
 
 	private breakTarget(): void {
@@ -319,6 +374,24 @@ export class GameEngine {
 		this.player.camera.resize(box.width, box.height);
 	}
 
+	private refreshChunksForPlayer(force: boolean): boolean {
+		const chunk = worldToChunk(this.player.state.position);
+
+		if (
+			!force &&
+			this.lastChunk !== null &&
+			this.lastChunk.x === chunk.x &&
+			this.lastChunk.z === chunk.z
+		) {
+			return false;
+		}
+
+		this.lastChunk = { x: chunk.x, z: chunk.z };
+		this.diagnostics.chunkRefreshes += 1;
+
+		return this.world.ensureChunksAround(this.player.state.position, CHUNK_RADIUS);
+	}
+
 	private findSafeSpawn(): Vector3 {
 		const spawn = this.world.spawnPosition();
 
@@ -327,12 +400,24 @@ export class GameEngine {
 
 	private syncBackendPosition(): void {
 		const now = performance.now();
+		const position = this.player.state.position;
 
-		if (now - this.lastBackendSync < 5000) {
+		if (now - this.lastBackendSync < BACKEND_SYNC_INTERVAL_MS) {
+			return;
+		}
+
+		const movedSquared =
+			(position.x - this.lastBackendPosition.x) ** 2 +
+			(position.y - this.lastBackendPosition.y) ** 2 +
+			(position.z - this.lastBackendPosition.z) ** 2;
+
+		if (movedSquared < 0.25) {
 			return;
 		}
 
 		this.lastBackendSync = now;
+		this.lastBackendPosition.set(position.x, position.y, position.z);
+		this.diagnosticsBackendCalls += 1;
 		void this.options.onMove?.(
 			this.player.state.position,
 			this.player.state.yaw,
@@ -343,11 +428,69 @@ export class GameEngine {
 			.catch(() => undefined);
 	}
 
+	private autoSaveIfDirty(now: number): void {
+		if (this.saveStatus !== 'dirty' || now - this.lastAutoSaveAttempt < AUTO_SAVE_INTERVAL_MS) {
+			return;
+		}
+
+		this.lastAutoSaveAttempt = now;
+		void this.persistence.save(false);
+	}
+
+	private emitSnapshotThrottled(now: number): void {
+		if (now - this.lastSnapshotAt < SNAPSHOT_INTERVAL_MS) {
+			return;
+		}
+
+		const key = this.snapshotKey();
+
+		if (key === this.lastSnapshotKey) {
+			return;
+		}
+
+		this.lastSnapshotKey = key;
+		this.lastSnapshotAt = now;
+		this.emitSnapshot();
+	}
+
 	private emitSnapshot(): void {
+		this.diagnosticsCallbacks += 1;
+		this.diagnosticsHudUpdates += 1;
+		this.lastSnapshotAt = performance.now();
+		this.lastSnapshotKey = this.snapshotKey();
 		this.options.onSnapshot?.(this.snapshot());
 	}
 
+	private snapshotKey(): string {
+		const position = this.player.state.position;
+		const chunk = worldToChunk(position);
+
+		return [
+			this.status,
+			Math.round(position.x * 10),
+			Math.round(position.y * 10),
+			Math.round(position.z * 10),
+			Math.round(this.player.state.yaw * 100),
+			Math.round(this.player.state.pitch * 100),
+			chunk.x,
+			chunk.z,
+			this.hotbar.selectedIndex,
+			this.pointerLock.isLocked ? 1 : 0,
+			this.saveStatus,
+			this.world.terrainGenerator.zoneAt(position.x, position.z),
+			this.target?.block
+				? `${this.target.block.x},${this.target.block.y},${this.target.block.z}`
+				: '',
+			this.buildMode ? 1 : 0,
+			this.introVisible ? 1 : 0,
+			this.message ?? '',
+			this.error ?? ''
+		].join('|');
+	}
+
 	private snapshot(): GameSnapshot {
+		this.updateRenderDiagnostics();
+
 		return {
 			status: this.status,
 			player: {
@@ -373,10 +516,46 @@ export class GameEngine {
 			message: this.message,
 			error: this.error,
 			mobileLimited: this.mobileLimited,
-			debugPerformance: this.debugPerformance,
-			performance: this.debugPerformance
-				? this.performanceMonitor.snapshot(this.renderer.renderer, this.renderer.scene, this.world)
-				: null
+			diagnostics: { ...this.diagnostics }
 		};
 	}
+
+	private recordFrame(now: number): void {
+		this.diagnosticsFrameCount += 1;
+		const elapsed = now - this.diagnosticsWindowStartedAt;
+
+		if (elapsed < 1000) {
+			return;
+		}
+
+		const scale = 1000 / elapsed;
+		this.diagnostics.fps = this.diagnosticsFrameCount * scale;
+		this.diagnostics.svelteCallbacksPerSecond = this.diagnosticsCallbacks * scale;
+		this.diagnostics.backendCallsPerSecond = this.diagnosticsBackendCalls * scale;
+		this.diagnostics.hudUpdatesPerSecond = this.diagnosticsHudUpdates * scale;
+		this.diagnosticsFrameCount = 0;
+		this.diagnosticsCallbacks = 0;
+		this.diagnosticsBackendCalls = 0;
+		this.diagnosticsHudUpdates = 0;
+		this.diagnosticsWindowStartedAt = now;
+	}
+
+	private updateRenderDiagnostics(): void {
+		const info = this.renderer.renderer.info;
+		this.diagnostics.chunksActive = this.world.getLoadedChunks().length;
+		this.diagnostics.drawCalls = info.render.calls;
+		this.diagnostics.triangles = info.render.triangles;
+		this.diagnostics.threeObjects = countObjects(this.renderer.scene);
+		this.diagnostics.activeLoops = this.loop.isRunning ? 1 : 0;
+	}
+}
+
+function countObjects(object: { children: unknown[] }): number {
+	let count = 1;
+
+	for (const child of object.children) {
+		count += countObjects(child as { children: unknown[] });
+	}
+
+	return count;
 }

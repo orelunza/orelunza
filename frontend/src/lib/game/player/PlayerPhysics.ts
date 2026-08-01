@@ -40,12 +40,14 @@ export function cameraRelativeMovement(yaw: number, input: MovementInput): Horiz
 
 export class PlayerPhysics {
 	readonly collider: PlayerCollider;
+	private readonly candidate = { x: 0, y: 0, z: 0 };
 
 	constructor(private readonly world: VoxelWorld) {
 		this.collider = new PlayerCollider(world);
 	}
 
 	step(player: PlayerState, input: MovementInput, deltaSeconds: number): void {
+		this.collider.resetFrameStats();
 		const delta = Math.min(deltaSeconds, MAX_DELTA);
 		const speed = input.sprint ? SPRINT_SPEED : WALK_SPEED;
 		const movement = cameraRelativeMovement(player.yaw, input);
@@ -89,13 +91,13 @@ export class PlayerPhysics {
 			return;
 		}
 
-		const next = {
-			...player.position,
-			[axis]: player.position[axis] + amount
-		};
+		this.candidate.x = player.position.x;
+		this.candidate.y = player.position.y;
+		this.candidate.z = player.position.z;
+		this.candidate[axis] = player.position[axis] + amount;
 
-		if (!this.collider.wouldCollide(player, next)) {
-			player.position = next;
+		if (!this.collider.wouldCollide(player, this.candidate)) {
+			player.position[axis] = this.candidate[axis];
 
 			if (axis === 'y') {
 				player.onGround = false;
@@ -113,16 +115,16 @@ export class PlayerPhysics {
 		let remaining = amount;
 
 		while (Math.abs(remaining) > Math.abs(step)) {
-			const partial = {
-				...player.position,
-				[axis]: player.position[axis] + step
-			};
+			this.candidate.x = player.position.x;
+			this.candidate.y = player.position.y;
+			this.candidate.z = player.position.z;
+			this.candidate[axis] = player.position[axis] + step;
 
-			if (this.collider.wouldCollide(player, partial)) {
+			if (this.collider.wouldCollide(player, this.candidate)) {
 				break;
 			}
 
-			player.position = partial;
+			player.position[axis] = this.candidate[axis];
 			remaining -= step;
 		}
 
@@ -139,25 +141,23 @@ export class PlayerPhysics {
 			return false;
 		}
 
-		const raised = {
-			...player.position,
-			y: player.position.y + STEP_HEIGHT
-		};
+		this.candidate.x = player.position.x;
+		this.candidate.y = player.position.y + STEP_HEIGHT;
+		this.candidate.z = player.position.z;
 
-		if (this.collider.wouldCollide(player, raised)) {
+		if (this.collider.wouldCollide(player, this.candidate)) {
 			return false;
 		}
 
-		const stepped = {
-			...raised,
-			[axis]: raised[axis] + amount
-		};
+		this.candidate[axis] = player.position[axis] + amount;
 
-		if (this.collider.wouldCollide(player, stepped)) {
+		if (this.collider.wouldCollide(player, this.candidate)) {
 			return false;
 		}
 
-		player.position = stepped;
+		player.position.x = this.candidate.x;
+		player.position.y = this.candidate.y;
+		player.position.z = this.candidate.z;
 		player.velocity.y = 0;
 		player.onGround = false;
 
@@ -169,22 +169,24 @@ export class PlayerPhysics {
 			return true;
 		}
 
-		const lowered = {
-			...player.position,
-			y: player.position.y - GROUND_SNAP
-		};
+		this.candidate.x = player.position.x;
+		this.candidate.y = player.position.y - GROUND_SNAP;
+		this.candidate.z = player.position.z;
 
-		if (!this.collider.wouldCollide(player, lowered)) {
+		if (!this.collider.wouldCollide(player, this.candidate)) {
 			return false;
 		}
 
-		let low = lowered.y;
+		let low = this.candidate.y;
 		let high = player.position.y;
 
 		for (let index = 0; index < 8; index += 1) {
 			const mid = (low + high) / 2;
+			this.candidate.x = player.position.x;
+			this.candidate.y = mid;
+			this.candidate.z = player.position.z;
 
-			if (this.collider.wouldCollide(player, { ...player.position, y: mid })) {
+			if (this.collider.wouldCollide(player, this.candidate)) {
 				low = mid;
 			} else {
 				high = mid;

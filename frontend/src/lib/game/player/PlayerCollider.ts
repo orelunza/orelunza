@@ -3,7 +3,17 @@ import type { BlockCoordinate, WorldCoordinate } from '../world/voxel-types';
 import type { PlayerState } from './PlayerState';
 
 export class PlayerCollider {
+	private cellsTested = 0;
+
 	constructor(private readonly world: VoxelWorld) {}
+
+	get lastCellsTested(): number {
+		return this.cellsTested;
+	}
+
+	resetFrameStats(): void {
+		this.cellsTested = 0;
+	}
 
 	intersectsPlayerBlock(player: PlayerState, block: BlockCoordinate): boolean {
 		return intersectsAabb(
@@ -41,7 +51,9 @@ export class PlayerCollider {
 		for (let x = minX; x <= maxX; x += 1) {
 			for (let y = minY; y <= maxY; y += 1) {
 				for (let z = minZ; z <= maxZ; z += 1) {
-					if (this.world.isSolidAt({ x, y, z })) {
+					this.cellsTested += 1;
+
+					if (this.world.isSolidLoadedAt({ x, y, z })) {
 						return true;
 					}
 				}

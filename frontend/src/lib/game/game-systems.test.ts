@@ -1,5 +1,6 @@
-import { describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 
+import { GameLoop } from './GameLoop';
 import { GamePersistence } from './persistence/GamePersistence';
 import {
 	DEFAULT_CHARACTER_APPEARANCE,
@@ -24,7 +25,6 @@ import {
 	MIN_CAMERA_PITCH,
 	ThirdPersonCamera
 } from './player/ThirdPersonCamera';
-import { resolveQualitySettings } from './rendering/QualitySettings';
 import { BlockRegistry } from './world/BlockRegistry';
 import { TerrainGenerator } from './world/TerrainGenerator';
 import { VoxelWorld } from './world/VoxelWorld';
@@ -45,6 +45,44 @@ describe('voxel world coordinates', () => {
 
 	test('converts chunk coordinates to world origins', () => {
 		expect(chunkToWorld({ x: 2, z: -3 })).toEqual({ x: 32, y: 0, z: -48 });
+	});
+});
+
+describe('game loop performance guards', () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	test('starts only one requestAnimationFrame loop and stop cancels it', () => {
+		let nextFrame = 0;
+		const requested: number[] = [];
+		const cancelled: number[] = [];
+		const loop = new GameLoop({
+			update: () => undefined,
+			render: () => undefined
+		});
+
+		vi.stubGlobal('requestAnimationFrame', () => {
+			const frame = ++nextFrame;
+			requested.push(frame);
+
+			return frame;
+		});
+		vi.stubGlobal('cancelAnimationFrame', (frame: number) => {
+			cancelled.push(frame);
+		});
+
+		loop.start();
+		loop.start();
+
+		expect(requested).toEqual([1]);
+		expect(loop.isRunning).toBe(true);
+
+		loop.stop();
+		loop.stop();
+
+		expect(cancelled).toEqual([1]);
+		expect(loop.isRunning).toBe(false);
 	});
 });
 
@@ -71,7 +109,7 @@ describe('terrain generation', () => {
 		const generator = new TerrainGenerator(STARTER_WORLD_SEED);
 
 		expect(generator.zoneAt(CENTRAL_CITY_CENTER.x, CENTRAL_CITY_CENTER.z)).toBe('Central City');
-		expect([-3, -2, -1, 0, 1, 2, 3].some((x) => generator.isPath(x, -40))).toBe(true);
+		expect(generator.isPath(0, -40)).toBe(true);
 
 		const cityBlocks = generator
 			.generateChunk(0, Math.floor(CENTRAL_CITY_CENTER.z / 16))
@@ -112,6 +150,38 @@ describe('block registry and world mutations', () => {
 		restored.loadModifications(world.exportModifications());
 
 		expect(restored.getBlock({ x: 5, y: 20, z: 5 }).type).toBe('air');
+	});
+
+	test('keeps loaded chunks and visible generated blocks bounded while moving', () => {
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+
+		expect(world.ensureChunksAround({ x: 0, z: 0 }, 1)).toBe(true);
+		expect(world.getLoadedChunks()).toHaveLength(9);
+		const firstVisible = world.getVisibleBlocks();
+
+		expect(firstVisible.length).toBeGreaterThan(0);
+		expect(world.ensureChunksAround({ x: 96, z: 0 }, 1)).toBe(true);
+		expect(world.getLoadedChunks()).toHaveLength(9);
+		expect(world.getVisibleBlocks().some((block) => block.position.x < 16)).toBe(false);
+		expect(world.getVisibleBlocks().length).toBeLessThan(firstVisible.length * 2);
+	});
+
+	test('player and camera collision queries do not generate new chunks', () => {
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		const spawn = world.findSafeSpawnPosition();
+		const player = testPlayer(world, {
+			position: { ...spawn, x: Math.floor(spawn.x / 16) * 16 + 15.75 }
+		});
+		const camera = new ThirdPersonCamera(1, world);
+
+		world.ensureChunksAround(spawn, 0);
+		const loadedBefore = world.getLoadedChunks().length;
+		camera.setOrientation(Math.PI / 2, 0.34);
+		camera.update(player);
+		const physics = new PlayerPhysics(world);
+		physics.step(player, move(0, 1), 1 / 60);
+
+		expect(world.getLoadedChunks()).toHaveLength(loadedBefore);
 	});
 
 	test('returns a safe spawn and repairs invalid restore positions', () => {
@@ -205,7 +275,7 @@ describe('player physics', () => {
 		expect(controller.state.position.z).toBeLessThan(startZ);
 	});
 
-	test('computes left and right from the horizontal camera direction', () => {
+	test('computes left and right from the horizontal camera yaw', () => {
 		expect(cameraRelativeMovement(Math.PI, move(0, 1))).toMatchObject({
 			x: expect.closeTo(1),
 			z: expect.closeTo(0)
@@ -214,17 +284,21 @@ describe('player physics', () => {
 			x: expect.closeTo(-1),
 			z: expect.closeTo(0)
 		});
-		expect(cameraRelativeMovement(Math.PI / 2, move(1, 0))).toMatchObject({
-			x: expect.closeTo(1),
-			z: expect.closeTo(0)
-		});
-		expect(cameraRelativeMovement(-Math.PI / 2, move(1, 0))).toMatchObject({
+		expect(cameraRelativeMovement(0, move(0, 1))).toMatchObject({
 			x: expect.closeTo(-1),
 			z: expect.closeTo(0)
 		});
+		expect(cameraRelativeMovement(Math.PI / 2, move(0, 1))).toMatchObject({
+			x: expect.closeTo(0),
+			z: expect.closeTo(1)
+		});
+		expect(cameraRelativeMovement(-Math.PI / 2, move(0, 1))).toMatchObject({
+			x: expect.closeTo(0),
+			z: expect.closeTo(-1)
+		});
 	});
 
-	test('keeps camera-relative movement correct in diagonal orientations', () => {
+	test('keeps diagonal movement normalized for arbitrary camera yaw', () => {
 		const direction = cameraRelativeMovement(0.7, move(1, 1));
 
 		expect(Math.hypot(direction.x, direction.z)).toBeCloseTo(1);
@@ -234,17 +308,7 @@ describe('player physics', () => {
 
 	test('accelerates, sprints and decelerates in seconds', () => {
 		const world = new VoxelWorld(STARTER_WORLD_SEED);
-		const player = {
-			playerId: 'p',
-			worldId: 'w',
-			position: world.spawnPosition(),
-			velocity: { x: 0, y: 0, z: 0 },
-			yaw: Math.PI,
-			pitch: 0,
-			onGround: true,
-			height: 1.78,
-			radius: 0.32
-		};
+		const player = testPlayer(world);
 		const physics = new PlayerPhysics(world);
 
 		physics.step(player, move(1, 0), 1 / 60);
@@ -264,7 +328,24 @@ describe('player physics', () => {
 		expect(Math.hypot(player.velocity.x, player.velocity.z)).toBeLessThan(0.2);
 	});
 
-	test('validates safe spawn and rejects blocked or dangerous positions', () => {
+	test('keeps movement distance comparable at 30, 60 and 120 FPS', () => {
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		const distances = [30, 60, 120].map((fps) => {
+			const player = testPlayer(world);
+			const physics = new PlayerPhysics(world);
+
+			for (let index = 0; index < fps; index += 1) {
+				physics.step(player, move(1, 0), 1 / fps);
+			}
+
+			return Math.hypot(player.position.x - 0.5, player.position.z - 0.5);
+		});
+
+		expect(distances[0]).toBeCloseTo(distances[1], 0);
+		expect(distances[2]).toBeCloseTo(distances[1], 0);
+	});
+
+	test('validates safe spawn and repairs invalid restore positions', () => {
 		const world = new VoxelWorld(STARTER_WORLD_SEED);
 		const spawn = world.findSafeSpawnPosition();
 
@@ -281,17 +362,10 @@ describe('player physics', () => {
 	test('steps up one block but refuses a two-block wall', () => {
 		const world = new VoxelWorld(STARTER_WORLD_SEED);
 		const spawn = world.findSafeSpawnPosition();
-		const player = {
-			playerId: 'p',
-			worldId: 'w',
+		const player = testPlayer(world, {
 			position: { ...spawn },
-			velocity: { x: 0, y: 0, z: 0 },
-			yaw: Math.PI / 2,
-			pitch: 0,
-			onGround: true,
-			height: 1.78,
-			radius: 0.32
-		};
+			yaw: Math.PI / 2
+		});
 		const physics = new PlayerPhysics(world);
 		const obstacleX = Math.floor(spawn.x + 1);
 		const obstacleZ = Math.floor(spawn.z);
@@ -304,12 +378,10 @@ describe('player physics', () => {
 
 		expect(player.position.y).toBeGreaterThan(spawn.y + 0.5);
 
-		const wallPlayer = {
-			...player,
+		const wallPlayer = testPlayer(world, {
 			position: { ...spawn },
-			velocity: { x: 0, y: 0, z: 0 },
-			onGround: true
-		};
+			yaw: Math.PI / 2
+		});
 		world.setBlock({ x: obstacleX, y: baseY + 1, z: obstacleZ }, 'brick');
 		for (let index = 0; index < 24; index += 1) {
 			physics.step(wallPlayer, move(1, 0), 1 / 60);
@@ -318,20 +390,39 @@ describe('player physics', () => {
 		expect(wallPlayer.position.x).toBeLessThan(obstacleX);
 	});
 
+	test('does not step up while airborne or into a low ceiling', () => {
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		const spawn = world.findSafeSpawnPosition();
+		const obstacleX = Math.floor(spawn.x + 1);
+		const obstacleZ = Math.floor(spawn.z);
+		const baseY = Math.floor(spawn.y);
+		const physics = new PlayerPhysics(world);
+
+		world.setBlock({ x: obstacleX, y: baseY, z: obstacleZ }, 'brick');
+		world.setBlock({ x: obstacleX, y: baseY + 2, z: obstacleZ }, 'brick');
+
+		const ceilingPlayer = testPlayer(world, {
+			position: { ...spawn },
+			yaw: Math.PI / 2
+		});
+		for (let index = 0; index < 24; index += 1) {
+			physics.step(ceilingPlayer, move(1, 0), 1 / 60);
+		}
+		expect(ceilingPlayer.position.x).toBeLessThan(obstacleX);
+
+		const airPlayer = testPlayer(world, {
+			position: { ...spawn, y: spawn.y + 2 },
+			yaw: Math.PI / 2,
+			onGround: false
+		});
+		physics.step(airPlayer, move(1, 0), 1 / 60);
+		expect(airPlayer.position.y).toBeGreaterThan(spawn.y + 1);
+	});
+
 	test('camera clamps pitch, zoom and avoids terrain obstacles', () => {
 		const world = new VoxelWorld(STARTER_WORLD_SEED);
 		const camera = new ThirdPersonCamera(1, world);
-		const player = {
-			playerId: 'p',
-			worldId: 'w',
-			position: world.findSafeSpawnPosition(),
-			velocity: { x: 0, y: 0, z: 0 },
-			yaw: Math.PI,
-			pitch: 0,
-			onGround: true,
-			height: 1.78,
-			radius: 0.32
-		};
+		const player = testPlayer(world);
 
 		camera.setOrientation(0, -10);
 		expect(camera.orientationPitch).toBe(MIN_CAMERA_PITCH);
@@ -349,19 +440,21 @@ describe('player physics', () => {
 		);
 	});
 
-	test('selects medium quality limits by default', () => {
-		const settings = resolveQualitySettings('medium');
+	test('camera shortens before an obstacle behind the player', () => {
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		const player = testPlayer(world);
+		const camera = new ThirdPersonCamera(1, world);
+		const wallZ = Math.floor(player.position.z - 3);
+		const wallX = Math.floor(player.position.x);
 
-		expect(settings.pixelRatio).toBeLessThanOrEqual(1.5);
-		expect(settings.chunkRadius).toBe(3);
-	});
+		for (let y = Math.floor(player.position.y); y <= Math.floor(player.position.y + 3); y += 1) {
+			world.setBlock({ x: wallX, y, z: wallZ }, 'brick');
+		}
 
-	test('generates deterministic smoothed visual terrain heights', () => {
-		const first = new TerrainGenerator(STARTER_WORLD_SEED);
-		const second = new TerrainGenerator(STARTER_WORLD_SEED);
+		camera.setOrientation(0, 0.2);
+		camera.update(player);
 
-		expect(first.visualHeightAt(7.2, -13.4)).toBe(second.visualHeightAt(7.2, -13.4));
-		expect(Number.isInteger(first.visualHeightAt(7.2, -13.4))).toBe(false);
+		expect(camera.currentDistance).toBeLessThan(camera.orbitDistance);
 	});
 });
 
@@ -483,6 +576,30 @@ function move(forward: number, right: number, jump = false, sprint = false) {
 		right,
 		jump,
 		sprint
+	};
+}
+
+function testPlayer(
+	world: VoxelWorld,
+	overrides: Partial<ReturnType<typeof baseTestPlayer>> = {}
+): ReturnType<typeof baseTestPlayer> {
+	return {
+		...baseTestPlayer(world),
+		...overrides
+	};
+}
+
+function baseTestPlayer(world: VoxelWorld) {
+	return {
+		playerId: 'p',
+		worldId: 'w',
+		position: world.findSafeSpawnPosition(),
+		velocity: { x: 0, y: 0, z: 0 },
+		yaw: Math.PI,
+		pitch: 0,
+		onGround: true,
+		height: 1.78,
+		radius: 0.32
 	};
 }
 

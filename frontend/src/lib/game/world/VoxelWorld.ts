@@ -69,6 +69,7 @@ export class VoxelWorld {
 		for (const key of this.loadedChunks) {
 			if (!wanted.has(key)) {
 				this.loadedChunks.delete(key);
+				this.deleteGeneratedChunk(key);
 				changed = true;
 			}
 		}
@@ -86,7 +87,7 @@ export class VoxelWorld {
 
 			const position = parseKey(key);
 
-			if (this.isExposed(position)) {
+			if (this.isLoadedBlock(position) && this.isExposed(position)) {
 				blocks.push(BlockRegistry.create(type, position));
 			}
 		}
@@ -98,7 +99,7 @@ export class VoxelWorld {
 
 			const position = parseKey(key);
 
-			if (this.isExposed(position)) {
+			if (this.isLoadedBlock(position) && this.isExposed(position)) {
 				blocks.push(BlockRegistry.create(type, position));
 			}
 		}
@@ -197,6 +198,12 @@ export class VoxelWorld {
 
 	isSolidAt(position: BlockCoordinate): boolean {
 		const block = this.getBlock(position);
+
+		return block.solid && !block.passable;
+	}
+
+	isSolidLoadedAt(position: BlockCoordinate): boolean {
+		const block = this.peekLoadedBlock(position);
 
 		return block.solid && !block.passable;
 	}
@@ -359,6 +366,22 @@ export class VoxelWorld {
 		}
 	}
 
+	private deleteGeneratedChunk(key: string): void {
+		const [x = '0', z = '0'] = key.split(',');
+		const chunk = {
+			x: Number.parseInt(x, 10),
+			z: Number.parseInt(z, 10)
+		};
+
+		for (const block of this.generatedBlocks.keys()) {
+			const position = parseKey(block);
+
+			if (worldToChunk(position).x === chunk.x && worldToChunk(position).z === chunk.z) {
+				this.generatedBlocks.delete(block);
+			}
+		}
+	}
+
 	private generateBlock(position: BlockCoordinate): BlockType {
 		const chunk = worldToChunk(position);
 		this.generateChunk(chunk);
@@ -406,6 +429,10 @@ export class VoxelWorld {
 
 			return block.type === 'air' || block.transparent;
 		});
+	}
+
+	private isLoadedBlock(position: BlockCoordinate): boolean {
+		return this.loadedChunks.has(chunkKey(worldToChunk(position)));
 	}
 
 	private peekLoadedBlock(position: BlockCoordinate): VoxelBlock {
