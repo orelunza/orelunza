@@ -240,6 +240,7 @@ namespace orelunza::identity::services
   struct RegisteredIdentity
   {
     domain::Account account;
+    domain::AuthSession session;
     domain::Human human;
     domain::Persona persona;
   };

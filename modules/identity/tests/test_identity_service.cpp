@@ -343,6 +343,10 @@ int main()
             result.value().account.id().value());
 
         Assert::equal(
+            std::string{"session_001"},
+            result.value().session.id().value());
+
+        Assert::equal(
             std::string{"River Walker"},
             result.value().persona.display_name());
 
@@ -371,6 +375,14 @@ int main()
         Assert::equal(
             request.password,
             provider.last_registered_password);
+
+        Assert::equal(
+            request.email,
+            provider.last_login_email);
+
+        Assert::equal(
+            request.password,
+            provider.last_login_password);
 
         Assert::is_true(repository.stored_human.has_value());
         Assert::is_true(repository.stored_persona.has_value());

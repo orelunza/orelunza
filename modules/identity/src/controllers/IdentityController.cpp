@@ -290,15 +290,20 @@ namespace orelunza::identity::controllers
 
           response
               .status(201)
+              .header(
+                  "Set-Cookie",
+                  make_session_cookie(identity.session))
               .json({"ok", true,
                      "account_id", output.account_id,
                      "human_id", output.human_id,
                      "persona_id", output.persona_id,
+                     "session_id", identity.session.id().value(),
                      "email", output.email,
                      "display_name", output.display_name,
                      "avatar", output.avatar,
                      "email_verified", output.email_verified,
                      "active", output.active,
+                     "session_expires_at", identity.session.expires_at(),
                      "created_at", output.created_at});
         });
 

@@ -142,8 +142,20 @@ namespace orelunza::identity::services
           persona_created.error());
     }
 
+    auto authenticated =
+        auth_provider_->login(auth::LoginCredentials{
+            request.email,
+            request.password});
+
+    if (authenticated.failed())
+    {
+      return IdentityServiceResult<RegisteredIdentity>::failure(
+          authenticated.error());
+    }
+
     RegisteredIdentity identity{
-        std::move(account),
+        authenticated.value().account,
+        authenticated.value().session,
         std::move(human),
         std::move(persona)};
 
