@@ -106,6 +106,18 @@ export class VoxelWorld {
 		return blocks;
 	}
 
+	getVisibleConstructionBlocks(): VoxelBlock[] {
+		return this.getVisibleBlocks().filter((block) => {
+			const key = blockKey(block.position);
+
+			if (this.placedBlocks.has(key)) {
+				return true;
+			}
+
+			return block.type === 'brick' || block.type === 'wooden_plank' || block.type === 'glass';
+		});
+	}
+
 	getBlock(position: BlockCoordinate): VoxelBlock {
 		const normalized = normalizeBlock(position);
 
@@ -204,21 +216,112 @@ export class VoxelWorld {
 
 		const feet = { x: position.x, y: position.y, z: position.z };
 
-		if (feet.y < 2 || this.isSolidAt(feet) || this.isSolidAt({ ...feet, y: feet.y + 1 })) {
-			return this.spawnPosition();
+		if (this.validatePlayerPosition(feet)) {
+			return { ...feet };
 		}
 
-		return { ...feet };
+		const repaired = this.findSafeSpawnPosition(0.32, 1.78, feet, 8);
+
+		return this.validatePlayerPosition(repaired) ? repaired : this.spawnPosition();
 	}
 
 	spawnPosition(): { x: number; y: number; z: number } {
-		const y = this.generator.heightAt(WORLD_SPAWN.x, WORLD_SPAWN.z) + 2;
+		return this.findSafeSpawnPosition();
+	}
+
+	findSafeSpawnPosition(
+		radius = 0.32,
+		height = 1.78,
+		origin: { x: number; z: number } = WORLD_SPAWN,
+		searchRadius = 18
+	): { x: number; y: number; z: number } {
+		let best: { x: number; y: number; z: number } | null = null;
+		let bestScore = Number.POSITIVE_INFINITY;
+
+		for (let distance = 0; distance <= searchRadius; distance += 1) {
+			for (let dx = -distance; dx <= distance; dx += 1) {
+				for (let dz = -distance; dz <= distance; dz += 1) {
+					if (Math.max(Math.abs(dx), Math.abs(dz)) !== distance) {
+						continue;
+					}
+
+					const x = Math.floor(origin.x + dx) + 0.5;
+					const z = Math.floor(origin.z + dz) + 0.5;
+					const y = this.generator.heightAt(x, z) + 1.04;
+					const candidate = { x, y, z };
+
+					if (!this.validatePlayerPosition(candidate, radius, height)) {
+						continue;
+					}
+
+					const score =
+						Math.hypot(x - origin.x, z - origin.z) +
+						Math.abs(this.generator.heightAt(x, z) - this.generator.heightAt(origin.x, origin.z)) *
+							3;
+
+					if (score < bestScore) {
+						best = candidate;
+						bestScore = score;
+					}
+				}
+			}
+
+			if (best) {
+				return best;
+			}
+		}
 
 		return {
-			x: WORLD_SPAWN.x,
-			y,
-			z: WORLD_SPAWN.z
+			x: Math.floor(WORLD_SPAWN.x) + 0.5,
+			y: this.generator.heightAt(WORLD_SPAWN.x, WORLD_SPAWN.z) + 1.04,
+			z: Math.floor(WORLD_SPAWN.z) + 0.5
 		};
+	}
+
+	validatePlayerPosition(
+		position: { x: number; y: number; z: number },
+		radius = 0.32,
+		height = 1.78
+	): boolean {
+		if (
+			position.y < WORLD_MIN_Y + 1 ||
+			position.y + height > WORLD_MAX_Y ||
+			this.intersectsSolidAabb(position, radius, height)
+		) {
+			return false;
+		}
+
+		if (!this.intersectsSolidAabb({ ...position, y: position.y - 0.08 }, radius, height)) {
+			return false;
+		}
+
+		const centerHeight = this.generator.heightAt(position.x, position.z);
+
+		for (let dx = -2; dx <= 2; dx += 1) {
+			for (let dz = -2; dz <= 2; dz += 1) {
+				const distance = Math.hypot(dx, dz);
+
+				if (distance > 2.2) {
+					continue;
+				}
+
+				const sampleHeight = this.generator.heightAt(position.x + dx, position.z + dz);
+
+				if (sampleHeight < centerHeight - 1 || sampleHeight > centerHeight + 1) {
+					return false;
+				}
+			}
+		}
+
+		const forwardClear = [
+			{ x: position.x, z: position.z - 1 },
+			{ x: position.x, z: position.z - 2 }
+		];
+
+		return forwardClear.every(
+			(sample) =>
+				!this.intersectsSolidAabb({ x: sample.x, y: position.y, z: sample.z }, radius, height)
+		);
 	}
 
 	loadModifications(snapshot: WorldModificationSnapshot): void {
@@ -261,6 +364,31 @@ export class VoxelWorld {
 		this.generateChunk(chunk);
 
 		return this.generatedBlocks.get(blockKey(position)) ?? 'air';
+	}
+
+	private intersectsSolidAabb(
+		position: { x: number; y: number; z: number },
+		radius: number,
+		height: number
+	): boolean {
+		const minX = Math.floor(position.x - radius);
+		const maxX = Math.floor(position.x + radius);
+		const minY = Math.floor(position.y);
+		const maxY = Math.floor(position.y + height);
+		const minZ = Math.floor(position.z - radius);
+		const maxZ = Math.floor(position.z + radius);
+
+		for (let x = minX; x <= maxX; x += 1) {
+			for (let y = minY; y <= maxY; y += 1) {
+				for (let z = minZ; z <= maxZ; z += 1) {
+					if (this.isSolidAt({ x, y, z })) {
+						return true;
+					}
+				}
+			}
+		}
+
+		return false;
 	}
 
 	private isExposed(position: BlockCoordinate): boolean {

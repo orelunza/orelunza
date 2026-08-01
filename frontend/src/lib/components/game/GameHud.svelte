@@ -36,6 +36,25 @@
 		</div>
 	{/if}
 
+	{#if snapshot.debugPerformance && snapshot.performance}
+		<div
+			class="absolute top-20 right-3 w-64 rounded-sm border border-white/10 bg-[#101418]/82 p-3 font-mono text-[0.68rem] leading-5 text-white/72 backdrop-blur-md"
+			aria-label="Performance debug"
+		>
+			<p class="m-0 font-sans text-xs font-semibold text-white">Performance</p>
+			<p class="m-0">FPS {snapshot.performance.fps}</p>
+			<p class="m-0">Frame {snapshot.performance.frameMs}ms</p>
+			<p class="m-0">Draw calls {snapshot.performance.drawCalls}</p>
+			<p class="m-0">Triangles {snapshot.performance.triangles}</p>
+			<p class="m-0">Chunks {snapshot.performance.chunksLoaded}</p>
+			<p class="m-0">Objects {snapshot.performance.objects}</p>
+			<p class="m-0">Initial gen {snapshot.performance.initialGenerationMs}ms</p>
+			<p class="m-0">Rebuild avg {snapshot.performance.averageChunkRebuildMs}ms</p>
+			<p class="m-0">Physics {snapshot.performance.physicsMs}ms</p>
+			<p class="m-0">Camera {snapshot.performance.cameraMs}ms</p>
+		</div>
+	{/if}
+
 	{#if snapshot.introVisible}
 		<div
 			class="absolute top-20 left-1/2 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 rounded-sm border border-white/10 bg-[#1a1e22]/74 px-4 py-3 text-center backdrop-blur-md"

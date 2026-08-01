@@ -6,6 +6,7 @@ import type {
 } from './world/voxel-types';
 import type { InventorySnapshot } from './inventory/Inventory';
 import type { CharacterAppearanceV1 } from './character/CharacterAppearance';
+import type { PerformanceSnapshot } from './debug/PerformanceMonitor';
 
 export type GameStatus =
 	'booting' | 'loading-world' | 'playing' | 'paused' | 'inventory' | 'error' | 'destroyed';
@@ -42,6 +43,8 @@ export interface GameSnapshot {
 	message: string | null;
 	error: string | null;
 	mobileLimited: boolean;
+	debugPerformance: boolean;
+	performance: PerformanceSnapshot | null;
 }
 
 export interface GameEngineOptions {

@@ -4,11 +4,39 @@ import type { WorldCoordinate } from '../world/voxel-types';
 import { PlayerCollider } from './PlayerCollider';
 import type { PlayerState } from './PlayerState';
 
-const GRAVITY = -24;
-const WALK_SPEED = 4.4;
-const SPRINT_SPEED = 6.4;
-const JUMP_SPEED = 8.2;
+export const WALK_SPEED = 5;
+export const SPRINT_SPEED = 8;
+export const ACCELERATION = 18;
+export const DECELERATION = 22;
+export const JUMP_SPEED = 7;
+export const GRAVITY_ACCELERATION = -20;
+export const STEP_HEIGHT = 1.05;
 const MAX_DELTA = 0.05;
+const GROUND_SNAP = 0.32;
+
+export interface HorizontalMovement {
+	x: number;
+	z: number;
+}
+
+export function cameraRelativeMovement(yaw: number, input: MovementInput): HorizontalMovement {
+	const forwardX = Math.sin(yaw);
+	const forwardZ = Math.cos(yaw);
+	const rightX = -forwardZ;
+	const rightZ = forwardX;
+	const x = forwardX * input.forward + rightX * input.right;
+	const z = forwardZ * input.forward + rightZ * input.right;
+	const length = Math.hypot(x, z);
+
+	if (length <= 0.0001) {
+		return { x: 0, z: 0 };
+	}
+
+	return {
+		x: x / length,
+		z: z / length
+	};
+}
 
 export class PlayerPhysics {
 	readonly collider: PlayerCollider;
@@ -20,38 +48,42 @@ export class PlayerPhysics {
 	step(player: PlayerState, input: MovementInput, deltaSeconds: number): void {
 		const delta = Math.min(deltaSeconds, MAX_DELTA);
 		const speed = input.sprint ? SPRINT_SPEED : WALK_SPEED;
-		const sin = Math.sin(player.yaw);
-		const cos = Math.cos(player.yaw);
-		const moveX = (input.right * cos + input.forward * sin) * speed;
-		const moveZ = (input.right * -sin + input.forward * cos) * speed;
+		const movement = cameraRelativeMovement(player.yaw, input);
+		const targetX = movement.x * speed;
+		const targetZ = movement.z * speed;
+		const horizontalInput = Math.hypot(input.forward, input.right) > 0.001;
+		const rate = horizontalInput ? ACCELERATION : DECELERATION;
 
-		player.velocity.x = moveX;
-		player.velocity.z = moveZ;
+		player.velocity.x = approach(player.velocity.x, targetX, rate * delta);
+		player.velocity.z = approach(player.velocity.z, targetZ, rate * delta);
 
 		if (input.jump && player.onGround) {
 			player.velocity.y = JUMP_SPEED;
 			player.onGround = false;
 		}
 
-		player.velocity.y += GRAVITY * delta;
+		player.velocity.y += GRAVITY_ACCELERATION * delta;
 
 		this.moveAxis(player, 'x', player.velocity.x * delta);
 		this.moveAxis(player, 'z', player.velocity.z * delta);
 		this.moveAxis(player, 'y', player.velocity.y * delta);
 
-		if (player.position.y < 1) {
-			player.position.y = 16;
+		if (!input.jump && player.velocity.y <= 0 && this.snapToGround(player)) {
+			player.onGround = true;
 			player.velocity.y = 0;
+		}
+
+		if (player.position.y < 1) {
+			player.position = this.world.findSafeSpawnPosition(player.radius, player.height);
+			player.velocity.y = 0;
+			player.onGround = false;
 		}
 	}
 
 	private moveAxis(player: PlayerState, axis: keyof WorldCoordinate, amount: number): void {
 		if (amount === 0) {
 			if (axis === 'y') {
-				player.onGround = this.collider.wouldCollide(player, {
-					...player.position,
-					y: player.position.y - 0.04
-				});
+				player.onGround = this.collider.isGrounded(player);
 			}
 
 			return;
@@ -69,6 +101,10 @@ export class PlayerPhysics {
 				player.onGround = false;
 			}
 
+			return;
+		}
+
+		if ((axis === 'x' || axis === 'z') && this.tryStepUp(player, axis, amount)) {
 			return;
 		}
 
@@ -97,4 +133,78 @@ export class PlayerPhysics {
 			player.velocity[axis] = 0;
 		}
 	}
+
+	private tryStepUp(player: PlayerState, axis: 'x' | 'z', amount: number): boolean {
+		if (!player.onGround || Math.abs(amount) < 0.0001) {
+			return false;
+		}
+
+		const raised = {
+			...player.position,
+			y: player.position.y + STEP_HEIGHT
+		};
+
+		if (this.collider.wouldCollide(player, raised)) {
+			return false;
+		}
+
+		const stepped = {
+			...raised,
+			[axis]: raised[axis] + amount
+		};
+
+		if (this.collider.wouldCollide(player, stepped)) {
+			return false;
+		}
+
+		player.position = stepped;
+		player.velocity.y = 0;
+		player.onGround = false;
+
+		return true;
+	}
+
+	private snapToGround(player: PlayerState): boolean {
+		if (this.collider.isGrounded(player)) {
+			return true;
+		}
+
+		const lowered = {
+			...player.position,
+			y: player.position.y - GROUND_SNAP
+		};
+
+		if (!this.collider.wouldCollide(player, lowered)) {
+			return false;
+		}
+
+		let low = lowered.y;
+		let high = player.position.y;
+
+		for (let index = 0; index < 8; index += 1) {
+			const mid = (low + high) / 2;
+
+			if (this.collider.wouldCollide(player, { ...player.position, y: mid })) {
+				low = mid;
+			} else {
+				high = mid;
+			}
+		}
+
+		player.position.y = high;
+
+		return true;
+	}
+}
+
+function approach(current: number, target: number, amount: number): number {
+	if (current < target) {
+		return Math.min(current + amount, target);
+	}
+
+	if (current > target) {
+		return Math.max(current - amount, target);
+	}
+
+	return current;
 }

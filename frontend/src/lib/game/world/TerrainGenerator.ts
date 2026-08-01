@@ -71,6 +71,17 @@ export class TerrainGenerator {
 		return Math.max(5, Math.round(8 + soft * 3 + detail * 1.5));
 	}
 
+	visualHeightAt(x: number, z: number): number {
+		const base = this.heightAt(x, z);
+		const north = this.heightAt(x, z - 1);
+		const south = this.heightAt(x, z + 1);
+		const east = this.heightAt(x + 1, z);
+		const west = this.heightAt(x - 1, z);
+		const variation = (smoothNoise(this.seedValue + 211, x / 8, z / 8) - 0.5) * 0.18;
+
+		return (base * 2 + north + south + east + west) / 6 + variation;
+	}
+
 	isWater(x: number, z: number): boolean {
 		return this.isRiver(x, z) || this.heightAt(x, z) < WATER_LEVEL;
 	}
@@ -185,12 +196,16 @@ export class TerrainGenerator {
 	}
 
 	isPath(x: number, z: number): boolean {
-		return Math.abs(x) <= 2 && z <= 2 && z >= CENTRAL_CITY_CENTER.z - 8;
+		const center = Math.sin((z + 18) / 18) * 2.2 + Math.sin(z / 41) * 1.4;
+		const width = 2.2 + smoothNoise(this.seedValue + 151, 0, z / 18) * 1.4;
+
+		return Math.abs(x - center) <= width && z <= 4 && z >= CENTRAL_CITY_CENTER.z - 8;
 	}
 
 	isRiver(x: number, z: number): boolean {
-		const center = 24 + Math.sin(z / 18) * 5;
+		const center = 24 + Math.sin(z / 18) * 5 + Math.sin(z / 7) * 1.1;
+		const width = 2.6 + smoothNoise(this.seedValue + 191, 0, z / 15) * 1.5;
 
-		return Math.abs(x - center) < 3.2 && z > -60 && z < 42;
+		return Math.abs(x - center) < width && z > -60 && z < 42;
 	}
 }

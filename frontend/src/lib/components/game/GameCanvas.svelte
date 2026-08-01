@@ -85,4 +85,6 @@
 	data-testid="game-canvas"
 	data-engine="three"
 	data-camera="third-person"
+	data-terrain="natural-low-poly"
+	data-controls="camera-relative"
 ></canvas>

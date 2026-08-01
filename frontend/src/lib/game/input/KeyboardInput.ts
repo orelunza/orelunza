@@ -9,6 +9,7 @@ export interface KeyboardCommands {
 	inventory: boolean;
 	pause: boolean;
 	build: boolean;
+	debugPerformance: boolean;
 	hotbarIndex: number | null;
 }
 
@@ -17,6 +18,7 @@ export class KeyboardInput {
 	private inventoryPressed = false;
 	private pausePressed = false;
 	private buildPressed = false;
+	private debugPerformancePressed = false;
 	private hotbarPressed: number | null = null;
 	private readonly handleKeydown = (event: KeyboardEvent): void => {
 		this.keys.add(event.code);
@@ -27,6 +29,10 @@ export class KeyboardInput {
 
 		if (event.code === 'KeyB') {
 			this.buildPressed = true;
+		}
+
+		if (event.code === 'F3') {
+			this.debugPerformancePressed = true;
 		}
 
 		if (event.code === 'Escape') {
@@ -82,12 +88,14 @@ export class KeyboardInput {
 			inventory: this.inventoryPressed,
 			pause: this.pausePressed,
 			build: this.buildPressed,
+			debugPerformance: this.debugPerformancePressed,
 			hotbarIndex: this.hotbarPressed
 		};
 
 		this.inventoryPressed = false;
 		this.pausePressed = false;
 		this.buildPressed = false;
+		this.debugPerformancePressed = false;
 		this.hotbarPressed = null;
 
 		return commands;

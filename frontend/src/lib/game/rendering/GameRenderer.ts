@@ -8,6 +8,12 @@ import {
 	type Camera
 } from 'three';
 import { addWorldLighting } from './Lighting';
+import { NaturalTerrainRenderer } from './NaturalTerrainRenderer';
+import {
+	resolveQualitySettings,
+	type QualitySettings,
+	type RenderQuality
+} from './QualitySettings';
 import { SelectionOutline } from './SelectionOutline';
 import { configureSky } from './Sky';
 import { BlockMeshFactory, type BlockInstanceLookup } from '../world/BlockMeshFactory';
@@ -18,21 +24,28 @@ export class GameRenderer {
 	readonly scene = new Scene();
 	readonly renderer: WebGLRenderer;
 	readonly selection = new SelectionOutline();
+	readonly quality: QualitySettings;
 	private readonly citySilhouette = createCitySilhouette();
+	private readonly naturalTerrain = new NaturalTerrainRenderer();
 	private readonly meshFactory = new BlockMeshFactory();
 	private blockMeshes: BlockInstanceLookup[] = [];
 
-	constructor(readonly canvas: HTMLCanvasElement) {
+	constructor(
+		readonly canvas: HTMLCanvasElement,
+		quality: RenderQuality = 'medium'
+	) {
+		this.quality = resolveQualitySettings(quality);
 		this.renderer = new WebGLRenderer({
 			canvas,
 			antialias: true,
 			alpha: false,
 			powerPreference: 'high-performance'
 		});
-		this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-		this.renderer.shadowMap.enabled = true;
+		this.renderer.setPixelRatio(this.quality.pixelRatio);
+		this.renderer.shadowMap.enabled = this.quality.shadows;
 		configureSky(this.scene);
-		addWorldLighting(this.scene);
+		addWorldLighting(this.scene, this.quality);
+		this.scene.add(this.naturalTerrain.object);
 		this.scene.add(this.selection.object);
 		this.scene.add(this.citySilhouette);
 	}
@@ -57,7 +70,8 @@ export class GameRenderer {
 			}
 		}
 
-		this.blockMeshes = this.meshFactory.createMeshes(world.getVisibleBlocks());
+		this.naturalTerrain.rebuild(world);
+		this.blockMeshes = this.meshFactory.createMeshes(world.getVisibleConstructionBlocks());
 
 		for (const lookup of this.blockMeshes) {
 			this.scene.add(lookup.mesh);
@@ -80,6 +94,8 @@ export class GameRenderer {
 		this.blockMeshes = [];
 		this.selection.dispose();
 		this.scene.remove(this.citySilhouette);
+		this.scene.remove(this.naturalTerrain.object);
+		this.naturalTerrain.dispose();
 		this.meshFactory.dispose();
 		this.renderer.dispose();
 	}

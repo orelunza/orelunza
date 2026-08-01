@@ -879,8 +879,44 @@ test.describe('world flow', () => {
 		await expect(page.getByLabel('Hotbar', { exact: true })).toBeVisible();
 		await expect(page.getByRole('button', { name: /Hotbar slot 9 Flower/ })).toBeVisible();
 		await expect(canvas).toHaveAttribute('data-camera', 'third-person');
+		await expect(canvas).toHaveAttribute('data-terrain', 'natural-low-poly');
+		await expect(canvas).toHaveAttribute('data-controls', 'camera-relative');
 		await expect(page.getByText('Spawn Meadow')).toBeVisible();
 		await expect(page.getByText('The city lies beyond the meadow.')).toBeVisible();
+		const state = page.getByTestId('game-debug-state');
+		await expect(state).toHaveAttribute('data-zone', 'Spawn Meadow');
+		expect(Number(await state.getAttribute('data-player-y'))).toBeGreaterThan(9);
+	});
+
+	test('exposes performance debug and keeps the player movable from spawn', async ({ page }) => {
+		await installCityBackend(page);
+		await installCharacter(page);
+
+		await page.goto('/world');
+
+		const canvas = page.locator('canvas[aria-label="Orelunza voxel world"]');
+		await expect(canvas).toBeVisible({
+			timeout: 15_000
+		});
+
+		const state = page.getByTestId('game-debug-state');
+		const startZ = Number(await state.getAttribute('data-player-z'));
+
+		await page.keyboard.press('F3');
+		await expect(page.getByLabel('Performance debug')).toBeVisible();
+
+		await canvas.click({
+			position: {
+				x: 120,
+				y: 120
+			}
+		});
+		await page.keyboard.down('KeyW');
+		await page.waitForTimeout(450);
+		await page.keyboard.up('KeyW');
+
+		const endZ = Number(await state.getAttribute('data-player-z'));
+		expect(Math.abs(endZ - startZ)).toBeGreaterThan(0.05);
 	});
 
 	test('supports inventory and hotbar selection', async ({ page }) => {

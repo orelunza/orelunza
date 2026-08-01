@@ -124,6 +124,19 @@
 		/>
 
 		{#if snapshot}
+			<div
+				class="sr-only"
+				data-testid="game-debug-state"
+				data-player-x={snapshot.player.position.x.toFixed(3)}
+				data-player-y={snapshot.player.position.y.toFixed(3)}
+				data-player-z={snapshot.player.position.z.toFixed(3)}
+				data-zone={snapshot.zoneName}
+				data-build-mode={snapshot.buildMode ? 'true' : 'false'}
+				data-pointer-locked={snapshot.pointerLocked ? 'true' : 'false'}
+			>
+				Game state
+			</div>
+
 			<GameHud
 				{snapshot}
 				onHotbarSelect={(index) => {

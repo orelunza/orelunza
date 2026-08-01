@@ -15,6 +15,7 @@ import { Inventory } from './inventory/Inventory';
 import { KeyboardInput } from './input/KeyboardInput';
 import { MouseInput } from './input/MouseInput';
 import { PointerLockController } from './input/PointerLockController';
+import { PerformanceMonitor } from './debug/PerformanceMonitor';
 import { GamePersistence } from './persistence/GamePersistence';
 import { WorldSyncService } from './persistence/WorldSyncService';
 import { PlayerAvatar } from './player/PlayerAvatar';
@@ -37,6 +38,7 @@ export class GameEngine {
 	private readonly persistence: GamePersistence;
 	private readonly avatar: PlayerAvatar;
 	private readonly worldSync = new WorldSyncService();
+	private readonly performanceMonitor = new PerformanceMonitor();
 	private readonly resizeObserver: ResizeObserver;
 	private readonly handleVisibility = (): void => {
 		if (document.hidden) {
@@ -57,6 +59,8 @@ export class GameEngine {
 	private mobileLimited = false;
 	private buildMode = false;
 	private introVisible = true;
+	private debugPerformance = false;
+	private readonly chunkRadius = 3;
 
 	constructor(private readonly options: GameEngineOptions) {
 		this.world = createStarterWorld(options.seed || STARTER_WORLD_SEED);
@@ -104,7 +108,9 @@ export class GameEngine {
 
 		try {
 			await this.persistence.load();
-			this.world.ensureChunksAround(this.player.state.position, 3);
+			const generationStart = performance.now();
+			this.world.ensureChunksAround(this.player.state.position, this.chunkRadius);
+			this.performanceMonitor.recordInitialGeneration(performance.now() - generationStart);
 			this.renderer.rebuildWorld(this.world);
 			this.needsWorldRebuild = false;
 			this.status = 'playing';
@@ -184,6 +190,7 @@ export class GameEngine {
 	}
 
 	private update(deltaSeconds: number): void {
+		this.performanceMonitor.recordFrameStart();
 		const commands = this.keyboard.consumeCommands();
 
 		if (commands.pause) {
@@ -203,6 +210,10 @@ export class GameEngine {
 			this.message = this.buildMode ? 'Build Mode' : 'Exploration Mode';
 		}
 
+		if (commands.debugPerformance && this.status === 'playing') {
+			this.debugPerformance = !this.debugPerformance;
+		}
+
 		if (commands.hotbarIndex !== null) {
 			this.hotbar.select(commands.hotbarIndex);
 		}
@@ -210,24 +221,36 @@ export class GameEngine {
 		const wheel = this.mouse.consumeWheel();
 
 		if (wheel !== 0) {
-			this.hotbar.next(wheel);
+			if (this.buildMode) {
+				this.hotbar.next(wheel);
+			} else {
+				this.player.camera.applyZoom(wheel);
+			}
 		}
 
 		if (this.status === 'playing' && this.pointerLock.isLocked) {
 			this.player.applyMouse(this.mouse.consumeDelta());
-			this.player.step(this.keyboard.getMovement(), deltaSeconds);
+			const physicsStart = performance.now();
+			this.player.state.yaw = this.player.camera.orientationYaw;
+			this.player.physics.step(this.player.state, this.keyboard.getMovement(), deltaSeconds);
+			this.performanceMonitor.recordPhysics(performance.now() - physicsStart);
+			const cameraStart = performance.now();
+			this.player.camera.update(this.player.state);
+			this.performanceMonitor.recordCamera(performance.now() - cameraStart);
 			this.introVisible = false;
 			this.syncBackendPosition();
 		} else {
 			this.mouse.consumeDelta();
 		}
 
-		if (this.world.ensureChunksAround(this.player.state.position, 3)) {
+		if (this.world.ensureChunksAround(this.player.state.position, this.chunkRadius)) {
 			this.needsWorldRebuild = true;
 		}
 
 		if (this.needsWorldRebuild) {
+			const rebuildStart = performance.now();
 			this.renderer.rebuildWorld(this.world);
+			this.performanceMonitor.recordChunkRebuild(performance.now() - rebuildStart);
 			this.needsWorldRebuild = false;
 		}
 
@@ -349,7 +372,11 @@ export class GameEngine {
 			introVisible: this.introVisible,
 			message: this.message,
 			error: this.error,
-			mobileLimited: this.mobileLimited
+			mobileLimited: this.mobileLimited,
+			debugPerformance: this.debugPerformance,
+			performance: this.debugPerformance
+				? this.performanceMonitor.snapshot(this.renderer.renderer, this.renderer.scene, this.world)
+				: null
 		};
 	}
 }
