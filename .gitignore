@@ -20,3 +20,4 @@ decisions/
 .vix/
 storage/*
 !storage/.gitkeep
+plan.md
