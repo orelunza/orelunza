@@ -27,6 +27,21 @@
 	let submitError = $state<ApiError | null>(null);
 	let submitting = $state(false);
 
+	function formString(formData: FormData, name: string): string {
+		const value = formData.get(name);
+
+		return typeof value === 'string' ? value : '';
+	}
+
+	function syncFromForm(form: HTMLFormElement): void {
+		const formData = new FormData(form);
+
+		displayName = formString(formData, 'display_name');
+		email = formString(formData, 'email');
+		password = formString(formData, 'password');
+		passwordConfirmation = formString(formData, 'confirm_password');
+	}
+
 	function validate(): boolean {
 		displayNameError = null;
 		emailError = null;
@@ -67,6 +82,8 @@
 
 	async function submit(event: SubmitEvent): Promise<void> {
 		event.preventDefault();
+
+		syncFromForm(event.currentTarget as HTMLFormElement);
 
 		if (submitting || !validate()) {
 			return;
