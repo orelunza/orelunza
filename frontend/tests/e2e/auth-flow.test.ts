@@ -380,6 +380,19 @@ test.describe('authentication flow', () => {
 			.click();
 
 		await expect(page).toHaveURL(/\/character\/create(?:\?|$)/);
+		const preview = page.getByTestId('character-preview');
+		await expect(preview).toBeVisible();
+		await expect(preview).toHaveAttribute('data-avatar-kind', 'humanoid');
+		await expect(preview).toHaveAttribute('data-hat-visible', 'false');
+		expect(Number(await preview.getAttribute('data-avatar-objects'))).toBeGreaterThan(30);
+		expect(Number(await preview.getAttribute('data-avatar-triangles'))).toBeGreaterThan(500);
+
+		await page.locator('select').selectOption('afro');
+		await expect(preview).toHaveAttribute('data-hair-style', 'afro');
+		await page.getByRole('button', { name: 'Skin tone #d1a17f' }).click();
+		await expect(preview).toHaveAttribute('data-skin-tone', '#d1a17f');
+		await page.getByRole('button', { name: 'Shirt color #f97316' }).click();
+		await expect(preview).toHaveAttribute('data-shirt-color', '#f97316');
 
 		expect(backend.authenticated).toBe(true);
 

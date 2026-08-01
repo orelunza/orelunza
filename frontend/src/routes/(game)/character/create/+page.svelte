@@ -103,9 +103,11 @@
 						bind:value={appearance.hairStyle}
 					>
 						<option value="short">Short</option>
+						<option value="shaved">Shaved</option>
 						<option value="curly">Curly</option>
+						<option value="afro">Afro</option>
 						<option value="long">Long</option>
-						<option value="none">None</option>
+						<option value="braids_simple">Simple braids</option>
 					</select>
 				</label>
 

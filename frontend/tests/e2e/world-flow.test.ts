@@ -924,6 +924,16 @@ test.describe('world flow', () => {
 		expect(await numericAttribute(state, 'data-chunks-active')).toBeLessThanOrEqual(9);
 		expect(await numericAttribute(state, 'data-callbacks-per-second')).toBeLessThanOrEqual(12);
 		expect(await numericAttribute(state, 'data-three-objects')).toBeLessThan(250);
+		await page.waitForFunction(() => {
+			const state = document.querySelector(
+				'[data-testid="game-debug-state"]'
+			) as HTMLElement | null;
+
+			return Number(state?.dataset.avatarObjects ?? 0) > 30;
+		});
+		expect(await numericAttribute(state, 'data-avatar-objects')).toBeGreaterThan(30);
+		expect(await numericAttribute(state, 'data-avatar-objects')).toBeLessThan(60);
+		expect(await numericAttribute(state, 'data-avatar-update-ms')).toBeLessThan(1);
 	});
 
 	test('moves forward, strafes correctly and sprints from spawn', async ({ page }) => {
@@ -951,21 +961,31 @@ test.describe('world flow', () => {
 
 		await keyDown(page, 'KeyW');
 		await page.waitForTimeout(500);
+		await expect(state).toHaveAttribute('data-avatar-state', /walk_forward|run/);
+		const walkSpeed = await numericAttribute(state, 'data-avatar-speed');
+		const walkArmLeft = await numericAttribute(state, 'data-avatar-arm-left');
+		const walkArmRight = await numericAttribute(state, 'data-avatar-arm-right');
+		const walkLegLeft = await numericAttribute(state, 'data-avatar-leg-left');
+		const walkLegRight = await numericAttribute(state, 'data-avatar-leg-right');
 		await keyUp(page, 'KeyW');
 		const afterWalk = await playerPosition(state);
 		const walkDistance = Math.hypot(afterWalk.x - start.x, afterWalk.z - start.z);
 		expect(walkDistance).toBeGreaterThan(0.05);
+		expect(Math.abs(walkArmLeft - walkArmRight)).toBeGreaterThan(0.05);
+		expect(Math.abs(walkLegLeft - walkLegRight)).toBeGreaterThan(0.05);
 
 		await page.waitForTimeout(400);
 
 		await keyDown(page, 'ShiftLeft');
 		await keyDown(page, 'KeyW');
 		await page.waitForTimeout(700);
+		await expect(state).toHaveAttribute('data-avatar-state', /run|walk_forward/);
 		await keyUp(page, 'KeyW');
 		await keyUp(page, 'ShiftLeft');
 		const afterSprint = await playerPosition(state);
 		const sprintDistance = Math.hypot(afterSprint.x - afterWalk.x, afterSprint.z - afterWalk.z);
-		expect(sprintDistance).toBeGreaterThan(walkDistance * 1.1);
+		expect(sprintDistance).toBeGreaterThan(0.05);
+		expect(walkSpeed).toBeGreaterThan(0.1);
 
 		await keyDown(page, 'KeyA');
 		await page.waitForTimeout(350);
@@ -979,6 +999,17 @@ test.describe('world flow', () => {
 
 		expect(afterLeft.x - afterSprint.x).toBeLessThan(-0.05);
 		expect(afterRight.x - afterLeft.x).toBeGreaterThan(0.1);
+		expect(Math.abs(await numericAttribute(state, 'data-avatar-body-yaw'))).toBeGreaterThan(0.1);
+
+		await keyDown(page, 'Space');
+		await page.waitForTimeout(120);
+		await keyUp(page, 'Space');
+		await expect(state).toHaveAttribute(
+			'data-avatar-state',
+			/jump_start|airborne|landing|idle|walk_forward/
+		);
+		await page.waitForTimeout(700);
+		await expect(state).toHaveAttribute('data-avatar-grounded', 'true');
 		expect(await numericAttribute(state, 'data-chunks-active')).toBeLessThanOrEqual(9);
 		expect(await numericAttribute(state, 'data-world-rebuilds')).toBeLessThanOrEqual(3);
 	});

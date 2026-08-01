@@ -1,133 +1,125 @@
-import {
-	BoxGeometry,
-	CapsuleGeometry,
-	Group,
-	Mesh,
-	MeshLambertMaterial,
-	SphereGeometry,
-	type BufferGeometry,
-	type Material
-} from 'three';
+import { Group, Vector3 } from 'three';
 import {
 	DEFAULT_CHARACTER_APPEARANCE,
+	normalizeCharacterAppearance,
 	type CharacterAppearanceV1
 } from '../character/CharacterAppearance';
+import { HumanoidAnimator } from './HumanoidAnimator';
+import { HumanoidRig } from './HumanoidRig';
+import type { HumanoidAnimationSnapshot } from './HumanoidPose';
 import type { PlayerState } from './PlayerState';
 
-const UNIT = new BoxGeometry(1, 1, 1);
-const HEAD = new SphereGeometry(0.5, 10, 8);
-const LIMB = new CapsuleGeometry(0.5, 0.8, 4, 8);
+export interface PlayerAvatarOptions {
+	groundHeightAt?: (x: number, z: number) => number;
+}
+
+export interface PlayerAvatarMetrics {
+	updateMs: number;
+	objectCount: number;
+	meshCount: number;
+	triangles: number;
+	animation: HumanoidAnimationSnapshot;
+}
 
 export class PlayerAvatar {
-	readonly object = new Group();
-	private readonly materials: Material[] = [];
-	private readonly leftArm: Mesh;
-	private readonly rightArm: Mesh;
-	private readonly leftLeg: Mesh;
-	private readonly rightLeg: Mesh;
-	private walkTime = 0;
-	private visualYaw = 0;
+	readonly object: Group;
+	readonly rig: HumanoidRig;
+	readonly animator = new HumanoidAnimator();
+	private readonly tempLeftFoot = new Vector3();
+	private readonly tempRightFoot = new Vector3();
+	private readonly tempForward = new Vector3();
+	private readonly tempRight = new Vector3();
+	private updateMs = 0;
+	private lookTarget: Vector3 | null = null;
 
-	constructor(private appearance: CharacterAppearanceV1 = DEFAULT_CHARACTER_APPEARANCE) {
-		const skin = this.material(appearance.skinTone);
-		const hair = this.material(appearance.hairColor);
-		const shirt = this.material(appearance.shirtColor);
-		const pants = this.material(appearance.pantsColor);
-		const shoes = this.material(appearance.shoesColor);
+	constructor(
+		appearance: CharacterAppearanceV1 = DEFAULT_CHARACTER_APPEARANCE,
+		private readonly options: PlayerAvatarOptions = {}
+	) {
+		this.rig = new HumanoidRig(normalizeCharacterAppearance(appearance));
+		this.object = this.rig.object;
+	}
 
-		const head = this.part(HEAD, 0.58, 0.62, 0.58, skin, 0, 1.58, 0);
-		const torso = this.part(UNIT, 0.62, 0.86, 0.32, shirt, 0, 0.9, 0);
-		this.leftArm = this.part(LIMB, 0.18, 0.58, 0.18, shirt, -0.5, 0.92, 0);
-		this.rightArm = this.part(LIMB, 0.18, 0.58, 0.18, shirt, 0.5, 0.92, 0);
-		this.leftLeg = this.part(LIMB, 0.22, 0.58, 0.2, pants, -0.18, 0.22, 0);
-		this.rightLeg = this.part(LIMB, 0.22, 0.58, 0.2, pants, 0.18, 0.22, 0);
-		const leftShoe = this.part(UNIT, 0.28, 0.14, 0.38, shoes, -0.18, -0.2, -0.02);
-		const rightShoe = this.part(UNIT, 0.28, 0.14, 0.38, shoes, 0.18, -0.2, -0.02);
-
-		this.object.add(
-			head,
-			torso,
-			this.leftArm,
-			this.rightArm,
-			this.leftLeg,
-			this.rightLeg,
-			leftShoe,
-			rightShoe
-		);
-
-		if (appearance.hairStyle !== 'none') {
-			const hairHeight = appearance.hairStyle === 'long' ? 0.3 : 0.16;
-			this.object.add(this.part(UNIT, 0.62, hairHeight, 0.58, hair, 0, 1.9, -0.03));
-		}
+	get diagnostics(): PlayerAvatarMetrics {
+		return {
+			updateMs: this.updateMs,
+			objectCount: this.rig.objectCount,
+			meshCount: this.rig.meshCount,
+			triangles: this.rig.triangleCount,
+			animation: this.animator.diagnostics
+		};
 	}
 
 	updateAppearance(appearance: CharacterAppearanceV1): void {
-		this.dispose();
-		this.appearance = appearance;
+		this.rig.updateAppearance(normalizeCharacterAppearance(appearance));
 	}
 
-	update(player: PlayerState, moving: boolean, deltaSeconds: number): void {
-		this.object.position.set(player.position.x, player.position.y + 0.25, player.position.z);
-		this.visualYaw = lerpAngle(this.visualYaw, player.yaw, moving ? 0.22 : 0.1);
-		this.object.rotation.y = this.visualYaw;
+	setHandTarget(): void {
+		// Hook reserved for future build/interact poses.
+	}
 
-		if (moving) {
-			this.walkTime += deltaSeconds * 9;
-		} else {
-			this.walkTime *= 0.82;
+	clearHandTarget(): void {
+		// Hook reserved for future build/interact poses.
+	}
+
+	lookAtWorldPosition(position: Vector3): void {
+		this.lookTarget = position;
+	}
+
+	clearLookTarget(): void {
+		this.lookTarget = null;
+	}
+
+	update(player: PlayerState, _moving: boolean, deltaSeconds: number): void {
+		const startedAt = performance.now();
+		const pose = this.animator.update({
+			yaw: player.yaw,
+			velocityX: player.velocity.x,
+			velocityY: player.velocity.y,
+			velocityZ: player.velocity.z,
+			grounded: player.onGround,
+			deltaSeconds
+		});
+
+		if (player.onGround) {
+			this.applyFootGrounding(player, pose);
 		}
 
-		const speed = Math.hypot(player.velocity.x, player.velocity.z);
-		const runFactor = Math.min(1, speed / 8);
-		const swing = Math.sin(this.walkTime) * (moving ? 0.42 + runFactor * 0.25 : 0.04);
-		this.leftArm.rotation.x = swing;
-		this.rightArm.rotation.x = -swing;
-		this.leftLeg.rotation.x = -swing * 0.7;
-		this.rightLeg.rotation.x = swing * 0.7;
-		this.object.position.y +=
-			Math.abs(Math.sin(this.walkTime * 2)) * (moving ? 0.025 + runFactor * 0.02 : 0);
+		this.rig.applyPose(pose);
+		this.object.position.set(player.position.x, player.position.y + 0.12, player.position.z);
+		this.object.rotation.y = this.animator.bodyYaw;
+		this.updateMs = performance.now() - startedAt;
 	}
 
 	dispose(): void {
-		for (const material of this.materials) {
-			material.dispose();
+		this.rig.dispose();
+	}
+
+	private applyFootGrounding(
+		player: PlayerState,
+		pose: { leftFootLift: number; rightFootLift: number }
+	): void {
+		const groundHeightAt = this.options.groundHeightAt;
+
+		if (!groundHeightAt) {
+			return;
 		}
 
-		this.materials.length = 0;
+		const yaw = this.animator.bodyYaw;
+		this.tempForward.set(Math.sin(yaw), 0, Math.cos(yaw));
+		this.tempRight.set(-this.tempForward.z, 0, this.tempForward.x);
+		this.tempLeftFoot
+			.set(player.position.x, player.position.y, player.position.z)
+			.addScaledVector(this.tempRight, -0.18)
+			.addScaledVector(this.tempForward, -0.12);
+		this.tempRightFoot
+			.set(player.position.x, player.position.y, player.position.z)
+			.addScaledVector(this.tempRight, 0.18)
+			.addScaledVector(this.tempForward, -0.12);
+
+		const leftGround = groundHeightAt(this.tempLeftFoot.x, this.tempLeftFoot.z) + 1.02;
+		const rightGround = groundHeightAt(this.tempRightFoot.x, this.tempRightFoot.z) + 1.02;
+		pose.leftFootLift += Math.max(-0.03, Math.min(0.08, leftGround - player.position.y));
+		pose.rightFootLift += Math.max(-0.03, Math.min(0.08, rightGround - player.position.y));
 	}
-
-	private part(
-		geometry: BufferGeometry,
-		width: number,
-		height: number,
-		depth: number,
-		material: Material,
-		x: number,
-		y: number,
-		z: number
-	): Mesh {
-		const mesh = new Mesh(geometry, material);
-		mesh.scale.set(width, height, depth);
-		mesh.position.set(x, y, z);
-		mesh.castShadow = true;
-		mesh.receiveShadow = true;
-
-		return mesh;
-	}
-
-	private material(color: string): Material {
-		const material = new MeshLambertMaterial({
-			color
-		});
-
-		this.materials.push(material);
-
-		return material;
-	}
-}
-
-function lerpAngle(current: number, target: number, alpha: number): number {
-	const delta = Math.atan2(Math.sin(target - current), Math.cos(target - current));
-
-	return current + delta * alpha;
 }

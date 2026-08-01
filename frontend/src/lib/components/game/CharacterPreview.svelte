@@ -11,6 +11,9 @@
 	let { appearance }: Props = $props();
 	let canvas = $state<HTMLCanvasElement | null>(null);
 	let avatar: PlayerAvatar | null = null;
+	let objectCount = $state(0);
+	let triangleCount = $state(0);
+	let meshCount = $state(0);
 
 	onMount(() => {
 		if (!canvas) {
@@ -22,11 +25,14 @@
 		const camera = new PerspectiveCamera(45, 1, 0.1, 50);
 		const light = new DirectionalLight(0xffe2bd, 1.4);
 		avatar = new PlayerAvatar(appearance);
+		objectCount = avatar.diagnostics.objectCount;
+		triangleCount = avatar.diagnostics.triangles;
+		meshCount = avatar.diagnostics.meshCount;
 
-		camera.position.set(0, 1.4, 5);
+		camera.position.set(0, 1.2, 4.6);
 		light.position.set(3, 6, 4);
 		scene.add(new AmbientLight(0xffffff, 0.7), light, avatar.object);
-		renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+		renderer.setPixelRatio(1);
 		renderer.setSize(canvas.clientWidth || 320, canvas.clientHeight || 320, false);
 
 		let frame = 0;
@@ -54,4 +60,16 @@
 	bind:this={canvas}
 	class="aspect-square w-full rounded-md border border-white/10 bg-[#131619]"
 	aria-label="Character preview"
+	data-testid="character-preview"
+	data-avatar-kind="humanoid"
+	data-hat-visible="false"
+	data-avatar-objects={objectCount}
+	data-avatar-meshes={meshCount}
+	data-avatar-triangles={triangleCount}
+	data-hair-style={appearance.hairStyle}
+	data-skin-tone={appearance.skinTone}
+	data-hair-color={appearance.hairColor}
+	data-shirt-color={appearance.shirtColor}
+	data-pants-color={appearance.pantsColor}
+	data-shoes-color={appearance.shoesColor}
 ></canvas>

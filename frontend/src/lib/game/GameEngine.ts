@@ -92,7 +92,11 @@ export class GameEngine {
 		drawCalls: 0,
 		triangles: 0,
 		worldRebuilds: 0,
-		chunkRefreshes: 0
+		chunkRefreshes: 0,
+		avatarUpdateMs: 0,
+		avatarObjects: 0,
+		avatarTriangles: 0,
+		avatarDrawCalls: 0
 	};
 
 	constructor(private readonly options: GameEngineOptions) {
@@ -110,8 +114,11 @@ export class GameEngine {
 			spawn,
 			Math.max(1, bounds.width) / Math.max(1, bounds.height)
 		);
-		this.avatar = new PlayerAvatar(options.appearance);
+		this.avatar = new PlayerAvatar(options.appearance, {
+			groundHeightAt: (x, z) => this.world.terrainGenerator.heightAt(x, z)
+		});
 		this.renderer.scene.add(this.avatar.object);
+		this.recordAvatarMetrics();
 		this.persistence = new GamePersistence(
 			options.worldId,
 			options.seed,
@@ -310,6 +317,7 @@ export class GameEngine {
 			Math.hypot(this.player.state.velocity.x, this.player.state.velocity.z) > 0.1,
 			deltaSeconds
 		);
+		this.recordAvatarMetrics();
 
 		this.target = this.buildMode
 			? this.raycaster.raycast(this.player.camera.camera, this.renderer.lookups)
@@ -334,6 +342,14 @@ export class GameEngine {
 		const renderStartedAt = performance.now();
 		this.renderer.render(this.player.camera.camera);
 		this.diagnostics.renderMs = performance.now() - renderStartedAt;
+	}
+
+	private recordAvatarMetrics(): void {
+		const avatarMetrics = this.avatar.diagnostics;
+		this.diagnostics.avatarUpdateMs = avatarMetrics.updateMs;
+		this.diagnostics.avatarObjects = avatarMetrics.objectCount;
+		this.diagnostics.avatarTriangles = avatarMetrics.triangles;
+		this.diagnostics.avatarDrawCalls = avatarMetrics.meshCount;
 	}
 
 	private breakTarget(): void {
@@ -516,7 +532,8 @@ export class GameEngine {
 			message: this.message,
 			error: this.error,
 			mobileLimited: this.mobileLimited,
-			diagnostics: { ...this.diagnostics }
+			diagnostics: { ...this.diagnostics },
+			avatar: { ...this.avatar.diagnostics.animation }
 		};
 	}
 

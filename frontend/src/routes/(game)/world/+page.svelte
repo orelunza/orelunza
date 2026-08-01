@@ -152,6 +152,20 @@
 				data-active-loops={snapshot.diagnostics?.activeLoops ?? 0}
 				data-world-rebuilds={snapshot.diagnostics?.worldRebuilds ?? 0}
 				data-chunk-refreshes={snapshot.diagnostics?.chunkRefreshes ?? 0}
+				data-avatar-update-ms={snapshot.diagnostics?.avatarUpdateMs.toFixed(3) ?? '0'}
+				data-avatar-objects={snapshot.diagnostics?.avatarObjects ?? 0}
+				data-avatar-triangles={snapshot.diagnostics?.avatarTriangles ?? 0}
+				data-avatar-draw-calls={snapshot.diagnostics?.avatarDrawCalls ?? 0}
+				data-avatar-state={snapshot.avatar?.locomotionState ?? 'idle'}
+				data-avatar-speed={snapshot.avatar?.speed.toFixed(3) ?? '0'}
+				data-avatar-gait-phase={snapshot.avatar?.gaitPhase.toFixed(3) ?? '0'}
+				data-avatar-arm-left={snapshot.avatar?.armLeftAngle.toFixed(3) ?? '0'}
+				data-avatar-arm-right={snapshot.avatar?.armRightAngle.toFixed(3) ?? '0'}
+				data-avatar-leg-left={snapshot.avatar?.legLeftAngle.toFixed(3) ?? '0'}
+				data-avatar-leg-right={snapshot.avatar?.legRightAngle.toFixed(3) ?? '0'}
+				data-avatar-grounded={snapshot.avatar?.grounded ? 'true' : 'false'}
+				data-avatar-head-yaw={snapshot.avatar?.headYaw.toFixed(3) ?? '0'}
+				data-avatar-body-yaw={snapshot.avatar?.bodyYaw.toFixed(3) ?? '0'}
 			>
 				Game state
 			</div>

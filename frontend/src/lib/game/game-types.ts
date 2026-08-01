@@ -6,6 +6,8 @@ import type {
 } from './world/voxel-types';
 import type { InventorySnapshot } from './inventory/Inventory';
 import type { CharacterAppearanceV1 } from './character/CharacterAppearance';
+import type { PerformanceSnapshot } from './debug/PerformanceMonitor';
+import type { HumanoidAnimationSnapshot } from './player/HumanoidPose';
 
 export type GameStatus =
 	'booting' | 'loading-world' | 'playing' | 'paused' | 'inventory' | 'error' | 'destroyed';
@@ -43,6 +45,9 @@ export interface GameSnapshot {
 	error: string | null;
 	mobileLimited: boolean;
 	diagnostics?: GameDiagnosticsSnapshot;
+	avatar?: HumanoidAnimationSnapshot;
+	debugPerformance?: boolean;
+	performance?: PerformanceSnapshot | null;
 }
 
 export interface GameEngineOptions {
@@ -75,4 +80,8 @@ export interface GameDiagnosticsSnapshot {
 	triangles: number;
 	worldRebuilds: number;
 	chunkRefreshes: number;
+	avatarUpdateMs: number;
+	avatarObjects: number;
+	avatarTriangles: number;
+	avatarDrawCalls: number;
 }

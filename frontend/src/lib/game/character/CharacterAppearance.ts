@@ -2,7 +2,7 @@ export interface CharacterAppearanceV1 {
 	version: 1;
 	displayName: string;
 	skinTone: string;
-	hairStyle: 'short' | 'curly' | 'long' | 'none';
+	hairStyle: 'shaved' | 'short' | 'curly' | 'afro' | 'long' | 'braids_simple' | 'none';
 	hairColor: string;
 	shirtColor: string;
 	pantsColor: string;
@@ -20,14 +20,33 @@ export const DEFAULT_CHARACTER_APPEARANCE: CharacterAppearanceV1 = {
 	shoesColor: '#2b2725'
 };
 
+const HAIR_STYLES = new Set<CharacterAppearanceV1['hairStyle']>([
+	'shaved',
+	'short',
+	'curly',
+	'afro',
+	'long',
+	'braids_simple',
+	'none'
+]);
+const COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
+
 export function normalizeCharacterAppearance(
 	value: Partial<CharacterAppearanceV1> | null | undefined
 ): CharacterAppearanceV1 {
+	const hairStyle = HAIR_STYLES.has(value?.hairStyle ?? 'short') ? value?.hairStyle : 'short';
+
 	return {
 		...DEFAULT_CHARACTER_APPEARANCE,
 		...value,
 		version: 1,
-		displayName: value?.displayName?.trim() || DEFAULT_CHARACTER_APPEARANCE.displayName
+		displayName: value?.displayName?.trim() || DEFAULT_CHARACTER_APPEARANCE.displayName,
+		hairStyle: hairStyle ?? DEFAULT_CHARACTER_APPEARANCE.hairStyle,
+		skinTone: normalizeColor(value?.skinTone, DEFAULT_CHARACTER_APPEARANCE.skinTone),
+		hairColor: normalizeColor(value?.hairColor, DEFAULT_CHARACTER_APPEARANCE.hairColor),
+		shirtColor: normalizeColor(value?.shirtColor, DEFAULT_CHARACTER_APPEARANCE.shirtColor),
+		pantsColor: normalizeColor(value?.pantsColor, DEFAULT_CHARACTER_APPEARANCE.pantsColor),
+		shoesColor: normalizeColor(value?.shoesColor, DEFAULT_CHARACTER_APPEARANCE.shoesColor)
 	};
 }
 
@@ -49,4 +68,8 @@ export function parseCharacterAppearance(value: string): CharacterAppearanceV1 |
 	}
 
 	return normalizeCharacterAppearance(candidate);
+}
+
+function normalizeColor(value: string | undefined, fallback: string): string {
+	return value && COLOR_PATTERN.test(value) ? value : fallback;
 }

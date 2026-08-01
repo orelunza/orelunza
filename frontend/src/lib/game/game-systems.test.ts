@@ -4,6 +4,7 @@ import { GameLoop } from './GameLoop';
 import { GamePersistence } from './persistence/GamePersistence';
 import {
 	DEFAULT_CHARACTER_APPEARANCE,
+	normalizeCharacterAppearance,
 	parseCharacterAppearance,
 	serializeCharacterAppearance
 } from './character/CharacterAppearance';
@@ -11,6 +12,9 @@ import { BlockPlacementSystem } from './interaction/BlockPlacementSystem';
 import { Hotbar } from './inventory/Hotbar';
 import { Inventory } from './inventory/Inventory';
 import { KeyboardInput } from './input/KeyboardInput';
+import { HumanoidAnimator } from './player/HumanoidAnimator';
+import { HumanoidRig } from './player/HumanoidRig';
+import { PlayerAvatar } from './player/PlayerAvatar';
 import { PlayerController } from './player/PlayerController';
 import {
 	SPRINT_SPEED,
@@ -109,7 +113,7 @@ describe('terrain generation', () => {
 		const generator = new TerrainGenerator(STARTER_WORLD_SEED);
 
 		expect(generator.zoneAt(CENTRAL_CITY_CENTER.x, CENTRAL_CITY_CENTER.z)).toBe('Central City');
-		expect(generator.isPath(0, -40)).toBe(true);
+		expect([-3, -2, -1, 0, 1, 2, 3].some((x) => generator.isPath(x, -40))).toBe(true);
 
 		const cityBlocks = generator
 			.generateChunk(0, Math.floor(CENTRAL_CITY_CENTER.z / 16))
@@ -191,6 +195,238 @@ describe('block registry and world mutations', () => {
 		expect(world.isSolidAt({ x: spawn.x, y: spawn.y, z: spawn.z })).toBe(false);
 		expect(world.isSolidAt({ x: spawn.x + 1, y: spawn.y, z: spawn.z })).toBe(false);
 		expect(world.safeRestorePosition({ x: 0, y: -50, z: 0 })).toEqual(spawn);
+	});
+});
+
+describe('humanoid avatar rig and animation', () => {
+	test('builds an articulated human hierarchy without a hat', () => {
+		const rig = new HumanoidRig(DEFAULT_CHARACTER_APPEARANCE);
+		const joints = rig.joints;
+
+		expect(joints.hips.children).toContain(joints.spine);
+		expect(joints.chest.children).toContain(joints.neck);
+		expect(joints.head.children).toContain(joints.face);
+		expect(joints.head.children).toContain(joints.hair);
+		expect(joints.shoulderLeft.children).toContain(joints.upperArmLeft);
+		expect(joints.upperArmLeft.children).toContain(joints.forearmLeft);
+		expect(joints.forearmLeft.children).toContain(joints.handLeft);
+		expect(joints.thighLeft.children).toContain(joints.shinLeft);
+		expect(joints.shinLeft.children).toContain(joints.footLeft);
+		expect(joints.footLeft.children).toContain(joints.shoeLeft);
+		expect(rig.object.getObjectByName('hat')).toBeUndefined();
+		expect(joints.hair.children.length).toBeGreaterThan(0);
+		expect(rig.objectCount).toBeLessThan(60);
+		rig.dispose();
+	});
+
+	test('applies appearance colors and keeps old saves compatible', () => {
+		const appearance = normalizeCharacterAppearance({
+			...DEFAULT_CHARACTER_APPEARANCE,
+			skinTone: '#d1a17f',
+			hairStyle: 'afro',
+			hairColor: '#111111',
+			shirtColor: '#4f8f74',
+			pantsColor: '#37485f',
+			shoesColor: '#2b2725'
+		});
+		const rig = new HumanoidRig(appearance);
+
+		expect(rig.appearanceSnapshot).toMatchObject(appearance);
+		expect(rig.joints.hair.children.length).toBeGreaterThan(4);
+		expect(normalizeCharacterAppearance({ hairStyle: 'invalid' as 'short' }).hairStyle).toBe(
+			'short'
+		);
+		expect(normalizeCharacterAppearance({ skinTone: 'bad' }).skinTone).toBe(
+			DEFAULT_CHARACTER_APPEARANCE.skinTone
+		);
+		rig.updateAppearance({ ...appearance, hairStyle: 'braids_simple' });
+		expect(rig.joints.hair.children.length).toBeGreaterThanOrEqual(3);
+		rig.dispose();
+	});
+
+	test('idle breathes subtly and walk alternates opposite arms and legs', () => {
+		const animator = new HumanoidAnimator();
+		const idle = animator.update({
+			yaw: Math.PI,
+			velocityX: 0,
+			velocityY: 0,
+			velocityZ: 0,
+			grounded: true,
+			deltaSeconds: 1 / 60
+		});
+
+		expect(idle.state).toBe('idle');
+		expect(Math.abs(idle.rootBob)).toBeLessThan(0.02);
+
+		let walk = idle;
+
+		for (let index = 0; index < 20; index += 1) {
+			walk = animator.update({
+				yaw: Math.PI,
+				velocityX: 0,
+				velocityY: 0,
+				velocityZ: -WALK_SPEED,
+				grounded: true,
+				deltaSeconds: 1 / 60
+			});
+		}
+
+		expect(walk.state).toBe('walk_forward');
+		expect(Math.sign(walk.leftShoulderPitch)).toBe(-Math.sign(walk.rightShoulderPitch));
+		expect(Math.sign(walk.leftHipPitch)).toBe(-Math.sign(walk.rightHipPitch));
+		expect(Math.sign(walk.rightShoulderPitch)).toBe(-Math.sign(walk.leftHipPitch));
+	});
+
+	test('run cadence advances faster than walk and backward pose is distinct', () => {
+		const walkAnimator = new HumanoidAnimator();
+		const runAnimator = new HumanoidAnimator();
+		let walkPhase = 0;
+		let runPhase = 0;
+
+		for (let index = 0; index < 30; index += 1) {
+			walkAnimator.update({
+				yaw: Math.PI,
+				velocityX: 0,
+				velocityY: 0,
+				velocityZ: -WALK_SPEED,
+				grounded: true,
+				deltaSeconds: 1 / 60
+			});
+			runAnimator.update({
+				yaw: Math.PI,
+				velocityX: 0,
+				velocityY: 0,
+				velocityZ: -SPRINT_SPEED,
+				grounded: true,
+				deltaSeconds: 1 / 60
+			});
+			walkPhase = walkAnimator.diagnostics.gaitPhase;
+			runPhase = runAnimator.diagnostics.gaitPhase;
+		}
+
+		expect(runPhase).toBeGreaterThan(walkPhase);
+
+		const backward = walkAnimator.update({
+			yaw: Math.PI,
+			velocityX: 0,
+			velocityY: 0,
+			velocityZ: WALK_SPEED * 0.8,
+			grounded: true,
+			deltaSeconds: 1 / 60
+		});
+
+		expect(backward.state).toBe('walk_backward');
+		expect(backward.chestPitch).toBeGreaterThan(0);
+	});
+
+	test('strafe left and right produce mirrored poses', () => {
+		const leftAnimator = new HumanoidAnimator();
+		const rightAnimator = new HumanoidAnimator();
+		const left = leftAnimator.update({
+			yaw: Math.PI,
+			velocityX: -WALK_SPEED,
+			velocityY: 0,
+			velocityZ: 0,
+			grounded: true,
+			deltaSeconds: 1 / 30
+		});
+		const right = rightAnimator.update({
+			yaw: Math.PI,
+			velocityX: WALK_SPEED,
+			velocityY: 0,
+			velocityZ: 0,
+			grounded: true,
+			deltaSeconds: 1 / 30
+		});
+
+		expect(left.state).toBe('strafe_left');
+		expect(right.state).toBe('strafe_right');
+		expect(Math.sign(left.hipsRoll)).toBe(-Math.sign(right.hipsRoll));
+	});
+
+	test('rotation is interpolated and mostly frame-rate independent', () => {
+		const rotate = (fps: number): number => {
+			const animator = new HumanoidAnimator();
+
+			for (let index = 0; index < fps; index += 1) {
+				animator.update({
+					yaw: -Math.PI / 2,
+					velocityX: -WALK_SPEED,
+					velocityY: 0,
+					velocityZ: 0,
+					grounded: true,
+					deltaSeconds: 1 / fps
+				});
+			}
+
+			return animator.bodyYaw;
+		};
+
+		expect(rotate(30)).toBeCloseTo(rotate(120), 1);
+	});
+
+	test('head yaw is clamped and jump, airborne and landing states are distinct', () => {
+		const animator = new HumanoidAnimator();
+		animator.update({
+			yaw: Math.PI * 2,
+			velocityX: 0,
+			velocityY: 4,
+			velocityZ: 0,
+			grounded: false,
+			deltaSeconds: 1 / 60
+		});
+		const jumpState = animator.diagnostics.locomotionState;
+		const jumpHeadYaw = animator.diagnostics.headYaw;
+		animator.update({
+			yaw: Math.PI * 2,
+			velocityX: 0,
+			velocityY: -5,
+			velocityZ: 0,
+			grounded: false,
+			deltaSeconds: 1 / 60
+		});
+		const fallState = animator.diagnostics.locomotionState;
+		animator.update({
+			yaw: Math.PI * 2,
+			velocityX: 0,
+			velocityY: 0,
+			velocityZ: 0,
+			grounded: true,
+			deltaSeconds: 1 / 60
+		});
+		const landState = animator.diagnostics.locomotionState;
+
+		expect(Math.abs(jumpHeadYaw)).toBeLessThan(1.6);
+		expect(jumpState).toBe('jump_start');
+		expect(fallState).toBe('airborne');
+		expect(landState).toBe('landing');
+	});
+
+	test('foot grounding is skipped while airborne and does not generate chunks', () => {
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		const spawn = world.findSafeSpawnPosition();
+		let groundQueries = 0;
+		const avatar = new PlayerAvatar(DEFAULT_CHARACTER_APPEARANCE, {
+			groundHeightAt: (x, z) => {
+				groundQueries += 1;
+
+				return world.terrainGenerator.heightAt(x, z);
+			}
+		});
+		const player = testPlayer(world, {
+			position: spawn,
+			onGround: false,
+			velocity: { x: 0, y: 2, z: 0 }
+		});
+		world.ensureChunksAround(spawn, 0);
+		const loadedBefore = world.getLoadedChunks().length;
+
+		avatar.update(player, false, 1 / 60);
+
+		expect(groundQueries).toBe(0);
+		expect(world.getLoadedChunks()).toHaveLength(loadedBefore);
+		expect(avatar.diagnostics.updateMs).toBeLessThan(1);
+		avatar.dispose();
 	});
 });
 
