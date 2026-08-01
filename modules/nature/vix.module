@@ -1,0 +1,15 @@
+name = "nature"
+kind = "service"
+
+[routes]
+prefix = "/api/nature"
+
+[deps]
+registry = [
+]
+
+links = [
+]
+
+[tests]
+enabled = true

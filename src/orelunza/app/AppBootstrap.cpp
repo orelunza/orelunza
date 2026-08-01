@@ -8,6 +8,7 @@
 #include <orelunza/presentation/routes/RouteRegistry.hpp>
 
 #include <identity/IdentityModule.hpp>
+#include <nature/NatureModule.hpp>
 #include <world/WorldModule.hpp>
 
 #include <vix_app_modules.hpp>
@@ -25,9 +26,7 @@ namespace orelunza::app
   int AppBootstrap::run()
   {
     vix::config::Config cfg{".env"};
-
-    auto executor =
-        std::make_shared<vix::executor::RuntimeExecutor>(1u);
+    auto executor = std::make_shared<vix::executor::RuntimeExecutor>(1u);
 
     vix::App app{executor};
 
@@ -43,7 +42,8 @@ namespace orelunza::app
      *
      * - identity owns IdentityService;
      * - world depends on IdentityService;
-     * - generated route registration runs only after both modules
+     * - nature depends on WorldService;
+     * - generated route registration runs only after all modules
      *   have been initialized.
      */
     identity::IdentityModule::initialize(database);
@@ -51,6 +51,10 @@ namespace orelunza::app
     world::WorldModule::initialize(
         database,
         identity::IdentityModule::service());
+
+    nature::NatureModule::initialize(
+        database,
+        world::WorldModule::service());
 
     presentation::middleware::MiddlewareRegistry::register_all(app);
 
@@ -71,6 +75,7 @@ namespace orelunza::app
     /*
      * Dependent modules must be destroyed before their dependencies.
      */
+    nature::NatureModule::shutdown();
     world::WorldModule::shutdown();
     identity::IdentityModule::shutdown();
 

@@ -64,3 +64,8 @@ kind = service
 enabled = true
 path = modules/world
 kind = service
+
+[module.nature]
+enabled = true
+path = modules/nature
+kind = service
