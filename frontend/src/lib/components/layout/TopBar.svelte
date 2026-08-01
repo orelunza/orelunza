@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 
 	import { natureState } from '$lib/state/nature.svelte';
@@ -73,7 +74,7 @@
 
 			loggingOut = false;
 
-			await goto('/login', {
+			await goto(resolve('/login'), {
 				replaceState: true
 			});
 		}
@@ -116,7 +117,7 @@
 
 		<div class="flex shrink-0 items-center gap-2">
 			<a
-				href="/profile"
+				href={resolve('/profile')}
 				class="flex min-w-0 items-center gap-3 rounded-xl px-2 py-1.5 transition hover:bg-[var(--orelunza-surface-hover)]"
 				aria-label="Open profile"
 			>

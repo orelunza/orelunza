@@ -1,4 +1,4 @@
-import { parseWorldSave, serializeWorldSave, type WorldSaveV1 } from '../world/WorldSave';
+import { parseWorldSave, serializeWorldSave, type WorldSave } from '../world/WorldSave';
 
 const DB_NAME = 'orelunza-game-worlds';
 const STORE_NAME = 'world-saves';
@@ -7,7 +7,7 @@ const DB_VERSION = 1;
 export class IndexedDbWorldStore {
 	private databasePromise: Promise<IDBDatabase> | null = null;
 
-	async load(worldId: string): Promise<WorldSaveV1 | null> {
+	async load(worldId: string): Promise<WorldSave | null> {
 		if (!hasIndexedDb()) {
 			return loadFromLocalStorage(worldId);
 		}
@@ -31,7 +31,7 @@ export class IndexedDbWorldStore {
 		});
 	}
 
-	async save(save: WorldSaveV1): Promise<void> {
+	async save(save: WorldSave): Promise<void> {
 		if (!hasIndexedDb()) {
 			saveToLocalStorage(save);
 			return;
@@ -78,12 +78,12 @@ function localStorageKey(worldId: string): string {
 	return `orelunza-world-save:${worldId}`;
 }
 
-function loadFromLocalStorage(worldId: string): WorldSaveV1 | null {
+function loadFromLocalStorage(worldId: string): WorldSave | null {
 	const value = localStorage.getItem(localStorageKey(worldId));
 
 	return value ? parseWorldSave(value) : null;
 }
 
-function saveToLocalStorage(save: WorldSaveV1): void {
+function saveToLocalStorage(save: WorldSave): void {
 	localStorage.setItem(localStorageKey(save.worldId), serializeWorldSave(save));
 }

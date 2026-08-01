@@ -2,13 +2,13 @@ import type { MovementInput } from '../input/KeyboardInput';
 import type { MouseDelta } from '../input/MouseInput';
 import type { VoxelWorld } from '../world/VoxelWorld';
 import type { WorldCoordinate } from '../world/voxel-types';
-import { FirstPersonCamera } from './FirstPersonCamera';
+import { ThirdPersonCamera } from './ThirdPersonCamera';
 import { PlayerPhysics } from './PlayerPhysics';
 import { createPlayerState, type PlayerState } from './PlayerState';
 
 export class PlayerController {
 	readonly state: PlayerState;
-	readonly camera: FirstPersonCamera;
+	readonly camera: ThirdPersonCamera;
 	readonly physics: PlayerPhysics;
 
 	constructor(
@@ -20,7 +20,9 @@ export class PlayerController {
 	) {
 		this.state = createPlayerState(playerId, worldId, spawn);
 		this.physics = new PlayerPhysics(world);
-		this.camera = new FirstPersonCamera(aspect);
+		this.camera = new ThirdPersonCamera(aspect, world);
+		this.camera.setOrientation(Math.PI, 0.34);
+		this.state.yaw = Math.PI;
 		this.camera.update(this.state);
 	}
 
@@ -29,6 +31,7 @@ export class PlayerController {
 	}
 
 	step(input: MovementInput, deltaSeconds: number): void {
+		this.state.yaw = this.camera.orientationYaw;
 		this.physics.step(this.state, input, deltaSeconds);
 		this.camera.update(this.state);
 	}
@@ -37,6 +40,7 @@ export class PlayerController {
 		this.state.position = { ...position };
 		this.state.yaw = yaw;
 		this.state.pitch = pitch;
+		this.camera.setOrientation(yaw, pitch || 0.34);
 		this.state.velocity = { x: 0, y: 0, z: 0 };
 		this.camera.update(this.state);
 	}

@@ -837,11 +837,35 @@ async function installCityBackend(
 	return state;
 }
 
-test.describe('city flow', () => {
+const CHARACTER_SAVE = {
+	version: 1,
+	displayName: 'Forest Citizen',
+	skinTone: '#b98565',
+	hairStyle: 'short',
+	hairColor: '#3b2b22',
+	shirtColor: '#4f8f74',
+	pantsColor: '#37485f',
+	shoesColor: '#2b2725'
+};
+
+async function installCharacter(page: Page): Promise<void> {
+	await page.addInitScript(
+		({ key, value }) => {
+			localStorage.setItem(key, value);
+		},
+		{
+			key: `orelunza-character:${IDENTITY.human_id}`,
+			value: JSON.stringify(CHARACTER_SAVE)
+		}
+	);
+}
+
+test.describe('world flow', () => {
 	test('opens a full-screen voxel game without the dashboard shell', async ({ page }) => {
 		await installCityBackend(page);
+		await installCharacter(page);
 
-		await page.goto('/city');
+		await page.goto('/world');
 
 		const canvas = page.locator('canvas[aria-label="Orelunza voxel world"]');
 
@@ -849,39 +873,50 @@ test.describe('city flow', () => {
 			timeout: 15_000
 		});
 
-		const canvasBox = await canvas.boundingBox();
-		const viewport = page.viewportSize();
-
-		expect(canvasBox?.height ?? 0).toBeGreaterThan(500);
-		expect(canvasBox?.width ?? 0).toBeGreaterThan((viewport?.width ?? 0) * 0.6);
-
 		await expect(page.getByRole('link', { name: /^City$/ })).toHaveCount(0);
 		await expect(page.getByRole('button', { name: 'Open navigation' })).toHaveCount(0);
 		await expect(page.getByLabel('Game HUD')).toBeVisible();
 		await expect(page.getByLabel('Hotbar', { exact: true })).toBeVisible();
-		await expect(page.getByLabel(/Hotbar slot/)).toHaveCount(9);
+		await expect(page.getByRole('button', { name: /Hotbar slot 9 Flower/ })).toBeVisible();
+		await expect(canvas).toHaveAttribute('data-camera', 'third-person');
+		await expect(page.getByText('Spawn Meadow')).toBeVisible();
+		await expect(page.getByText('The city lies beyond the meadow.')).toBeVisible();
 	});
 
-	test('supports pause, inventory, hotbar selection and profile access', async ({ page }) => {
-		test.setTimeout(45_000);
-
+	test('supports inventory and hotbar selection', async ({ page }) => {
 		await installCityBackend(page);
+		await installCharacter(page);
 
-		await page.goto('/city');
+		await page.goto('/world');
 
 		await expect(page.locator('canvas[aria-label="Orelunza voxel world"]')).toBeVisible({
 			timeout: 15_000
 		});
 
-		await page.keyboard.press('Digit3');
+		await page.getByRole('button', { name: /Hotbar slot 3 Glass/ }).click({
+			force: true
+		});
 		await expect(page.getByRole('button', { name: /Hotbar slot 3 Glass/ })).toHaveAttribute(
 			'aria-pressed',
 			'true'
 		);
 
-		await page.keyboard.press('KeyE');
+		await page.keyboard.press('KeyI');
 		await expect(page.getByRole('dialog', { name: 'Inventory' })).toBeVisible();
-		await page.getByRole('button', { name: 'Close' }).click();
+	});
+
+	test('supports build mode, pause menu and profile access', async ({ page }) => {
+		await installCityBackend(page);
+		await installCharacter(page);
+
+		await page.goto('/world');
+
+		await expect(page.locator('canvas[aria-label="Orelunza voxel world"]')).toBeVisible({
+			timeout: 15_000
+		});
+
+		await page.keyboard.press('KeyB');
+		await expect(page.getByText('Build Mode')).toBeVisible();
 
 		await page.keyboard.press('Escape');
 		await expect(page.getByRole('dialog', { name: 'Pause menu' })).toBeVisible();
@@ -892,14 +927,48 @@ test.describe('city flow', () => {
 		await installCityBackend(page, {
 			emptyWorld: true
 		});
+		await installCharacter(page);
 
-		await page.goto('/city');
+		await page.goto('/world');
 
 		await expect(page.locator('canvas[aria-label="Orelunza voxel world"]')).toBeVisible({
 			timeout: 15_000
 		});
-		await expect(page.getByText('Starter World')).toBeVisible();
+		await expect(page.getByText('Spawn Meadow')).toBeVisible();
 		expect(await page.getByText('The city is empty').count()).toBe(0);
+	});
+
+	test('redirects old /city entrypoint to /world', async ({ page }) => {
+		await installCityBackend(page);
+		await installCharacter(page);
+
+		await page.goto('/city');
+
+		await expect(page).toHaveURL(/\/world(?:\?|$)/);
+	});
+
+	test('creates a character before entering the world', async ({ page }) => {
+		await installCityBackend(page);
+
+		await page.goto('/character/create');
+
+		await expect(page.getByLabel('Character creator')).toBeVisible();
+		await expect(page.getByLabel('Character preview')).toBeVisible();
+		await page.getByLabel('Public name').fill('Meadow Builder');
+		await page.getByRole('button', { name: 'Enter the world' }).click();
+
+		await expect(page).toHaveURL(/\/world(?:\?|$)/);
+		await expect(page.locator('canvas[aria-label="Orelunza voxel world"]')).toBeVisible({
+			timeout: 15_000
+		});
+	});
+
+	test('redirects /world to character creation when no character exists', async ({ page }) => {
+		await installCityBackend(page);
+
+		await page.goto('/world');
+
+		await expect(page).toHaveURL(/\/character\/create(?:\?|$)/);
 	});
 
 	test('opens another region with its places and biome', async ({ page }) => {

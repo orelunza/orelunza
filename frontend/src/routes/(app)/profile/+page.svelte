@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
 
 	import { ApiError } from '$lib/api/ApiError';
@@ -368,10 +369,10 @@
 				/>
 
 				<a
-					href="/city"
+					href={resolve('/world')}
 					class="flex items-center justify-between rounded-[var(--orelunza-radius-medium)] border border-[var(--orelunza-border)] bg-[var(--orelunza-surface)] px-5 py-4 text-sm font-semibold text-[var(--orelunza-text-soft)] transition hover:border-[var(--orelunza-border-strong)] hover:bg-[var(--orelunza-surface-raised)] hover:text-[var(--orelunza-text)]"
 				>
-					<span>Return to the city</span>
+					<span>Return to the world</span>
 
 					<span aria-hidden="true">→</span>
 				</a>
@@ -388,7 +389,7 @@
 			</p>
 
 			<a
-				href="/login"
+				href={resolve('/login')}
 				class="mt-6 inline-flex rounded-xl bg-[var(--orelunza-accent)] px-5 py-3 text-sm font-semibold text-[var(--orelunza-accent-contrast)]"
 			>
 				Return to sign in

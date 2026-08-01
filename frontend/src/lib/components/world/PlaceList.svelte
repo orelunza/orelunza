@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Button from '$lib/components/ui/Button.svelte';
+	import { resolve } from '$app/paths';
 
 	import type { WorldPlace } from '$lib/api/contracts/world';
 
@@ -34,6 +35,8 @@
 	const activePlaceId = $derived(selectedPlaceId ?? worldState.selectedPlace?.id ?? null);
 
 	const humanPlaceId = $derived(currentPlaceId ?? worldState.position?.place_id ?? null);
+
+	const loadingPlaceCards = [0, 1, 2, 3];
 
 	function selectPlace(place: WorldPlace): void {
 		void onSelect?.(place);
@@ -72,7 +75,7 @@
 
 	{#if loading && visiblePlaces.length === 0}
 		<div class="grid gap-3 sm:grid-cols-2" aria-label="Loading places">
-			{#each Array(4) as _}
+			{#each loadingPlaceCards as index (index)}
 				<div
 					class="h-52 animate-pulse rounded-[var(--orelunza-radius-medium)] border border-[var(--orelunza-border)] bg-[var(--orelunza-surface)]"
 				></div>
@@ -171,7 +174,7 @@
 					</div>
 
 					<a
-						href={`/city/places/${encodeURIComponent(place.id)}`}
+						href={resolve(`/city/places/${encodeURIComponent(place.id)}`)}
 						class="relative mt-4 block"
 						aria-current={current ? 'location' : undefined}
 						onclick={() => selectPlace(place)}
@@ -214,7 +217,7 @@
 							</Button>
 						{:else}
 							<a
-								href={`/city/places/${encodeURIComponent(place.id)}`}
+								href={resolve(`/city/places/${encodeURIComponent(place.id)}`)}
 								class="inline-flex items-center gap-1 text-sm font-semibold text-[var(--orelunza-accent)] transition hover:text-[var(--orelunza-accent-strong)]"
 								onclick={() => selectPlace(place)}
 							>

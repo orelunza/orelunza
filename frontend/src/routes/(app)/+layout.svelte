@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { onMount } from 'svelte';
 	import type { Snippet } from 'svelte';
@@ -23,12 +24,6 @@
 	let startupError = $state<ApiError | null>(null);
 	let activeController: AbortController | null = null;
 
-	function loginUrl(): string {
-		const destination = `${page.url.pathname}${page.url.search}`;
-
-		return `/login?redirect=${encodeURIComponent(destination)}`;
-	}
-
 	async function initialize(): Promise<void> {
 		activeController?.abort();
 
@@ -51,7 +46,10 @@
 			}
 
 			if (!identity) {
-				await goto(loginUrl(), {
+				const destination = `${page.url.pathname}${page.url.search}`;
+
+				// eslint-disable-next-line svelte/no-navigation-without-resolve
+				await goto(`${resolve('/login')}?redirect=${encodeURIComponent(destination)}`, {
 					replaceState: true
 				});
 
@@ -97,7 +95,9 @@
 			<div class="mt-6 flex flex-wrap gap-3">
 				<Button onclick={initialize}>Try again</Button>
 
-				<Button variant="secondary" onclick={() => goto('/login')}>Return to sign in</Button>
+				<Button variant="secondary" onclick={() => goto(resolve('/login'))}
+					>Return to sign in</Button
+				>
 			</div>
 		</section>
 	</main>

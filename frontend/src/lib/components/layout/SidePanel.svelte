@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/state';
+	import { resolve } from '$app/paths';
 
 	import { sessionState } from '$lib/state/session.svelte';
 	import { worldState } from '$lib/state/world.svelte';
@@ -13,16 +14,16 @@
 	interface NavigationItem {
 		label: string;
 		description: string;
-		href: string;
+		href: '/world' | '/profile';
 		exact?: boolean;
 		icon: 'city' | 'profile';
 	}
 
 	const navigation: NavigationItem[] = [
 		{
-			label: 'City',
-			description: 'Regions, places and movement',
-			href: '/city',
+			label: 'World',
+			description: 'Explore and build',
+			href: '/world',
 			icon: 'city'
 		},
 		{
@@ -64,7 +65,11 @@
 	aria-label="Main navigation"
 >
 	<div class="flex min-h-16 items-center gap-3 border-b border-[var(--orelunza-border)] px-5">
-		<a href="/city" class="flex min-w-0 items-center gap-3" onclick={() => onNavigate?.()}>
+		<a
+			href={resolve('/world')}
+			class="flex min-w-0 items-center gap-3"
+			onclick={() => onNavigate?.()}
+		>
 			<div
 				class="flex size-10 shrink-0 items-center justify-center rounded-2xl border border-[var(--orelunza-border-strong)] bg-[var(--orelunza-surface-raised)] text-base font-bold text-[var(--orelunza-accent)] shadow-lg"
 				aria-hidden="true"
@@ -80,7 +85,7 @@
 				</p>
 
 				<p class="m-0 truncate text-xs text-[var(--orelunza-text-muted)]">
-					A peaceful digital city
+					A peaceful digital world
 				</p>
 			</div>
 		</a>
@@ -94,10 +99,10 @@
 		</p>
 
 		<ul class="m-0 grid list-none gap-1 p-0">
-			{#each navigation as item}
+			{#each navigation as item (item.href)}
 				<li>
 					<a
-						href={item.href}
+						href={resolve(item.href)}
 						aria-current={isActive(item) ? 'page' : undefined}
 						class={[
 							'group flex items-center gap-3 rounded-xl border px-3 py-3 transition',
@@ -177,7 +182,7 @@
 
 	<div class="border-t border-[var(--orelunza-border)] p-4">
 		<a
-			href="/profile"
+			href={resolve('/profile')}
 			class="flex items-center gap-3 rounded-xl p-2 transition hover:bg-[var(--orelunza-surface)]"
 			onclick={() => onNavigate?.()}
 		>

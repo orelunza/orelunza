@@ -17,6 +17,7 @@ import { MouseInput } from './input/MouseInput';
 import { PointerLockController } from './input/PointerLockController';
 import { GamePersistence } from './persistence/GamePersistence';
 import { WorldSyncService } from './persistence/WorldSyncService';
+import { PlayerAvatar } from './player/PlayerAvatar';
 import { PlayerController } from './player/PlayerController';
 import { GameRenderer } from './rendering/GameRenderer';
 import { createStarterWorld } from './world/WorldGenerator';
@@ -34,6 +35,7 @@ export class GameEngine {
 	private readonly raycaster = new BlockRaycaster(6);
 	private readonly loop: GameLoop;
 	private readonly persistence: GamePersistence;
+	private readonly avatar: PlayerAvatar;
 	private readonly worldSync = new WorldSyncService();
 	private readonly resizeObserver: ResizeObserver;
 	private readonly handleVisibility = (): void => {
@@ -53,6 +55,8 @@ export class GameEngine {
 	private needsWorldRebuild = true;
 	private lastBackendSync = 0;
 	private mobileLimited = false;
+	private buildMode = false;
+	private introVisible = true;
 
 	constructor(private readonly options: GameEngineOptions) {
 		this.world = createStarterWorld(options.seed || STARTER_WORLD_SEED);
@@ -69,12 +73,15 @@ export class GameEngine {
 			spawn,
 			Math.max(1, bounds.width) / Math.max(1, bounds.height)
 		);
+		this.avatar = new PlayerAvatar(options.appearance);
+		this.renderer.scene.add(this.avatar.object);
 		this.persistence = new GamePersistence(
 			options.worldId,
 			options.seed,
 			this.world,
 			this.player,
 			this.inventory,
+			options.appearance,
 			(status) => {
 				this.saveStatus = status;
 				this.emitSnapshot();
@@ -97,7 +104,7 @@ export class GameEngine {
 
 		try {
 			await this.persistence.load();
-			this.world.ensureChunksAround(this.player.state.position, 2);
+			this.world.ensureChunksAround(this.player.state.position, 3);
 			this.renderer.rebuildWorld(this.world);
 			this.needsWorldRebuild = false;
 			this.status = 'playing';
@@ -171,6 +178,7 @@ export class GameEngine {
 		this.keyboard.destroy();
 		this.mouse.destroy();
 		this.pointerLock.destroy();
+		this.avatar.dispose();
 		this.renderer.dispose();
 		this.emitSnapshot();
 	}
@@ -190,6 +198,11 @@ export class GameEngine {
 			this.openInventory();
 		}
 
+		if (commands.build && this.status === 'playing') {
+			this.buildMode = !this.buildMode;
+			this.message = this.buildMode ? 'Build Mode' : 'Exploration Mode';
+		}
+
 		if (commands.hotbarIndex !== null) {
 			this.hotbar.select(commands.hotbarIndex);
 		}
@@ -203,12 +216,13 @@ export class GameEngine {
 		if (this.status === 'playing' && this.pointerLock.isLocked) {
 			this.player.applyMouse(this.mouse.consumeDelta());
 			this.player.step(this.keyboard.getMovement(), deltaSeconds);
+			this.introVisible = false;
 			this.syncBackendPosition();
 		} else {
 			this.mouse.consumeDelta();
 		}
 
-		if (this.world.ensureChunksAround(this.player.state.position, 2)) {
+		if (this.world.ensureChunksAround(this.player.state.position, 3)) {
 			this.needsWorldRebuild = true;
 		}
 
@@ -217,14 +231,22 @@ export class GameEngine {
 			this.needsWorldRebuild = false;
 		}
 
-		this.target = this.raycaster.raycast(this.player.camera.camera, this.renderer.lookups);
-		this.renderer.setSelection(this.target?.block ?? null);
+		this.avatar.update(
+			this.player.state,
+			Math.hypot(this.player.state.velocity.x, this.player.state.velocity.z) > 0.1,
+			deltaSeconds
+		);
+
+		this.target = this.buildMode
+			? this.raycaster.raycast(this.player.camera.camera, this.renderer.lookups)
+			: null;
+		this.renderer.setSelection(this.buildMode ? (this.target?.block ?? null) : null);
 
 		const action = this.mouse.consumeAction();
 
-		if (this.status === 'playing' && action === 'break') {
+		if (this.status === 'playing' && this.buildMode && action === 'break') {
 			this.breakTarget();
-		} else if (this.status === 'playing' && action === 'place') {
+		} else if (this.status === 'playing' && this.buildMode && action === 'place') {
 			this.placeSelectedBlock();
 		}
 
@@ -275,9 +297,9 @@ export class GameEngine {
 	}
 
 	private findSafeSpawn(): Vector3 {
-		const height = this.world.terrainGenerator.heightAt(0, 0);
+		const spawn = this.world.spawnPosition();
 
-		return new Vector3(0.5, height + 2, 0.5);
+		return new Vector3(spawn.x, spawn.y, spawn.z);
 	}
 
 	private syncBackendPosition(): void {
@@ -318,7 +340,13 @@ export class GameEngine {
 			pointerLocked: this.pointerLock.isLocked,
 			saveStatus: this.saveStatus,
 			regionName: this.options.regionName,
+			zoneName: this.world.terrainGenerator.zoneAt(
+				this.player.state.position.x,
+				this.player.state.position.z
+			),
 			targetedBlock: this.target,
+			buildMode: this.buildMode,
+			introVisible: this.introVisible,
 			message: this.message,
 			error: this.error,
 			mobileLimited: this.mobileLimited

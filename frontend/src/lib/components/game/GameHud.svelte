@@ -18,7 +18,7 @@
 	<div
 		class="absolute top-3 left-3 rounded-sm border border-white/10 bg-[#1a1e22]/76 px-3 py-2 text-xs backdrop-blur-md"
 	>
-		<p class="m-0 font-semibold">{snapshot.regionName}</p>
+		<p class="m-0 font-semibold">{snapshot.zoneName}</p>
 		<p class="m-0 text-white/52">
 			{snapshot.saveStatus === 'saved'
 				? 'Saved'
@@ -27,6 +27,25 @@
 					: snapshot.saveStatus}
 		</p>
 	</div>
+
+	{#if snapshot.buildMode}
+		<div
+			class="absolute top-3 left-1/2 -translate-x-1/2 rounded-sm border border-[#f97316]/35 bg-[#1a1e22]/76 px-3 py-2 text-xs font-semibold text-[#f97316] backdrop-blur-md"
+		>
+			Build Mode
+		</div>
+	{/if}
+
+	{#if snapshot.introVisible}
+		<div
+			class="absolute top-20 left-1/2 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 rounded-sm border border-white/10 bg-[#1a1e22]/74 px-4 py-3 text-center backdrop-blur-md"
+		>
+			<p class="m-0 font-semibold">Welcome to Orelunza</p>
+			<p class="mt-1 mb-0 text-sm text-white/58">
+				The city lies beyond the meadow. Walk freely, explore, or build your own place.
+			</p>
+		</div>
+	{/if}
 
 	<button
 		type="button"

@@ -1,11 +1,12 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
 
 	import Card from '$lib/components/ui/Card.svelte';
 	import RegisterForm from '$lib/components/auth/RegisterForm.svelte';
 
-	async function enterCity(): Promise<void> {
-		await goto('/city');
+	async function enterCharacterCreator(): Promise<void> {
+		await goto(resolve('/character/create'));
 	}
 </script>
 
@@ -87,7 +88,7 @@
 		<Card padding="large" class="app-surface" ariaLabel="Create an Orelunza identity">
 			<div class="mb-7">
 				<a
-					href="/"
+					href={resolve('/')}
 					class="mb-7 inline-flex items-center gap-3 text-sm font-semibold text-[var(--orelunza-accent)] lg:hidden"
 				>
 					<span
@@ -109,13 +110,13 @@
 				</p>
 			</div>
 
-			<RegisterForm onSuccess={enterCity} />
+			<RegisterForm onSuccess={enterCharacterCreator} />
 
 			<p class="mt-7 mb-0 text-center text-sm text-[var(--orelunza-text-muted)]">
 				Already a citizen?
 
 				<a
-					href="/login"
+					href={resolve('/login')}
 					class="font-semibold text-[var(--orelunza-accent)] transition hover:text-[var(--orelunza-accent-strong)]"
 				>
 					Sign in

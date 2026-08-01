@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Button from '$lib/components/ui/Button.svelte';
+	import { resolve } from '$app/paths';
 
 	import type { HumanPosition, WorldPlace, WorldRegion } from '$lib/api/contracts/world';
 
@@ -210,7 +211,7 @@
 
 			{#if currentPlace}
 				<a
-					href={`/city/places/${encodeURIComponent(currentPlace.id)}`}
+					href={resolve(`/city/places/${encodeURIComponent(currentPlace.id)}`)}
 					class="mt-4 flex items-center justify-between rounded-xl border border-[var(--orelunza-border)] bg-[var(--orelunza-background-soft)] px-4 py-3 text-sm font-semibold text-[var(--orelunza-text-soft)] transition hover:border-[var(--orelunza-border-strong)] hover:bg-[var(--orelunza-surface-hover)] hover:text-[var(--orelunza-text)]"
 				>
 					<span>Open this place</span>
@@ -228,7 +229,7 @@
 				</a>
 			{:else if currentRegion}
 				<a
-					href={`/city/regions/${encodeURIComponent(currentRegion.id)}`}
+					href={resolve(`/city/regions/${encodeURIComponent(currentRegion.id)}`)}
 					class="mt-4 flex items-center justify-between rounded-xl border border-[var(--orelunza-border)] bg-[var(--orelunza-background-soft)] px-4 py-3 text-sm font-semibold text-[var(--orelunza-text-soft)] transition hover:border-[var(--orelunza-border-strong)] hover:bg-[var(--orelunza-surface-hover)] hover:text-[var(--orelunza-text)]"
 				>
 					<span>Open this region</span>

@@ -1,6 +1,11 @@
 import { describe, expect, test } from 'vitest';
 
 import { GamePersistence } from './persistence/GamePersistence';
+import {
+	DEFAULT_CHARACTER_APPEARANCE,
+	parseCharacterAppearance,
+	serializeCharacterAppearance
+} from './character/CharacterAppearance';
 import { BlockPlacementSystem } from './interaction/BlockPlacementSystem';
 import { Hotbar } from './inventory/Hotbar';
 import { Inventory } from './inventory/Inventory';
@@ -11,7 +16,12 @@ import { BlockRegistry } from './world/BlockRegistry';
 import { TerrainGenerator } from './world/TerrainGenerator';
 import { VoxelWorld } from './world/VoxelWorld';
 import { parseWorldSave, serializeWorldSave, type WorldSaveV1 } from './world/WorldSave';
-import { STARTER_WORLD_SEED, chunkToWorld, worldToChunk } from './world/voxel-types';
+import {
+	CENTRAL_CITY_CENTER,
+	STARTER_WORLD_SEED,
+	chunkToWorld,
+	worldToChunk
+} from './world/voxel-types';
 
 describe('voxel world coordinates', () => {
 	test('converts world coordinates to chunk coordinates', () => {
@@ -34,6 +44,27 @@ describe('terrain generation', () => {
 		expect(first.generateChunk(0, 0).blocks.slice(0, 20)).toEqual(
 			second.generateChunk(0, 0).blocks.slice(0, 20)
 		);
+	});
+
+	test('generates a deterministic open spawn meadow', () => {
+		const generator = new TerrainGenerator(STARTER_WORLD_SEED);
+
+		expect(generator.heightAt(0, 0)).toBe(9);
+		expect(generator.zoneAt(0, 0)).toBe('Spawn Meadow');
+		expect(generator.zoneAt(24, 0)).toBe('Riverbank');
+	});
+
+	test('places the central city and a path in the expected direction', () => {
+		const generator = new TerrainGenerator(STARTER_WORLD_SEED);
+
+		expect(generator.zoneAt(CENTRAL_CITY_CENTER.x, CENTRAL_CITY_CENTER.z)).toBe('Central City');
+		expect(generator.isPath(0, -40)).toBe(true);
+
+		const cityBlocks = generator
+			.generateChunk(0, Math.floor(CENTRAL_CITY_CENTER.z / 16))
+			.blocks.filter((block) => block.type === 'brick' || block.type === 'wooden_plank');
+
+		expect(cityBlocks.length).toBeGreaterThan(20);
 	});
 });
 
@@ -69,6 +100,15 @@ describe('block registry and world mutations', () => {
 
 		expect(restored.getBlock({ x: 5, y: 20, z: 5 }).type).toBe('air');
 	});
+
+	test('returns a safe spawn and repairs invalid restore positions', () => {
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		const spawn = world.spawnPosition();
+
+		expect(world.isSolidAt({ x: spawn.x, y: spawn.y, z: spawn.z })).toBe(false);
+		expect(world.isSolidAt({ x: spawn.x + 1, y: spawn.y, z: spawn.z })).toBe(false);
+		expect(world.safeRestorePosition({ x: 0, y: -50, z: 0 })).toEqual(spawn);
+	});
 });
 
 describe('player physics', () => {
@@ -82,6 +122,18 @@ describe('player physics', () => {
 		const movement = input.getMovement();
 
 		expect(Math.hypot(movement.forward, movement.right)).toBeCloseTo(1);
+		input.destroy();
+	});
+
+	test('toggles build mode through keyboard commands', () => {
+		const windowTarget = new FakeWindow();
+		const input = new KeyboardInput(windowTarget as unknown as Window);
+
+		windowTarget.press('KeyB');
+
+		expect(input.consumeCommands()).toMatchObject({
+			build: true
+		});
 		input.destroy();
 	});
 
@@ -127,6 +179,17 @@ describe('player physics', () => {
 		physics.step(player, { forward: 0, right: 0, jump: true, sprint: false }, 1 / 60);
 
 		expect(player.velocity.y).toBeGreaterThan(0);
+	});
+
+	test('moves relative to the camera yaw', () => {
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		const controller = new PlayerController(world, 'p', 'w', world.spawnPosition(), 1);
+		controller.camera.setOrientation(Math.PI, 0.34);
+		const startZ = controller.state.position.z;
+
+		controller.step({ forward: 1, right: 0, jump: false, sprint: false }, 1 / 60);
+
+		expect(controller.state.position.z).toBeLessThan(startZ);
 	});
 });
 
@@ -195,6 +258,35 @@ describe('world saves', () => {
 		expect(parseWorldSave(serializeWorldSave(save))).toEqual(save);
 	});
 
+	test('serializes character appearance', () => {
+		expect(
+			parseCharacterAppearance(serializeCharacterAppearance(DEFAULT_CHARACTER_APPEARANCE))
+		).toEqual(DEFAULT_CHARACTER_APPEARANCE);
+	});
+
+	test('serializes WorldSaveV2 with character appearance', () => {
+		const save = {
+			version: 2 as const,
+			worldId: 'orelunza-world',
+			seed: STARTER_WORLD_SEED,
+			player: {
+				playerId: 'p',
+				worldId: 'orelunza-world',
+				position: { x: 1, y: 12, z: 3 },
+				yaw: Math.PI,
+				pitch: 0.34
+			},
+			character: DEFAULT_CHARACTER_APPEARANCE,
+			inventory: new Inventory().snapshot(),
+			placedBlocks: [],
+			removedBlocks: [],
+			changes: [],
+			updatedAt: 2
+		};
+
+		expect(parseWorldSave(serializeWorldSave(save))).toEqual(save);
+	});
+
 	test('does not save when nothing changed', async () => {
 		const world = new VoxelWorld(STARTER_WORLD_SEED);
 		const player = new PlayerController(world, 'p', 'starter-world', { x: 0.5, y: 12, z: 0.5 }, 1);
@@ -205,6 +297,7 @@ describe('world saves', () => {
 			world,
 			player,
 			inventory,
+			DEFAULT_CHARACTER_APPEARANCE,
 			() => undefined
 		);
 

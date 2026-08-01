@@ -1,4 +1,6 @@
 import { type BlockCoordinate, type BlockType, CHUNK_SIZE, WATER_LEVEL } from './voxel-types';
+import { CENTRAL_CITY_CENTER } from './voxel-types';
+import { CityGenerator } from './CityGenerator';
 
 function hashString(value: string): number {
 	let hash = 2166136261;
@@ -41,22 +43,56 @@ export interface GeneratedChunk {
 
 export class TerrainGenerator {
 	private readonly seedValue: number;
+	private readonly city = new CityGenerator();
 
 	constructor(readonly seed: string) {
 		this.seedValue = hashString(seed);
 	}
 
 	heightAt(x: number, z: number): number {
-		const soft = smoothNoise(this.seedValue, x / 18, z / 18);
-		const detail = smoothNoise(this.seedValue + 17, x / 8, z / 8);
-		const river = Math.abs(Math.sin((x + z * 0.42) / 18));
-		const riverCut = river < 0.18 ? -3 : 0;
+		const spawnDistance = Math.hypot(x, z);
+		const cityDistance = Math.hypot(x - CENTRAL_CITY_CENTER.x, z - CENTRAL_CITY_CENTER.z);
 
-		return Math.max(4, Math.round(8 + soft * 5 + detail * 2 + riverCut));
+		if (spawnDistance < 24) {
+			return 9;
+		}
+
+		if (this.isPath(x, z) || cityDistance < 28) {
+			return 9;
+		}
+
+		if (this.isRiver(x, z)) {
+			return WATER_LEVEL - 1;
+		}
+
+		const soft = smoothNoise(this.seedValue, x / 34, z / 34);
+		const detail = smoothNoise(this.seedValue + 17, x / 15, z / 15);
+
+		return Math.max(5, Math.round(8 + soft * 3 + detail * 1.5));
 	}
 
 	isWater(x: number, z: number): boolean {
-		return this.heightAt(x, z) < WATER_LEVEL;
+		return this.isRiver(x, z) || this.heightAt(x, z) < WATER_LEVEL;
+	}
+
+	zoneAt(x: number, z: number): string {
+		if (Math.hypot(x - CENTRAL_CITY_CENTER.x, z - CENTRAL_CITY_CENTER.z) < 30) {
+			return 'Central City';
+		}
+
+		if (this.isRiver(x, z)) {
+			return 'Riverbank';
+		}
+
+		if (x < -28 && z < -10) {
+			return 'Forest Edge';
+		}
+
+		if (x > 24 && Math.abs(z) < 28) {
+			return 'Free Build Meadow';
+		}
+
+		return 'Spawn Meadow';
 	}
 
 	generateChunk(chunkX: number, chunkZ: number): GeneratedChunk {
@@ -69,13 +105,15 @@ export class TerrainGenerator {
 				const x = startX + lx;
 				const z = startZ + lz;
 				const height = this.heightAt(x, z);
-				const nearWater = height <= WATER_LEVEL + 1;
+				const river = this.isRiver(x, z);
+				const path = this.isPath(x, z);
+				const nearWater = river || height <= WATER_LEVEL + 1;
 
 				for (let y = 0; y <= height; y += 1) {
 					let type: BlockType = 'stone';
 
 					if (y === height) {
-						type = nearWater ? 'sand' : 'grass';
+						type = path ? 'sand' : nearWater ? 'sand' : 'grass';
 					} else if (y >= height - 3) {
 						type = 'dirt';
 					}
@@ -83,13 +121,14 @@ export class TerrainGenerator {
 					blocks.push({ position: { x, y, z }, type });
 				}
 
-				if (height < WATER_LEVEL) {
+				if (height < WATER_LEVEL || river) {
 					for (let y = height + 1; y <= WATER_LEVEL; y += 1) {
 						blocks.push({ position: { x, y, z }, type: 'water' });
 					}
 				}
 
 				this.addPlants(blocks, x, height, z, nearWater);
+				blocks.push(...this.city.generateForColumn(x, height, z));
 			}
 		}
 
@@ -107,10 +146,15 @@ export class TerrainGenerator {
 			return;
 		}
 
-		const clearing = smoothNoise(this.seedValue + 29, x / 22, z / 22) > 0.68;
+		if (Math.hypot(x, z) < 10 || this.isPath(x, z)) {
+			return;
+		}
+
+		const forest = x < -28 && z < -10;
+		const clearing = smoothNoise(this.seedValue + 29, x / 22, z / 22) > (forest ? 0.38 : 0.7);
 		const treeRoll = hash2(this.seedValue + 71, x, z);
 
-		if (!clearing && treeRoll > 0.986) {
+		if (!clearing && treeRoll > (forest ? 0.94 : 0.988)) {
 			const trunkHeight = 3 + Math.floor(hash2(this.seedValue + 73, x, z) * 3);
 
 			for (let offset = 1; offset <= trunkHeight; offset += 1) {
@@ -135,8 +179,18 @@ export class TerrainGenerator {
 			return;
 		}
 
-		if (clearing && hash2(this.seedValue + 113, x, z) > 0.965) {
+		if (clearing && Math.hypot(x, z) < 35 && hash2(this.seedValue + 113, x, z) > 0.93) {
 			blocks.push({ position: { x, y: height + 1, z }, type: 'flower' });
 		}
+	}
+
+	isPath(x: number, z: number): boolean {
+		return Math.abs(x) <= 2 && z <= 2 && z >= CENTRAL_CITY_CENTER.z - 8;
+	}
+
+	isRiver(x: number, z: number): boolean {
+		const center = 24 + Math.sin(z / 18) * 5;
+
+		return Math.abs(x - center) < 3.2 && z > -60 && z < 42;
 	}
 }

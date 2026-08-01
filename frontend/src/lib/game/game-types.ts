@@ -5,6 +5,7 @@ import type {
 	WorldCoordinate
 } from './world/voxel-types';
 import type { InventorySnapshot } from './inventory/Inventory';
+import type { CharacterAppearanceV1 } from './character/CharacterAppearance';
 
 export type GameStatus =
 	'booting' | 'loading-world' | 'playing' | 'paused' | 'inventory' | 'error' | 'destroyed';
@@ -34,7 +35,10 @@ export interface GameSnapshot {
 	pointerLocked: boolean;
 	saveStatus: SaveStatus;
 	regionName: string;
+	zoneName: string;
 	targetedBlock: TargetedBlock | null;
+	buildMode: boolean;
+	introVisible: boolean;
 	message: string | null;
 	error: string | null;
 	mobileLimited: boolean;
@@ -46,6 +50,7 @@ export interface GameEngineOptions {
 	playerId: string;
 	regionName: string;
 	seed: string;
+	appearance: CharacterAppearanceV1;
 	onSnapshot?: (snapshot: GameSnapshot) => void;
 	onError?: (error: Error) => void;
 	onMove?: (position: WorldCoordinate, yaw: number, pitch: number) => void | Promise<void>;

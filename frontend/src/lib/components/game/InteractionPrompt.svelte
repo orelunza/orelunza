@@ -22,5 +22,9 @@
 			Left click: collect {target.type} · Right click: place
 			{selectedSlot?.stack ? ItemRegistry.get(selectedSlot.stack.type).label : 'nothing'}
 		</span>
+	{:else}
+		<span class="rounded-sm border border-white/10 bg-[#1a1e22]/75 px-3 py-2 backdrop-blur-md">
+			B: Build Mode · I: Inventory · Escape: Menu
+		</span>
 	{/if}
 </div>

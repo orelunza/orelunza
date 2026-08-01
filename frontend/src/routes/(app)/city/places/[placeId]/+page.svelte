@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { onMount } from 'svelte';
 
@@ -6,7 +7,7 @@
 
 	import type { NaturalArea } from '$lib/api/contracts/nature';
 
-	import type { WorldPlace, WorldRegion } from '$lib/api/contracts/world';
+	import type { WorldPlace } from '$lib/api/contracts/world';
 
 	import BiomePanel from '$lib/components/nature/BiomePanel.svelte';
 	import EnvironmentPanel from '$lib/components/nature/EnvironmentPanel.svelte';
@@ -177,13 +178,13 @@
 		class="flex flex-wrap items-center gap-2 text-sm text-[var(--orelunza-text-muted)]"
 		aria-label="Breadcrumb"
 	>
-		<a href="/city" class="transition hover:text-[var(--orelunza-text)]"> City </a>
+		<a href={resolve('/city')} class="transition hover:text-[var(--orelunza-text)]"> City </a>
 
 		<span aria-hidden="true">/</span>
 
 		{#if region}
 			<a
-				href={`/city/regions/${encodeURIComponent(region.id)}`}
+				href={resolve(`/city/regions/${encodeURIComponent(region.id)}`)}
 				class="transition hover:text-[var(--orelunza-text)]"
 			>
 				{region.name}
@@ -364,7 +365,7 @@
 						</p>
 
 						<a
-							href={`/city/regions/${encodeURIComponent(region.id)}`}
+							href={resolve(`/city/regions/${encodeURIComponent(region.id)}`)}
 							class="mt-5 inline-flex items-center gap-2 text-sm font-semibold text-[var(--orelunza-accent)] transition hover:text-[var(--orelunza-accent-strong)]"
 						>
 							Explore the entire region
@@ -412,7 +413,7 @@
 			</p>
 
 			<a
-				href="/city"
+				href={resolve('/city')}
 				class="mt-6 inline-flex rounded-xl bg-[var(--orelunza-accent)] px-5 py-3 text-sm font-semibold text-[var(--orelunza-accent-contrast)]"
 			>
 				Return to the city

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	import type { WorldRegion } from '$lib/api/contracts/world';
 
 	import { worldState } from '$lib/state/world.svelte';
@@ -26,6 +27,8 @@
 	const activeRegionId = $derived(
 		selectedRegionId ?? worldState.selectedRegion?.id ?? worldState.position?.region_id ?? null
 	);
+
+	const loadingRegionCards = [0, 1, 2];
 
 	function selectRegion(region: WorldRegion): void {
 		void onSelect?.(region);
@@ -56,7 +59,7 @@
 
 	{#if loading && visibleRegions.length === 0}
 		<div class="grid gap-3" aria-label="Loading regions">
-			{#each Array(3) as _}
+			{#each loadingRegionCards as index (index)}
 				<div
 					class="h-32 animate-pulse rounded-[var(--orelunza-radius-medium)] border border-[var(--orelunza-border)] bg-[var(--orelunza-surface)]"
 				></div>
@@ -94,7 +97,7 @@
 
 				<li>
 					<a
-						href={`/city/regions/${encodeURIComponent(region.id)}`}
+						href={resolve(`/city/regions/${encodeURIComponent(region.id)}`)}
 						aria-current={active ? 'location' : undefined}
 						class={[
 							'group relative block overflow-hidden rounded-[var(--orelunza-radius-medium)] border p-5 transition duration-150',

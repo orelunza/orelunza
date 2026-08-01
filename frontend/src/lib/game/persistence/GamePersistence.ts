@@ -1,9 +1,10 @@
 import type { Inventory } from '../inventory/Inventory';
 import type { PlayerController } from '../player/PlayerController';
 import type { VoxelWorld } from '../world/VoxelWorld';
-import type { WorldSaveV1 } from '../world/WorldSave';
+import type { WorldSave, WorldSaveV2 } from '../world/WorldSave';
 import type { SaveStatus } from '../game-types';
 import { IndexedDbWorldStore } from './IndexedDbWorldStore';
+import type { CharacterAppearanceV1 } from '../character/CharacterAppearance';
 
 export class GamePersistence {
 	private dirty = false;
@@ -18,6 +19,7 @@ export class GamePersistence {
 		private readonly world: VoxelWorld,
 		private readonly player: PlayerController,
 		private readonly inventory: Inventory,
+		private readonly character: CharacterAppearanceV1,
 		private readonly onStatus: (status: SaveStatus) => void
 	) {}
 
@@ -30,7 +32,7 @@ export class GamePersistence {
 		this.setStatus('dirty');
 	}
 
-	async load(): Promise<WorldSaveV1 | null> {
+	async load(): Promise<WorldSave | null> {
 		const save = await this.store.load(this.worldId);
 
 		if (!save || save.seed !== this.seed) {
@@ -43,7 +45,8 @@ export class GamePersistence {
 			changes: save.changes
 		});
 		this.inventory.load(save.inventory);
-		this.player.setTransform(save.player.position, save.player.yaw, save.player.pitch);
+		const position = this.world.safeRestorePosition(save.player.position);
+		this.player.setTransform(position, save.player.yaw, save.player.pitch);
 		this.lastSavedPayload = JSON.stringify(this.buildSave(save.updatedAt));
 		this.dirty = false;
 		this.setStatus('saved');
@@ -83,11 +86,11 @@ export class GamePersistence {
 		}
 	}
 
-	private buildSave(updatedAt: number): WorldSaveV1 {
+	private buildSave(updatedAt: number): WorldSaveV2 {
 		const modifications = this.world.exportModifications();
 
 		return {
-			version: 1,
+			version: 2,
 			worldId: this.worldId,
 			seed: this.seed,
 			player: {
@@ -97,6 +100,7 @@ export class GamePersistence {
 				yaw: this.player.state.yaw,
 				pitch: this.player.state.pitch
 			},
+			character: this.character,
 			inventory: this.inventory.snapshot(),
 			placedBlocks: modifications.placedBlocks,
 			removedBlocks: modifications.removedBlocks,

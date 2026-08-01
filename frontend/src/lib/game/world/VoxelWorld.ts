@@ -8,6 +8,7 @@ import {
 	type VoxelBlock,
 	WORLD_MAX_Y,
 	WORLD_MIN_Y,
+	WORLD_SPAWN,
 	blockKey,
 	chunkKey,
 	worldToChunk
@@ -186,6 +187,38 @@ export class VoxelWorld {
 		const block = this.getBlock(position);
 
 		return block.solid && !block.passable;
+	}
+
+	safeRestorePosition(position: { x: number; y: number; z: number }): {
+		x: number;
+		y: number;
+		z: number;
+	} {
+		if (
+			!Number.isFinite(position.x) ||
+			!Number.isFinite(position.y) ||
+			!Number.isFinite(position.z)
+		) {
+			return this.spawnPosition();
+		}
+
+		const feet = { x: position.x, y: position.y, z: position.z };
+
+		if (feet.y < 2 || this.isSolidAt(feet) || this.isSolidAt({ ...feet, y: feet.y + 1 })) {
+			return this.spawnPosition();
+		}
+
+		return { ...feet };
+	}
+
+	spawnPosition(): { x: number; y: number; z: number } {
+		const y = this.generator.heightAt(WORLD_SPAWN.x, WORLD_SPAWN.z) + 2;
+
+		return {
+			x: WORLD_SPAWN.x,
+			y,
+			z: WORLD_SPAWN.z
+		};
 	}
 
 	loadModifications(snapshot: WorldModificationSnapshot): void {

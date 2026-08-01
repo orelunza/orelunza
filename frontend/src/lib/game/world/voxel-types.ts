@@ -60,7 +60,9 @@ export const CHUNK_SIZE = 16;
 export const WORLD_MIN_Y = 0;
 export const WORLD_MAX_Y = 32;
 export const WATER_LEVEL = 7;
-export const STARTER_WORLD_SEED = 'orelunza-starter-world-v1';
+export const STARTER_WORLD_SEED = 'orelunza-world-v2';
+export const WORLD_SPAWN = { x: 0.5, y: 0, z: 0.5 };
+export const CENTRAL_CITY_CENTER = { x: 0, z: -82 };
 
 export function blockKey(block: BlockCoordinate): string {
 	return `${block.x},${block.y},${block.z}`;

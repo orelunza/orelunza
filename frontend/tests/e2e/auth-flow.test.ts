@@ -48,6 +48,27 @@ const DEFAULT_IDENTITY: TestIdentity = {
 	session_expires_at: 1_799_000_000
 };
 
+async function installCharacter(page: Page, humanId = DEFAULT_IDENTITY.human_id): Promise<void> {
+	await page.addInitScript(
+		({ key, value }) => {
+			localStorage.setItem(key, value);
+		},
+		{
+			key: `orelunza-character:${humanId}`,
+			value: JSON.stringify({
+				version: 1,
+				displayName: 'Forest Citizen',
+				skinTone: '#b98565',
+				hairStyle: 'short',
+				hairColor: '#3b2b22',
+				shirtColor: '#4f8f74',
+				pantsColor: '#37485f',
+				shoesColor: '#2b2725'
+			})
+		}
+	);
+}
+
 function normalizedPath(request: PlaywrightRequest): string {
 	const pathname = new URL(request.url()).pathname;
 
@@ -284,6 +305,7 @@ test.describe('authentication flow', () => {
 
 	test('logs in, opens the profile and logs out', async ({ page }) => {
 		const backend = await installAuthBackend(page);
+		await installCharacter(page);
 
 		await page.goto('/login');
 
@@ -297,7 +319,7 @@ test.describe('authentication flow', () => {
 			})
 			.click();
 
-		await expect(page).toHaveURL(/\/city(?:\?|$)/);
+		await expect(page).toHaveURL(/\/world(?:\?|$)/);
 
 		expect(backend.authenticated).toBe(true);
 
@@ -357,7 +379,7 @@ test.describe('authentication flow', () => {
 			})
 			.click();
 
-		await expect(page).toHaveURL(/\/city(?:\?|$)/);
+		await expect(page).toHaveURL(/\/character\/create(?:\?|$)/);
 
 		expect(backend.authenticated).toBe(true);
 

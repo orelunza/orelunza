@@ -8,6 +8,7 @@ export interface MovementInput {
 export interface KeyboardCommands {
 	inventory: boolean;
 	pause: boolean;
+	build: boolean;
 	hotbarIndex: number | null;
 }
 
@@ -15,12 +16,17 @@ export class KeyboardInput {
 	private readonly keys = new Set<string>();
 	private inventoryPressed = false;
 	private pausePressed = false;
+	private buildPressed = false;
 	private hotbarPressed: number | null = null;
 	private readonly handleKeydown = (event: KeyboardEvent): void => {
 		this.keys.add(event.code);
 
-		if (event.code === 'KeyE' || event.code === 'KeyI') {
+		if (event.code === 'KeyI') {
 			this.inventoryPressed = true;
+		}
+
+		if (event.code === 'KeyB') {
+			this.buildPressed = true;
 		}
 
 		if (event.code === 'Escape') {
@@ -75,11 +81,13 @@ export class KeyboardInput {
 		const commands = {
 			inventory: this.inventoryPressed,
 			pause: this.pausePressed,
+			build: this.buildPressed,
 			hotbarIndex: this.hotbarPressed
 		};
 
 		this.inventoryPressed = false;
 		this.pausePressed = false;
+		this.buildPressed = false;
 		this.hotbarPressed = null;
 
 		return commands;

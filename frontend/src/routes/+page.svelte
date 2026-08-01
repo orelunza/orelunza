@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { resolve } from '$app/paths';
 
 	import { sessionState } from '$lib/state/session.svelte';
 
@@ -26,7 +27,7 @@
 </script>
 
 <svelte:head>
-	<title>Orelunza — A peaceful digital city</title>
+	<title>Orelunza — A peaceful digital world</title>
 
 	<meta
 		name="description"
@@ -48,7 +49,7 @@
 	<header
 		class="relative z-10 mx-auto flex w-full max-w-7xl items-center justify-between px-5 py-5 sm:px-8"
 	>
-		<a href="/" class="flex items-center gap-3">
+		<a href={resolve('/')} class="flex items-center gap-3">
 			<span
 				class="flex size-10 items-center justify-center rounded-2xl border border-[var(--orelunza-border-strong)] bg-[var(--orelunza-surface-raised)] font-bold text-[var(--orelunza-accent)]"
 				aria-hidden="true"
@@ -62,21 +63,21 @@
 		<nav class="flex items-center gap-2" aria-label="Public navigation">
 			{#if sessionChecked && sessionState.isAuthenticated}
 				<a
-					href="/city"
+					href={resolve('/world')}
 					class="rounded-xl bg-[var(--orelunza-accent)] px-4 py-2.5 text-sm font-semibold text-[var(--orelunza-accent-contrast)] transition hover:bg-[var(--orelunza-accent-strong)]"
 				>
-					Return to the city
+					Return to the world
 				</a>
 			{:else}
 				<a
-					href="/login"
+					href={resolve('/login')}
 					class="rounded-xl px-4 py-2.5 text-sm font-semibold text-[var(--orelunza-text-soft)] transition hover:bg-[var(--orelunza-surface)] hover:text-[var(--orelunza-text)]"
 				>
 					Sign in
 				</a>
 
 				<a
-					href="/register"
+					href={resolve('/register')}
 					class="rounded-xl bg-[var(--orelunza-accent)] px-4 py-2.5 text-sm font-semibold text-[var(--orelunza-accent-contrast)] transition hover:bg-[var(--orelunza-accent-strong)]"
 				>
 					Become a citizen
@@ -109,28 +110,28 @@
 			<div class="mt-9 flex flex-wrap gap-3">
 				{#if sessionChecked && sessionState.isAuthenticated}
 					<a
-						href="/city"
+						href={resolve('/world')}
 						class="rounded-xl bg-[var(--orelunza-accent)] px-6 py-3.5 font-semibold text-[var(--orelunza-accent-contrast)] transition hover:bg-[var(--orelunza-accent-strong)]"
 					>
 						Enter Orelunza
 					</a>
 
 					<a
-						href="/profile"
+						href={resolve('/profile')}
 						class="rounded-xl border border-[var(--orelunza-border-strong)] bg-[var(--orelunza-surface)] px-6 py-3.5 font-semibold text-[var(--orelunza-text)] transition hover:bg-[var(--orelunza-surface-hover)]"
 					>
 						View your profile
 					</a>
 				{:else}
 					<a
-						href="/register"
+						href={resolve('/register')}
 						class="rounded-xl bg-[var(--orelunza-accent)] px-6 py-3.5 font-semibold text-[var(--orelunza-accent-contrast)] transition hover:bg-[var(--orelunza-accent-strong)]"
 					>
 						Create your identity
 					</a>
 
 					<a
-						href="/login"
+						href={resolve('/login')}
 						class="rounded-xl border border-[var(--orelunza-border-strong)] bg-[var(--orelunza-surface)] px-6 py-3.5 font-semibold text-[var(--orelunza-text)] transition hover:bg-[var(--orelunza-surface-hover)]"
 					>
 						I am already a citizen

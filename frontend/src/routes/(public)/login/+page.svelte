@@ -1,11 +1,18 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
 
 	import Card from '$lib/components/ui/Card.svelte';
 	import LoginForm from '$lib/components/auth/LoginForm.svelte';
+	import { CharacterStore } from '$lib/game/character/CharacterStore';
+	import { sessionState } from '$lib/state/session.svelte';
 
-	async function enterCity(): Promise<void> {
-		await goto('/city');
+	const characterStore = new CharacterStore();
+
+	async function enterWorld(): Promise<void> {
+		const character = await characterStore.load(sessionState.humanId || 'local-player');
+
+		await goto(resolve(character ? '/world' : '/character/create'));
 	}
 </script>
 
@@ -63,7 +70,7 @@
 		<Card padding="large" class="app-surface" ariaLabel="Sign in to Orelunza">
 			<div class="mb-7">
 				<a
-					href="/"
+					href={resolve('/')}
 					class="mb-7 inline-flex items-center gap-3 text-sm font-semibold text-[var(--orelunza-accent)] lg:hidden"
 				>
 					<span
@@ -85,13 +92,13 @@
 				</p>
 			</div>
 
-			<LoginForm onSuccess={enterCity} />
+			<LoginForm onSuccess={enterWorld} />
 
 			<p class="mt-7 mb-0 text-center text-sm text-[var(--orelunza-text-muted)]">
 				You do not have a place yet?
 
 				<a
-					href="/register"
+					href={resolve('/register')}
 					class="font-semibold text-[var(--orelunza-accent)] transition hover:text-[var(--orelunza-accent-strong)]"
 				>
 					Become a citizen

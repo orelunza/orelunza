@@ -13,8 +13,17 @@
 		};
 	}
 
-	let { worldId, playerId, regionName, seed, onSnapshot, onError, onMove, command }: Props =
-		$props();
+	let {
+		worldId,
+		playerId,
+		regionName,
+		seed,
+		appearance,
+		onSnapshot,
+		onError,
+		onMove,
+		command
+	}: Props = $props();
 
 	let canvas = $state<HTMLCanvasElement | null>(null);
 	let engine: GameEngine | null = null;
@@ -31,6 +40,7 @@
 			playerId,
 			regionName,
 			seed,
+			appearance,
 			onSnapshot,
 			onError,
 			onMove
@@ -73,4 +83,6 @@
 	tabindex="0"
 	aria-label="Orelunza voxel world"
 	data-testid="game-canvas"
+	data-engine="three"
+	data-camera="third-person"
 ></canvas>
