@@ -32,6 +32,7 @@ const COLORS = Object.freeze({
 	default: 0x91a39a,
 	selected: 0xb6dfc1,
 	current: 0x8fc7a2,
+	nearby: 0xf97316,
 
 	border: 0xf1f6f3,
 	darkBorder: 0x294236,
@@ -196,6 +197,22 @@ export class PlaceMarker extends Container {
 	}
 
 	/**
+	 * Change whether the citizen is close enough to interact with this place.
+	 */
+	setNearby(nearby: boolean): void {
+		if (this.markerModel.nearby === nearby) {
+			return;
+		}
+
+		this.markerModel = {
+			...this.markerModel,
+			nearby
+		};
+
+		this.updateAppearance();
+	}
+
+	/**
 	 * Enable or disable pointer interaction.
 	 */
 	setInteractive(interactive: boolean): void {
@@ -331,10 +348,17 @@ export class PlaceMarker extends Container {
 		const current = this.markerModel.current;
 
 		const selected = this.markerModel.selected;
+		const nearby = this.markerModel.nearby;
 
 		const interactive = this.markerModel.interactive;
 
-		const markerColor = current ? COLORS.current : selected ? COLORS.selected : COLORS.default;
+		const markerColor = current
+			? COLORS.current
+			: nearby
+				? COLORS.nearby
+				: selected
+					? COLORS.selected
+					: COLORS.default;
 
 		const fallback = current
 			? getWorldAsset('place.marker.current').fallback
@@ -351,7 +375,7 @@ export class PlaceMarker extends Container {
 		this.drawStatus();
 		this.updateLabel();
 
-		const baseScale = current ? 1.08 : selected ? 1.04 : 1;
+		const baseScale = current ? 1.08 : nearby ? 1.06 : selected ? 1.04 : 1;
 
 		const hoverScale = this.hovered && interactive ? 1.07 : 1;
 
@@ -359,7 +383,7 @@ export class PlaceMarker extends Container {
 
 		this.alpha = interactive ? 1 : 0.58;
 
-		this.zIndex = current ? 30 : selected ? 20 : this.hovered ? 15 : 10;
+		this.zIndex = current ? 30 : nearby ? 25 : selected ? 20 : this.hovered ? 15 : 10;
 	}
 
 	private drawShadow(): void {
@@ -374,25 +398,32 @@ export class PlaceMarker extends Container {
 	private drawSelection(): void {
 		this.selectionGraphic.clear();
 
-		if (!this.markerModel.selected && !this.markerModel.current && !this.hovered) {
+		if (
+			!this.markerModel.selected &&
+			!this.markerModel.current &&
+			!this.markerModel.nearby &&
+			!this.hovered
+		) {
 			return;
 		}
 
 		const color = this.markerModel.current
 			? COLORS.current
-			: this.markerModel.selected
-				? COLORS.selected
-				: COLORS.default;
+			: this.markerModel.nearby
+				? COLORS.nearby
+				: this.markerModel.selected
+					? COLORS.selected
+					: COLORS.default;
 
 		this.selectionGraphic
 			.circle(0, 0, MARKER_RADIUS + 8)
 			.fill({
 				color,
-				alpha: this.markerModel.current ? 0.12 : 0.08
+				alpha: this.markerModel.current || this.markerModel.nearby ? 0.12 : 0.08
 			})
 			.stroke({
 				color,
-				width: this.markerModel.current ? 2 : 1.5,
+				width: this.markerModel.current || this.markerModel.nearby ? 2 : 1.5,
 
 				alpha: 0.8
 			});
@@ -405,7 +436,7 @@ export class PlaceMarker extends Container {
 			.moveTo(0, MARKER_RADIUS - 2)
 			.lineTo(0, MARKER_RADIUS + MARKER_STEM_LENGTH)
 			.stroke({
-				color: this.markerModel.current ? COLORS.current : COLORS.darkBorder,
+				color: this.markerModel.current || this.markerModel.nearby ? color : COLORS.darkBorder,
 
 				width: 5,
 				cap: 'round'
@@ -429,14 +460,14 @@ export class PlaceMarker extends Container {
 	private drawStatus(): void {
 		this.statusGraphic.clear();
 
-		if (!this.markerModel.current) {
+		if (!this.markerModel.current && !this.markerModel.nearby) {
 			return;
 		}
 
 		this.statusGraphic
 			.circle(MARKER_RADIUS - 1, -MARKER_RADIUS + 1, 5)
 			.fill({
-				color: COLORS.current
+				color: this.markerModel.current ? COLORS.current : COLORS.nearby
 			})
 			.stroke({
 				color: COLORS.border,

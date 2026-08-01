@@ -234,7 +234,7 @@ function createAbortContext(
  *
  * A custom fetch implementation can be supplied by unit tests.
  */
-export function createApiClient(fetcher: typeof fetch = globalThis.fetch): ApiClient {
+export function createApiClient(fetcher?: typeof fetch): ApiClient {
 	async function request<TResponse, TBody = unknown>(
 		method: HttpMethod,
 		path: string,
@@ -311,7 +311,7 @@ export function createApiClient(fetcher: typeof fetch = globalThis.fetch): ApiCl
 		}
 
 		try {
-			const response = await fetcher(url, requestInit);
+			const response = await (fetcher ?? globalThis.fetch)(url, requestInit);
 
 			let parsed: ParsedResponse;
 

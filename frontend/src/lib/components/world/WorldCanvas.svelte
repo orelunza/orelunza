@@ -9,7 +9,12 @@
 
 	import { WorldRenderer } from '$lib/world/WorldRenderer';
 
-	import type { WorldPointerEvent, WorldRendererSnapshot, WorldSceneModel } from '$lib/world/types';
+	import type {
+		WorldPoint,
+		WorldPointerEvent,
+		WorldRendererSnapshot,
+		WorldSceneModel
+	} from '$lib/world/types';
 
 	interface Props {
 		model: WorldSceneModel;
@@ -30,9 +35,23 @@
 
 		onBackgroundPointer?: (event: WorldPointerEvent) => void;
 
+		onLocalPositionChange?: (position: WorldPoint) => void;
+
+		onMovementChange?: (moving: boolean, position: WorldPoint) => void;
+
+		onNearbyPlaceChange?: (place: WorldPlace | null, distance: number | null) => void;
+
+		onDestinationChange?: (destination: WorldPoint | null) => void;
+
+		onBeforeDestroy?: (position: WorldPoint | null) => void;
+
 		onReady?: (snapshot: WorldRendererSnapshot) => void;
 
 		onError?: (error: Error) => void;
+
+		walkToPlaceId?: string | null;
+		walkCommandToken?: number;
+		recenterToken?: number;
 
 		class?: string;
 	}
@@ -49,8 +68,16 @@
 		onPlaceSelect,
 		onPlaceActivate,
 		onBackgroundPointer,
+		onLocalPositionChange,
+		onMovementChange,
+		onNearbyPlaceChange,
+		onDestinationChange,
+		onBeforeDestroy,
 		onReady,
 		onError,
+		walkToPlaceId = null,
+		walkCommandToken = 0,
+		recenterToken = 0,
 		class: className = ''
 	}: Props = $props();
 
@@ -73,6 +100,8 @@
 	let currentRegionId = $state<string | null>(null);
 
 	let initializationVersion = 0;
+	let lastWalkCommandToken = 0;
+	let lastRecenterToken = 0;
 
 	const identity = $derived({
 		displayName: displayName.trim() || 'Citizen',
@@ -82,8 +111,7 @@
 
 	const containerClasses = $derived(
 		[
-			'relative overflow-hidden rounded-[var(--orelunza-radius-large)]',
-			'border border-[var(--orelunza-border)]',
+			'relative overflow-hidden',
 			'bg-[var(--orelunza-background-soft)]',
 			className
 		]
@@ -169,6 +197,22 @@
 
 				onBackgroundPointer: (event) => {
 					onBackgroundPointer?.(event);
+				},
+
+				onLocalPositionChange: (position) => {
+					onLocalPositionChange?.(position);
+				},
+
+				onMovementChange: (moving, position) => {
+					onMovementChange?.(moving, position);
+				},
+
+				onNearbyPlaceChange: (place, distance) => {
+					onNearbyPlaceChange?.(place, distance);
+				},
+
+				onDestinationChange: (destination) => {
+					onDestinationChange?.(destination);
 				},
 
 				onReady: handleRendererReady,
@@ -280,6 +324,8 @@
 			mounted = false;
 			++initializationVersion;
 
+			onBeforeDestroy?.(renderer?.isReady ? renderer.getCitizenPosition() : null);
+
 			renderer?.destroy();
 			renderer = null;
 
@@ -352,6 +398,29 @@
 						})
 			);
 		}
+	});
+
+	$effect(() => {
+		const placeId = walkToPlaceId;
+		const token = walkCommandToken;
+
+		if (!mounted || !renderer?.isReady || !placeId || token === lastWalkCommandToken) {
+			return;
+		}
+
+		lastWalkCommandToken = token;
+		renderer.walkToPlace(placeId);
+	});
+
+	$effect(() => {
+		const token = recenterToken;
+
+		if (!mounted || !renderer?.isReady || token === lastRecenterToken) {
+			return;
+		}
+
+		lastRecenterToken = token;
+		focusCitizen();
 	});
 </script>
 

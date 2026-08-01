@@ -7,6 +7,9 @@ import type { WorldPlace } from '$lib/api/contracts/world';
 import { WorldCamera } from '$lib/world/camera/WorldCamera';
 
 import { WorldScene, type WorldSceneIdentity } from '$lib/world/scenes/WorldScene';
+import { InputSystem } from '$lib/world/systems/InputSystem';
+import { InteractionSystem, type InteractionState } from '$lib/world/systems/InteractionSystem';
+import { MovementSystem } from '$lib/world/systems/MovementSystem';
 
 import {
 	DEFAULT_WORLD_BACKGROUND,
@@ -66,6 +69,7 @@ const DEFAULT_HEIGHT = 640;
 
 const DEFAULT_FIT_PADDING = 72;
 const DEFAULT_FOCUS_ZOOM = 1.25;
+const DEFAULT_MOVEMENT_SPEED = 190;
 
 const MINIMUM_RENDERER_SIZE = 1;
 const MAXIMUM_RESOLUTION = 2;
@@ -117,6 +121,12 @@ export class WorldRenderer {
 
 	private sceneValue: WorldScene | null = null;
 
+	private inputSystem: InputSystem | null = null;
+
+	private movementSystem: MovementSystem | null = null;
+
+	private interactionSystem: InteractionSystem | null = null;
+
 	private hostValue: HTMLElement | null = null;
 
 	private canvasValue: HTMLCanvasElement | null = null;
@@ -131,6 +141,8 @@ export class WorldRenderer {
 
 	private applicationInitialized = false;
 	private manuallyPaused = false;
+	private movementActive = false;
+	private nearbyPlaceId: string | null = null;
 
 	private lifecycleVersion = 0;
 
@@ -308,6 +320,26 @@ export class WorldRenderer {
 		});
 
 		camera.setBounds(scene.sceneBounds);
+		this.movementSystem?.setBounds(scene.sceneBounds);
+
+		const citizenPosition = scene.getCitizenPosition();
+
+		if (citizenPosition) {
+			if (!this.movementSystem || !this.interactionSystem) {
+				if (this.canvasValue) {
+					this.initializeSystems(this.canvasValue, scene, camera);
+				}
+			} else {
+				this.movementSystem.setPosition(citizenPosition, false);
+				this.interactionSystem.updatePlaces(model.places, {
+					currentPlaceId: model.currentPlaceId ?? model.position?.place_id ?? null,
+					selectedPlaceId: model.selectedPlaceId
+				});
+				this.updateInteraction(this.interactionSystem.evaluate(citizenPosition));
+			}
+		} else {
+			this.destroySystems();
+		}
 
 		const regionChanged = previousRegionId !== model.region.id;
 
@@ -358,6 +390,7 @@ export class WorldRenderer {
 		}
 
 		this.requireScene().setSelectedPlace(placeId);
+		this.interactionSystem?.selectPlace(placeId);
 	}
 
 	/**
@@ -371,6 +404,40 @@ export class WorldRenderer {
 		}
 
 		this.requireScene().setCurrentPlace(placeId);
+		this.interactionSystem?.setCurrentPlace(placeId);
+	}
+
+	/**
+	 * Walk the citizen toward an arbitrary world coordinate.
+	 */
+	walkTo(destination: WorldPoint): void {
+		this.assertReady();
+		this.movementSystem?.setDestination(destination);
+		this.callbacks.onDestinationChange?.(destination);
+	}
+
+	/**
+	 * Walk the citizen toward one place marker.
+	 */
+	walkToPlace(placeId: string): boolean {
+		const position = this.requireScene().getPlacePosition(placeId);
+
+		if (!position) {
+			return false;
+		}
+
+		this.walkTo(position);
+
+		return true;
+	}
+
+	/**
+	 * Return the rendered citizen position.
+	 */
+	getCitizenPosition(): WorldPoint | null {
+		this.assertReady();
+
+		return this.requireScene().getCitizenPosition();
 	}
 
 	/**
@@ -408,7 +475,11 @@ export class WorldRenderer {
 			return false;
 		}
 
-		this.requireCamera().centerOn(citizen.renderedPosition, zoom);
+		const camera = this.requireCamera();
+
+		camera.centerOn(citizen.renderedPosition, zoom);
+		camera.resumeFollow();
+		camera.follow(citizen.renderedPosition);
 
 		return true;
 	}
@@ -698,6 +769,7 @@ export class WorldRenderer {
 			camera.attach(canvas);
 
 			this.resizeRenderer(initialSize.width, initialSize.height);
+			this.initializeSystems(canvas, scene, camera);
 
 			application.ticker.add(this.handleTick);
 
@@ -708,6 +780,14 @@ export class WorldRenderer {
 				camera.fitBounds(scene.sceneBounds, this.configuration.fitPadding);
 			} else {
 				camera.centerOn(scene.getInitialFocusPoint(), this.configuration.focusZoom);
+			}
+
+			const citizenPosition = scene.getCitizenPosition();
+
+			if (citizenPosition) {
+				camera.follow(citizenPosition, {
+					immediate: !this.configuration.fitOnInitialize
+				});
 			}
 
 			this.rendererStatus = 'ready';
@@ -771,6 +851,75 @@ export class WorldRenderer {
 		};
 	}
 
+	private initializeSystems(
+		canvas: HTMLCanvasElement,
+		scene: WorldScene,
+		camera: WorldCamera
+	): void {
+		this.destroySystems();
+
+		const citizenPosition = scene.getCitizenPosition();
+
+		if (!citizenPosition) {
+			return;
+		}
+
+		this.movementSystem = new MovementSystem({
+			initialPosition: citizenPosition,
+			bounds: scene.sceneBounds,
+			speed: DEFAULT_MOVEMENT_SPEED,
+			onPositionChange: (position) => {
+				scene.setCitizenLocalPosition(position);
+				camera.follow(position);
+				this.callbacks.onLocalPositionChange?.(position);
+			},
+			onMovementStart: (position) => {
+				this.movementActive = true;
+				this.callbacks.onMovementChange?.(true, position);
+			},
+			onMovementStop: (position) => {
+				this.movementActive = false;
+				this.callbacks.onMovementChange?.(false, position);
+			}
+		});
+
+		this.interactionSystem = new InteractionSystem({
+			places: scene.model.places,
+			currentPlaceId: scene.model.currentPlaceId,
+			selectedPlaceId: scene.model.selectedPlaceId
+		});
+
+		this.updateInteraction(this.interactionSystem.evaluate(citizenPosition));
+
+		this.inputSystem = new InputSystem({
+			target: canvas,
+			screenToWorld: (point) => camera.screenToWorld(point),
+			onDirectionStart: () => {
+				this.movementSystem?.clearDestination();
+				this.callbacks.onDestinationChange?.(null);
+			},
+			onDestination: (destination) => {
+				this.walkTo(destination);
+			},
+			onInteract: () => {
+				const place = this.interactionSystem?.interactablePlace();
+
+				if (place) {
+					this.callbacks.onPlaceActivate?.(place);
+				}
+			}
+		});
+	}
+
+	private destroySystems(): void {
+		this.inputSystem?.destroy();
+		this.inputSystem = null;
+		this.movementSystem = null;
+		this.interactionSystem = null;
+		this.movementActive = false;
+		this.nearbyPlaceId = null;
+	}
+
 	private readonly handlePlaceSelect = (place: WorldPlace): void => {
 		this.callbacks.onPlaceSelect?.(place);
 	};
@@ -786,6 +935,7 @@ export class WorldRenderer {
 
 		try {
 			this.sceneValue?.advance(ticker.deltaMS);
+			this.advanceSystems(ticker.deltaMS);
 		} catch (error) {
 			const normalizedError = this.normalizeError(error);
 
@@ -796,6 +946,40 @@ export class WorldRenderer {
 			this.callbacks.onError?.(normalizedError);
 		}
 	};
+
+	private advanceSystems(deltaMs: number): void {
+		const scene = this.sceneValue;
+		const camera = this.cameraValue;
+		const movement = this.movementSystem;
+
+		if (!scene || !camera || !movement) {
+			return;
+		}
+
+		const position = movement.step({
+			direction: this.inputSystem?.direction ?? { x: 0, y: 0 },
+			deltaMS: deltaMs
+		});
+
+		camera.follow(position);
+		camera.updateFollow(deltaMs);
+
+		if (this.interactionSystem) {
+			this.updateInteraction(this.interactionSystem.evaluate(position));
+		}
+	}
+
+	private updateInteraction(state: InteractionState): void {
+		const nextNearbyPlaceId = state.nearbyPlace?.id ?? null;
+
+		if (this.nearbyPlaceId === nextNearbyPlaceId) {
+			return;
+		}
+
+		this.nearbyPlaceId = nextNearbyPlaceId;
+		this.sceneValue?.setNearbyPlace(nextNearbyPlaceId);
+		this.callbacks.onNearbyPlaceChange?.(state.nearbyPlace, state.distanceToNearbyPlace);
+	}
 
 	private connectResizeHandling(): void {
 		const host = this.hostValue;
@@ -989,6 +1173,7 @@ export class WorldRenderer {
 		this.cancelScheduledResize();
 
 		application.ticker.remove(this.handleTick);
+		this.destroySystems();
 
 		this.cameraValue?.destroy();
 

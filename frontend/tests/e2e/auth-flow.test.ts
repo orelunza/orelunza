@@ -265,11 +265,11 @@ test.describe('authentication flow', () => {
 
 		await page
 			.getByRole('button', {
-				name: /sign in|log in|login/i
+				name: /enter orelunza|sign in|log in|login/i
 			})
 			.click();
 
-		await expect(page.getByText('The email or password is incorrect.')).toBeVisible();
+		await expect(page.getByText('The email address or password is incorrect.')).toBeVisible();
 
 		expect(backend.authenticated).toBe(false);
 
@@ -293,7 +293,7 @@ test.describe('authentication flow', () => {
 
 		await page
 			.getByRole('button', {
-				name: /sign in|log in|login/i
+				name: /enter orelunza|sign in|log in|login/i
 			})
 			.click();
 
@@ -316,7 +316,7 @@ test.describe('authentication flow', () => {
 		).toBeVisible();
 
 		await expect(
-			page.getByText('citizen@orelunza.test', {
+			page.getByLabel('Citizen identity').getByText('citizen@orelunza.test', {
 				exact: true
 			})
 		).toBeVisible();
@@ -353,7 +353,7 @@ test.describe('authentication flow', () => {
 
 		await page
 			.getByRole('button', {
-				name: /create account|register|join/i
+				name: /become a citizen|create account|register|join/i
 			})
 			.click();
 
@@ -378,7 +378,7 @@ test.describe('authentication flow', () => {
 		).toBeVisible();
 
 		await expect(
-			page.getByText('river@orelunza.test', {
+			page.getByLabel('Citizen identity').getByText('river@orelunza.test', {
 				exact: true
 			})
 		).toBeVisible();

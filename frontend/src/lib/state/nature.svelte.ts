@@ -397,7 +397,12 @@ class NatureState {
 		};
 	}
 
-	private syncSelectedBiome(area: NaturalArea): void {
+	private syncSelectedBiome(area: NaturalArea | null): void {
+		if (!area) {
+			this.selectedBiome = null;
+			return;
+		}
+
 		const biome = this.biomes.find((candidate) => candidate.id === area.biome_id);
 
 		if (biome) {

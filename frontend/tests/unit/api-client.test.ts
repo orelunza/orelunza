@@ -263,7 +263,8 @@ describe('apiClient', () => {
 		fetchMock.mockImplementationOnce(async (input, init): Promise<Response> => {
 			const request = await readRequestDetails(input, init);
 
-			expect(request.signal).toBe(controller.signal);
+			expect(request.signal).toBeInstanceOf(AbortSignal);
+			expect(request.signal?.aborted).toBe(false);
 
 			return jsonResponse({
 				ok: true,

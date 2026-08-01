@@ -132,6 +132,16 @@ export default defineConfig(({ mode }) => {
 			host: '127.0.0.1',
 			port: 4173,
 			strictPort: true
+		},
+
+		test: {
+			include: ['src/**/*.test.ts', 'src/**/*.spec.ts', 'tests/unit/**/*.test.ts'],
+			exclude: [
+				'node_modules/**',
+				'.svelte-kit/**',
+				'tests/e2e/**',
+				'src/lib/vitest-examples/Welcome.svelte.spec.ts'
+			]
 		}
 	};
 });

@@ -22,6 +22,8 @@ const DEFAULT_VIEWPORT: Readonly<WorldViewport> = Object.freeze({
 
 const MIN_VIEWPORT_SIZE = 1;
 const DRAG_THRESHOLD_PX = 3;
+const DEFAULT_FOLLOW_SMOOTHING = 0.012;
+const DEFAULT_MANUAL_SUSPEND_MS = 4_000;
 
 /**
  * Controls the transform of a PixiJS world container.
@@ -56,6 +58,12 @@ export class WorldCamera {
 	private onChange?: (state: WorldCameraState) => void;
 
 	private destroyed = false;
+
+	private followTarget: WorldPoint | null = null;
+	private followEnabled = false;
+	private followSmoothing = DEFAULT_FOLLOW_SMOOTHING;
+	private manualSuspendMs = DEFAULT_MANUAL_SUSPEND_MS;
+	private manualSuspendRemainingMs = 0;
 
 	constructor(container: Container, configuration: WorldCameraConfiguration = {}) {
 		this.container = container;
@@ -325,6 +333,69 @@ export class WorldCamera {
 	}
 
 	/**
+	 * Follow a moving world point with smooth interpolation.
+	 */
+	follow(position: WorldPoint, options: { immediate?: boolean; smoothing?: number } = {}): void {
+		this.assertUsable();
+		this.validatePoint(position);
+
+		this.followTarget = { ...position };
+		this.followEnabled = true;
+
+		if (options.smoothing !== undefined) {
+			this.followSmoothing = this.normalizePositive(options.smoothing, 'follow smoothing');
+		}
+
+		if (options.immediate) {
+			this.manualSuspendRemainingMs = 0;
+			this.centerOn(position);
+		}
+	}
+
+	/**
+	 * Temporarily or permanently stop automatic camera follow.
+	 */
+	suspendFollow(durationMs = this.manualSuspendMs): void {
+		this.manualSuspendRemainingMs = Math.max(0, durationMs);
+	}
+
+	/**
+	 * Resume automatic camera follow immediately.
+	 */
+	resumeFollow(): void {
+		this.manualSuspendRemainingMs = 0;
+	}
+
+	/**
+	 * Interpolate the camera toward the current follow target.
+	 */
+	updateFollow(deltaMs: number): void {
+		this.assertUsable();
+
+		if (!this.followEnabled || !this.followTarget) {
+			return;
+		}
+
+		if (this.manualSuspendRemainingMs > 0) {
+			this.manualSuspendRemainingMs = Math.max(0, this.manualSuspendRemainingMs - deltaMs);
+
+			if (this.manualSuspendRemainingMs > 0) {
+				return;
+			}
+		}
+
+		const factor = 1 - Math.exp(-this.followSmoothing * deltaMs);
+
+		this.state.position = {
+			x: this.state.position.x + (this.followTarget.x - this.state.position.x) * factor,
+			y: this.state.position.y + (this.followTarget.y - this.state.position.y) * factor
+		};
+
+		this.clampPosition();
+		this.applyTransform();
+	}
+
+	/**
 	 * Fit a rectangular world area inside the current viewport.
 	 */
 	fitBounds(bounds: WorldBounds, padding = 48): void {
@@ -585,6 +656,7 @@ export class WorldCamera {
 			}
 
 			this.dragStarted = true;
+			this.suspendFollow();
 		}
 
 		const offset = {
@@ -664,7 +736,16 @@ export class WorldCamera {
 		const factor = Math.exp(-event.deltaY * this.options.wheelZoomSpeed);
 
 		this.zoomBy(factor, anchor);
+		this.suspendFollow();
 	};
+
+	private normalizePositive(value: number, label: string): number {
+		if (!Number.isFinite(value) || value <= 0) {
+			throw new Error(`The ${label} must be a positive finite number.`);
+		}
+
+		return value;
+	}
 
 	private validateOptions(options: WorldCameraOptions): void {
 		if (

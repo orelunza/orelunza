@@ -383,6 +383,35 @@ export class WorldScene extends Container {
 	}
 
 	/**
+	 * Mark the place currently close enough for direct interaction.
+	 */
+	setNearbyPlace(placeId: string | null): void {
+		this.assertUsable();
+
+		for (const [markerPlaceId, marker] of this.placeMarkers) {
+			marker.setNearby(markerPlaceId === placeId);
+		}
+
+		this.placeLayer.sortChildren();
+	}
+
+	/**
+	 * Return the rendered citizen position, if the scene has a citizen.
+	 */
+	getCitizenPosition(): WorldPoint | null {
+		return this.citizenSprite?.renderedPosition ?? null;
+	}
+
+	/**
+	 * Move the citizen immediately as part of local player movement.
+	 */
+	setCitizenLocalPosition(position: WorldPoint): void {
+		this.assertUsable();
+
+		this.citizenSprite?.teleportTo(position);
+	}
+
+	/**
 	 * Show or hide all place labels.
 	 */
 	setPlaceLabelsVisible(visible: boolean): void {

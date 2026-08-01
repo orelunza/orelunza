@@ -1,55 +1,86 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
 
 	import { ApiError } from '$lib/api/ApiError';
 
 	import type { NaturalArea } from '$lib/api/contracts/nature';
-
-	import type { HumanPosition, WorldPlace, WorldRegion } from '$lib/api/contracts/world';
-
-	import BiomePanel from '$lib/components/nature/BiomePanel.svelte';
-	import EnvironmentPanel from '$lib/components/nature/EnvironmentPanel.svelte';
+	import type { HumanPosition, MoveHumanRequest, WorldPlace, WorldRegion } from '$lib/api/contracts/world';
 
 	import Button from '$lib/components/ui/Button.svelte';
 	import ErrorNotice from '$lib/components/ui/ErrorNotice.svelte';
 	import LoadingScreen from '$lib/components/ui/LoadingScreen.svelte';
-
-	import PlaceList from '$lib/components/world/PlaceList.svelte';
-	import PositionPanel from '$lib/components/world/PositionPanel.svelte';
-	import RegionList from '$lib/components/world/RegionList.svelte';
 	import WorldCanvas from '$lib/components/world/WorldCanvas.svelte';
 
 	import { natureState } from '$lib/state/nature.svelte';
 	import { sessionState } from '$lib/state/session.svelte';
 	import { worldState } from '$lib/state/world.svelte';
+	import { PositionSyncSystem, type PositionSyncSnapshot } from '$lib/world/systems/PositionSyncSystem';
 
-	import type { WorldPointerEvent, WorldRendererSnapshot, WorldSceneModel } from '$lib/world/types';
+	import {
+		distanceBetweenPoints,
+		pointFromPlace,
+		type WorldPoint,
+		type WorldRendererSnapshot,
+		type WorldSceneModel
+	} from '$lib/world/types';
 
 	let initialLoading = $state(true);
+	let menuOpen = $state(false);
+	let placePanelOpen = $state(false);
 	let switchingRegionId = $state<string | null>(null);
 	let movingPlaceId = $state<string | null>(null);
-	let refreshingPosition = $state(false);
-	let refreshingEnvironment = $state(false);
-
 	let worldReady = $state(false);
-	let worldZoom = $state(1);
-
+	let localPosition = $state<WorldPoint | null>(null);
+	let nearbyPlace = $state<WorldPlace | null>(null);
+	let nearbyDistance = $state<number | null>(null);
+	let moving = $state(false);
+	let walkToPlaceId = $state<string | null>(null);
+	let walkCommandToken = $state(0);
+	let recenterToken = $state(0);
+	let syncSnapshot = $state<PositionSyncSnapshot>({
+		status: 'idle',
+		error: null,
+		pending: null,
+		lastSynced: null
+	});
 	let pageError = $state<ApiError | null>(null);
 
 	let pageController: AbortController | null = null;
+	let positionSync: PositionSyncSystem | null = null;
 
 	const selectedRegion = $derived(worldState.selectedRegion);
-
 	const selectedPlace = $derived(worldState.selectedPlace);
 
-	const positionRegion = $derived.by(() => {
-		const regionId = worldState.position?.region_id;
+	const activePoint = $derived.by<WorldPoint | null>(() => {
+		if (localPosition) {
+			return localPosition;
+		}
 
-		if (!regionId) {
+		if (!worldState.position) {
 			return null;
 		}
 
-		return worldState.regions.find((region) => region.id === regionId) ?? null;
+		return {
+			x: worldState.position.position_x,
+			y: worldState.position.position_y
+		};
+	});
+
+	const visiblePosition = $derived.by<HumanPosition | null>(() => {
+		if (!worldState.position || worldState.position.region_id !== selectedRegion?.id) {
+			return null;
+		}
+
+		if (!localPosition) {
+			return worldState.position;
+		}
+
+		return {
+			...worldState.position,
+			position_x: localPosition.x,
+			position_y: localPosition.y
+		};
 	});
 
 	const positionPlace = $derived.by(() => {
@@ -62,60 +93,114 @@
 		return worldState.places.find((place) => place.id === position.place_id) ?? null;
 	});
 
-	const positionInsideSelectedRegion = $derived(
-		worldState.position?.region_id === selectedRegion?.id
-	);
+	const contextPlace = $derived(selectedPlace ?? nearbyPlace);
 
 	const sceneModel = $derived.by<WorldSceneModel | null>(() => {
+		if (!selectedRegion) {
+			return null;
+		}
+
+		return {
+			region: selectedRegion,
+			places: worldState.places,
+			position: visiblePosition,
+			selectedPlaceId: selectedPlace?.id ?? null,
+			currentPlaceId: visiblePosition?.place_id ?? null,
+			naturalArea: natureState.selectedArea,
+			biome: natureState.currentBiome,
+			environment: natureState.environment
+		};
+	});
+
+	const locationLabel = $derived.by(() => {
+		if (positionPlace) {
+			return positionPlace.name;
+		}
+
+		return 'Exploring';
+	});
+
+	const syncLabel = $derived.by(() => {
+		switch (syncSnapshot.status) {
+			case 'dirty':
+				return 'Saving soon';
+			case 'syncing':
+				return 'Saving';
+			case 'synced':
+				return 'Saved';
+			case 'error':
+				return 'Local only';
+			case 'idle':
+				return 'Ready';
+		}
+	});
+
+	const distanceToContextPlace = $derived.by(() => {
+		if (!activePoint || !contextPlace) {
+			return null;
+		}
+
+		return distanceBetweenPoints(activePoint, pointFromPlace(contextPlace));
+	});
+
+	function normalizeError(error: unknown): ApiError {
+		return ApiError.fromUnknown(error);
+	}
+
+	function movementRequest(position: WorldPoint, placeId: string | null = null): MoveHumanRequest | null {
 		const region = selectedRegion;
 
 		if (!region) {
 			return null;
 		}
 
-		const visiblePosition = positionInsideSelectedRegion ? worldState.position : null;
-
 		return {
-			region,
-
-			places: worldState.places,
-
-			position: visiblePosition,
-
-			selectedPlaceId: selectedPlace?.id ?? null,
-
-			currentPlaceId: visiblePosition?.place_id ?? null,
-
-			naturalArea: natureState.selectedArea,
-
-			biome: natureState.currentBiome,
-
-			environment: natureState.environment
+			region_id: region.id,
+			place_id: placeId,
+			position_x: Math.round(position.x * 100) / 100,
+			position_y: Math.round(position.y * 100) / 100
 		};
-	});
+	}
 
-	const greeting = $derived(
-		sessionState.displayName ? `Welcome back, ${sessionState.displayName}` : 'Welcome to Orelunza'
-	);
+	async function syncMovement(request: MoveHumanRequest): Promise<void> {
+		const position = await worldState.move(request);
 
-	const cityStatus = $derived.by(() => {
-		if (!selectedRegion) {
-			return 'No region selected';
+		if (position.region_id === selectedRegion?.id) {
+			localPosition = {
+				x: position.position_x,
+				y: position.position_y
+			};
+		}
+	}
+
+	function ensurePositionSync(): PositionSyncSystem {
+		if (positionSync) {
+			return positionSync;
 		}
 
-		if (positionInsideSelectedRegion && positionPlace) {
-			return `You are in ${positionPlace.name}`;
+		positionSync = new PositionSyncSystem({
+			sync: syncMovement,
+			onStatusChange: (snapshot) => {
+				syncSnapshot = snapshot;
+			}
+		});
+
+		return positionSync;
+	}
+
+	async function flushLocalPosition(placeId: string | null = null): Promise<void> {
+		if (!activePoint) {
+			return;
 		}
 
-		if (positionInsideSelectedRegion) {
-			return `You are exploring ${selectedRegion.name}`;
+		const request = movementRequest(activePoint, placeId);
+
+		if (!request) {
+			return;
 		}
 
-		return `Viewing ${selectedRegion.name}`;
-	});
-
-	function normalizeError(error: unknown): ApiError {
-		return ApiError.fromUnknown(error);
+		ensurePositionSync().noteStopped(request);
+		await ensurePositionSync().flush();
 	}
 
 	async function loadNatureForContext(
@@ -129,10 +214,6 @@
 			area = await natureState.loadPlaceNature(placeId, signal);
 		}
 
-		/*
-		 * A place without a dedicated natural area inherits its region's
-		 * natural environment.
-		 */
 		if (!area) {
 			area = await natureState.loadRegionNature(regionId, signal);
 		}
@@ -145,8 +226,7 @@
 	}
 
 	async function synchronizePosition(position: HumanPosition, signal?: AbortSignal): Promise<void> {
-		let region =
-			worldState.regions.find((candidate) => candidate.id === position.region_id) ?? null;
+		let region = worldState.regions.find((candidate) => candidate.id === position.region_id) ?? null;
 
 		if (!region) {
 			region = await worldState.selectRegion(position.region_id, signal);
@@ -156,17 +236,14 @@
 
 		const places = await worldState.loadRegionPlaces(position.region_id, signal);
 
-		if (position.place_id) {
-			const place = places.find((candidate) => candidate.id === position.place_id) ?? null;
+		worldState.selectedPlace = position.place_id
+			? places.find((candidate) => candidate.id === position.place_id) ?? null
+			: null;
 
-			if (place) {
-				worldState.selectedPlace = place;
-			} else {
-				await worldState.selectPlace(position.place_id, signal);
-			}
-		} else {
-			worldState.selectedPlace = null;
-		}
+		localPosition = {
+			x: position.position_x,
+			y: position.position_y
+		};
 
 		await loadNatureForContext(position.region_id, position.place_id, signal);
 	}
@@ -176,17 +253,11 @@
 		pageError = null;
 
 		try {
-			const [regions] = await Promise.all([
-				worldState.loadWorld(signal),
-
-				natureState.loadNature(signal)
-			]);
-
+			const [regions] = await Promise.all([worldState.loadWorld(signal), natureState.loadNature(signal)]);
 			const position = await worldState.loadPosition(signal);
 
 			if (position) {
 				await synchronizePosition(position, signal);
-
 				return;
 			}
 
@@ -197,18 +268,15 @@
 			}
 
 			worldState.selectedRegion = firstRegion;
-
 			worldState.selectedPlace = null;
+			localPosition = null;
 
 			await worldState.loadRegionPlaces(firstRegion.id, signal);
-
 			await loadNatureForContext(firstRegion.id, null, signal);
 		} catch (error) {
-			if (signal?.aborted) {
-				return;
+			if (!signal?.aborted) {
+				pageError = normalizeError(error);
 			}
-
-			pageError = normalizeError(error);
 		} finally {
 			if (!signal?.aborted) {
 				initialLoading = false;
@@ -218,6 +286,7 @@
 
 	async function changeRegion(region: WorldRegion): Promise<void> {
 		if (switchingRegionId || region.id === selectedRegion?.id) {
+			menuOpen = false;
 			return;
 		}
 
@@ -226,23 +295,16 @@
 		worldReady = false;
 
 		try {
+			await flushLocalPosition();
+
 			worldState.selectedRegion = region;
-
 			worldState.selectedPlace = null;
+			nearbyPlace = null;
+			localPosition = null;
 
-			const places = await worldState.loadRegionPlaces(region.id);
-
-			const currentPosition = worldState.position;
-
-			if (currentPosition?.region_id === region.id && currentPosition.place_id) {
-				worldState.selectedPlace =
-					places.find((place) => place.id === currentPosition.place_id) ?? null;
-			}
-
-			await loadNatureForContext(
-				region.id,
-				currentPosition?.region_id === region.id ? currentPosition.place_id : null
-			);
+			await worldState.loadRegionPlaces(region.id);
+			await loadNatureForContext(region.id, null);
+			menuOpen = false;
 		} catch (error) {
 			pageError = normalizeError(error);
 		} finally {
@@ -250,24 +312,24 @@
 		}
 	}
 
-	function handleRegionSelect(region: WorldRegion): void {
-		void changeRegion(region);
-	}
-
 	async function selectPlace(place: WorldPlace): Promise<void> {
 		pageError = null;
+		worldState.selectedPlace = place;
+		placePanelOpen = true;
 
 		try {
-			worldState.selectedPlace = place;
-
 			await loadNatureForContext(place.region_id, place.id);
 		} catch (error) {
 			pageError = normalizeError(error);
 		}
 	}
 
-	function handlePlaceSelect(place: WorldPlace): void {
-		void selectPlace(place);
+	function walkToPlace(place: WorldPlace): void {
+		worldState.selectedPlace = place;
+		placePanelOpen = true;
+		walkToPlaceId = place.id;
+		walkCommandToken += 1;
+		menuOpen = false;
 	}
 
 	async function moveToPlace(place: WorldPlace): Promise<void> {
@@ -279,17 +341,14 @@
 		pageError = null;
 
 		try {
+			await flushLocalPosition(place.id);
 			const position = await worldState.moveToPlace(place);
 
-			const region =
-				worldState.regions.find((candidate) => candidate.id === position.region_id) ?? null;
-
-			if (region) {
-				worldState.selectedRegion = region;
-			}
-
 			worldState.selectedPlace = place;
-
+			localPosition = {
+				x: position.position_x,
+				y: position.position_y
+			};
 			await loadNatureForContext(position.region_id, position.place_id);
 		} catch (error) {
 			pageError = normalizeError(error);
@@ -298,423 +357,407 @@
 		}
 	}
 
+	function handleLocalPositionChange(position: WorldPoint): void {
+		localPosition = position;
+
+		const request = movementRequest(position);
+
+		if (request) {
+			ensurePositionSync().notePosition(request);
+		}
+	}
+
+	function handleMovementChange(nextMoving: boolean, position: WorldPoint): void {
+		moving = nextMoving;
+		localPosition = position;
+
+		const request = movementRequest(position, nextMoving ? null : nearbyPlace?.id ?? null);
+
+		if (!request) {
+			return;
+		}
+
+		if (nextMoving) {
+			ensurePositionSync().notePosition(request);
+		} else {
+			ensurePositionSync().noteStopped(request);
+		}
+	}
+
+	function handleNearbyPlaceChange(place: WorldPlace | null, distance: number | null): void {
+		nearbyPlace = place;
+		nearbyDistance = distance;
+	}
+
+	function handlePlaceSelect(place: WorldPlace): void {
+		void selectPlace(place);
+	}
+
 	function handlePlaceActivate(place: WorldPlace): void {
-		void moveToPlace(place);
-	}
-
-	async function refreshPosition(): Promise<void> {
-		if (refreshingPosition) {
-			return;
-		}
-
-		refreshingPosition = true;
-		pageError = null;
-
-		try {
-			const position = await worldState.loadPosition();
-
-			if (position) {
-				await synchronizePosition(position);
-			}
-		} catch (error) {
-			pageError = normalizeError(error);
-		} finally {
-			refreshingPosition = false;
-		}
-	}
-
-	async function refreshEnvironment(): Promise<void> {
-		const area = natureState.selectedArea;
-
-		if (!area || refreshingEnvironment) {
-			return;
-		}
-
-		refreshingEnvironment = true;
-		pageError = null;
-
-		try {
-			await natureState.loadEnvironment(area.id);
-		} catch (error) {
-			pageError = normalizeError(error);
-		} finally {
-			refreshingEnvironment = false;
-		}
+		void selectPlace(place);
 	}
 
 	function handleWorldReady(snapshot: WorldRendererSnapshot): void {
 		worldReady = true;
-		worldZoom = snapshot.camera.zoom;
+
+		if (!localPosition && snapshot.currentPlaceId && worldState.position) {
+			localPosition = {
+				x: worldState.position.position_x,
+				y: worldState.position.position_y
+			};
+		}
 	}
 
 	function handleWorldError(error: Error): void {
 		worldReady = false;
-
 		pageError = ApiError.fromUnknown(error, {
 			code: 'world_renderer_error'
 		});
 	}
 
-	function handleBackgroundPointer(_event: WorldPointerEvent): void {
-		/*
-		 * Background clicks intentionally keep the current place selection.
-		 * This callback remains available for future walking or construction.
-		 */
+	function recenter(): void {
+		recenterToken += 1;
 	}
 
 	function dismissError(): void {
 		pageError = null;
-
 		worldState.clearError();
 		natureState.clearError();
 	}
 
 	onMount(() => {
 		pageController = new AbortController();
-
 		void initialize(pageController.signal);
 
 		return () => {
 			pageController?.abort();
+			void flushLocalPosition();
+			positionSync?.destroy();
+			positionSync = null;
 		};
 	});
 </script>
 
 <svelte:head>
 	<title>City — Orelunza</title>
-
-	<meta
-		name="description"
-		content="Explore the regions, places and natural environment of Orelunza."
-	/>
+	<meta name="description" content="Explore Orelunza as a calm 2D digital city." />
 </svelte:head>
 
-<div class="grid gap-6">
-	<section
-		class="relative overflow-hidden rounded-[var(--orelunza-radius-large)] border border-[var(--orelunza-border)] bg-[var(--orelunza-surface)] px-5 py-7 sm:px-7 sm:py-9"
-	>
-		<div
-			class="pointer-events-none absolute top-[-8rem] right-[-5rem] size-80 rounded-full bg-[color-mix(in_srgb,var(--orelunza-accent)_12%,transparent)] blur-3xl"
-			aria-hidden="true"
-		></div>
-
-		<div class="relative flex flex-col justify-between gap-7 lg:flex-row lg:items-end">
-			<div class="max-w-3xl">
-				<p
-					class="mb-3 text-xs font-semibold tracking-[0.2em] text-[var(--orelunza-accent)] uppercase"
-				>
-					The city
-				</p>
-
-				<h1
-					class="m-0 text-3xl font-semibold tracking-[-0.04em] text-[var(--orelunza-text)] sm:text-4xl"
-				>
-					{greeting}
-				</h1>
-
-				<p class="mt-4 mb-0 max-w-2xl text-base leading-7 text-[var(--orelunza-text-soft)]">
-					Explore the city visually, discover quiet places and move your citizen through the world.
-				</p>
-			</div>
-
-			<div class="flex flex-wrap gap-3 text-sm">
-				<div
-					class="rounded-xl border border-[var(--orelunza-border)] bg-[var(--orelunza-background-soft)] px-4 py-3"
-				>
-					<p class="m-0 text-xs text-[var(--orelunza-text-muted)]">Region</p>
-
-					<p class="mt-1 mb-0 font-semibold text-[var(--orelunza-text)]">
-						{selectedRegion?.name ?? 'Not selected'}
-					</p>
-				</div>
-
-				<div
-					class="rounded-xl border border-[var(--orelunza-border)] bg-[var(--orelunza-background-soft)] px-4 py-3"
-				>
-					<p class="m-0 text-xs text-[var(--orelunza-text-muted)]">Status</p>
-
-					<p class="mt-1 mb-0 font-semibold text-[var(--orelunza-text)]">
-						{cityStatus}
-					</p>
-				</div>
-			</div>
-		</div>
-	</section>
-
-	<ErrorNotice
-		error={pageError}
-		title="The city could not be updated"
-		dismissible
-		onDismiss={dismissError}
-	/>
-
+<section
+	class="city-world relative -m-4 min-h-[calc(100dvh-4rem)] overflow-hidden bg-[#131619] sm:-m-6 lg:min-h-[calc(100dvh-4rem)]"
+	aria-label="Orelunza city"
+>
 	{#if initialLoading}
-		<section
-			class="rounded-[var(--orelunza-radius-large)] border border-[var(--orelunza-border)] bg-[var(--orelunza-surface)]"
-		>
+		<div class="absolute inset-0 z-40 flex items-center justify-center bg-[#131619]">
 			<LoadingScreen
 				message="Preparing the city…"
 				detail="Loading regions, your position and the surrounding nature."
 			/>
-		</section>
+		</div>
 	{:else if selectedRegion && sceneModel}
-		<section
-			class="rounded-[var(--orelunza-radius-large)] border border-[var(--orelunza-border)] bg-[var(--orelunza-surface)] p-4 sm:p-5"
-		>
-			<div class="mb-4 flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
-				<div>
-					<p
-						class="mb-1 text-xs font-semibold tracking-[0.16em] text-[var(--orelunza-accent)] uppercase"
-					>
-						World map
-					</p>
+		<WorldCanvas
+			model={sceneModel}
+			displayName={sessionState.displayName}
+			avatar={sessionState.avatar}
+			minHeight="100%"
+			showControls={false}
+			showGrid={false}
+			showPlaceLabels
+			naturalObjectDensity={0.86}
+			walkToPlaceId={walkToPlaceId}
+			walkCommandToken={walkCommandToken}
+			recenterToken={recenterToken}
+			class="absolute inset-0"
+			onPlaceSelect={handlePlaceSelect}
+			onPlaceActivate={handlePlaceActivate}
+			onLocalPositionChange={handleLocalPositionChange}
+			onMovementChange={handleMovementChange}
+			onNearbyPlaceChange={handleNearbyPlaceChange}
+			onBeforeDestroy={(position) => {
+				if (position) {
+					localPosition = position;
+					void flushLocalPosition();
+				}
+			}}
+			onReady={handleWorldReady}
+			onError={handleWorldError}
+		/>
 
-					<div class="flex flex-wrap items-center gap-3">
-						<h2 class="m-0 text-xl font-semibold tracking-[-0.025em] text-[var(--orelunza-text)]">
-							{selectedRegion.name}
-						</h2>
+		<div class="pointer-events-none absolute inset-0 z-20">
+			<header
+				class="pointer-events-auto absolute top-3 left-3 flex max-w-[calc(100%-1.5rem)] items-center gap-2 rounded-md border border-white/10 bg-[#1a1e22]/78 px-3 py-2 text-white shadow-[0_8px_40px_rgba(0,0,0,0.42)] backdrop-blur-md sm:top-4 sm:left-4"
+			>
+				<button
+					type="button"
+					class="grid size-9 place-items-center rounded-md border border-white/10 bg-white/5 text-white/80 transition hover:bg-white/10 hover:text-white"
+					aria-label="Open city menu"
+					onclick={() => {
+						menuOpen = true;
+					}}
+				>
+					<span aria-hidden="true">☰</span>
+				</button>
 
-						<span
-							class={[
-								'rounded-full border px-2.5 py-1 text-xs font-semibold',
-								worldReady
-									? 'border-[color-mix(in_srgb,var(--orelunza-success)_30%,transparent)] bg-[color-mix(in_srgb,var(--orelunza-success)_10%,transparent)] text-[var(--orelunza-success)]'
-									: 'border-[var(--orelunza-border)] bg-[var(--orelunza-background-soft)] text-[var(--orelunza-text-muted)]'
-							].join(' ')}
-						>
-							{worldReady ? 'World ready' : 'Preparing world'}
-						</span>
-					</div>
-
-					<p class="mt-2 mb-0 text-sm text-[var(--orelunza-text-muted)]">
-						Drag to move the camera, use the wheel to zoom and double-click a place to travel there.
-					</p>
+				<div class="min-w-0">
+					<p class="m-0 truncate text-sm font-semibold">{selectedRegion.name}</p>
+					<p class="m-0 truncate text-xs text-white/52">{locationLabel}</p>
 				</div>
+			</header>
+
+			<div
+				class="pointer-events-auto absolute top-3 right-3 flex items-center gap-2 sm:top-4 sm:right-4"
+			>
+				<button
+					type="button"
+					class="grid size-10 place-items-center rounded-md border border-white/10 bg-[#1a1e22]/78 text-white/75 shadow-[0_8px_40px_rgba(0,0,0,0.42)] backdrop-blur-md transition hover:bg-white/10 hover:text-white"
+					aria-label="Recenter camera"
+					onclick={recenter}
+				>
+					<span aria-hidden="true">⌖</span>
+				</button>
 
 				<a
-					href={`/city/regions/${encodeURIComponent(selectedRegion.id)}`}
-					class="inline-flex shrink-0 items-center justify-center rounded-xl border border-[var(--orelunza-border)] bg-[var(--orelunza-background-soft)] px-4 py-2.5 text-sm font-semibold text-[var(--orelunza-text-soft)] transition hover:border-[var(--orelunza-border-strong)] hover:text-[var(--orelunza-text)]"
+					href="/profile"
+					class="grid size-10 place-items-center rounded-md border border-white/10 bg-[#1a1e22]/78 text-sm font-semibold text-[#f97316] shadow-[0_8px_40px_rgba(0,0,0,0.42)] backdrop-blur-md transition hover:bg-white/10"
+					aria-label="Open profile"
 				>
-					Region details
+					{sessionState.displayName.slice(0, 1).toUpperCase() || 'C'}
 				</a>
 			</div>
 
-			<WorldCanvas
-				model={sceneModel}
-				displayName={sessionState.displayName}
-				avatar={sessionState.avatar}
-				minHeight="42rem"
-				showControls
-				showGrid
-				showPlaceLabels
-				naturalObjectDensity={0.58}
-				onPlaceSelect={handlePlaceSelect}
-				onPlaceActivate={handlePlaceActivate}
-				onBackgroundPointer={handleBackgroundPointer}
-				onReady={handleWorldReady}
-				onError={handleWorldError}
-			/>
-
 			<div
-				class="mt-3 flex flex-wrap items-center justify-between gap-3 text-xs text-[var(--orelunza-text-muted)]"
+				class="pointer-events-auto absolute bottom-3 left-3 rounded-md border border-white/10 bg-[#1a1e22]/78 px-3 py-2 text-xs text-white/60 shadow-[0_8px_40px_rgba(0,0,0,0.42)] backdrop-blur-md sm:bottom-4 sm:left-4"
 			>
-				<p class="m-0">
-					{worldState.places.length}
-					{worldState.places.length === 1 ? ' place' : ' places'}
-					in this region
+				<span>{moving ? 'Walking' : syncLabel}</span>
+				<span class="mx-2 text-white/25">•</span>
+				<span>WASD / arrows</span>
+				<span class="mx-2 text-white/25">•</span>
+				<span>Click to walk</span>
+			</div>
+
+			{#if nearbyPlace}
+				<div
+					class="pointer-events-auto absolute bottom-20 left-1/2 w-[min(22rem,calc(100%-2rem))] -translate-x-1/2 rounded-md border border-[#f97316]/35 bg-[#1a1e22]/82 px-4 py-3 text-center text-white shadow-[0_8px_40px_rgba(0,0,0,0.42)] backdrop-blur-md"
+				>
+					<p class="m-0 text-sm font-semibold">{nearbyPlace.name}</p>
+					<p class="m-0 text-xs text-white/55">Press E to interact</p>
+				</div>
+			{/if}
+
+			{#if pageError}
+				<div class="pointer-events-auto absolute right-3 bottom-3 w-[min(28rem,calc(100%-1.5rem))] sm:right-4 sm:bottom-4">
+					<ErrorNotice
+						error={pageError}
+						title="The city could not be updated"
+						dismissible
+						onDismiss={dismissError}
+					/>
+				</div>
+			{/if}
+		</div>
+
+		{#if menuOpen}
+			<div class="absolute inset-0 z-30" role="dialog" aria-modal="true" aria-label="City menu">
+				<button
+					type="button"
+					class="absolute inset-0 bg-black/36 backdrop-blur-[2px]"
+					aria-label="Close city menu"
+					onclick={() => {
+						menuOpen = false;
+					}}
+				></button>
+
+				<aside
+					class="absolute top-0 left-0 h-full w-[min(24rem,92vw)] overflow-y-auto border-r border-white/10 bg-[#1a1e22]/94 p-4 text-white shadow-[0_24px_80px_rgba(0,0,0,0.5)] backdrop-blur-xl"
+				>
+					<div class="mb-4 flex items-center justify-between gap-3">
+						<div>
+							<p class="m-0 text-xs font-semibold tracking-[0.12em] text-white/40 uppercase">
+								Navigation
+							</p>
+							<h2 class="m-0 text-lg font-semibold">Regions and places</h2>
+						</div>
+
+						<button
+							type="button"
+							class="grid size-9 place-items-center rounded-md border border-white/10 bg-white/5 text-white/70 hover:bg-white/10 hover:text-white"
+							aria-label="Close menu"
+							onclick={() => {
+								menuOpen = false;
+							}}
+						>
+							×
+						</button>
+					</div>
+
+					<div class="grid gap-5">
+						<section>
+							<h3 class="mb-2 text-xs font-semibold tracking-[0.12em] text-white/40 uppercase">
+								Regions
+							</h3>
+
+							<div class="grid gap-2">
+								{#each worldState.regions as region (region.id)}
+									<button
+										type="button"
+										class={[
+											'w-full rounded-md border px-3 py-3 text-left transition',
+											region.id === selectedRegion.id
+												? 'border-[#f97316]/45 bg-[#f97316]/10 text-white'
+												: 'border-white/10 bg-white/[0.03] text-white/72 hover:bg-white/[0.07] hover:text-white'
+										].join(' ')}
+										disabled={switchingRegionId !== null}
+										onclick={() => {
+											void changeRegion(region);
+										}}
+									>
+										<span class="block text-sm font-semibold">{region.name}</span>
+										<span class="mt-1 line-clamp-2 block text-xs text-white/45">
+											{region.description || 'Quiet region'}
+										</span>
+									</button>
+								{/each}
+							</div>
+						</section>
+
+						<section>
+							<h3 class="mb-2 text-xs font-semibold tracking-[0.12em] text-white/40 uppercase">
+								Places in {selectedRegion.name}
+							</h3>
+
+							<div class="grid gap-2">
+								{#each worldState.places as place (place.id)}
+									<button
+										type="button"
+										class={[
+											'w-full rounded-md border px-3 py-3 text-left transition',
+											place.id === selectedPlace?.id
+												? 'border-[#f97316]/45 bg-[#f97316]/10 text-white'
+												: 'border-white/10 bg-white/[0.03] text-white/72 hover:bg-white/[0.07] hover:text-white'
+										].join(' ')}
+										onclick={() => {
+											void selectPlace(place);
+										}}
+									>
+										<span class="block text-sm font-semibold">{place.name}</span>
+										<span class="mt-1 block text-xs capitalize text-white/45">{place.type}</span>
+									</button>
+								{/each}
+							</div>
+						</section>
+					</div>
+				</aside>
+			</div>
+		{/if}
+
+		{#if placePanelOpen && contextPlace}
+			<aside
+				class="absolute right-3 bottom-3 z-30 w-[min(25rem,calc(100%-1.5rem))] rounded-md border border-white/10 bg-[#1a1e22]/90 p-4 text-white shadow-[0_24px_80px_rgba(0,0,0,0.5)] backdrop-blur-xl sm:right-4 sm:bottom-4"
+				aria-label="Selected place"
+			>
+				<div class="mb-3 flex items-start justify-between gap-3">
+					<div>
+						<p class="m-0 text-xs font-semibold tracking-[0.12em] text-[#f97316] uppercase">
+							{contextPlace.type || 'Place'}
+						</p>
+						<h2 class="m-0 text-xl font-semibold">{contextPlace.name}</h2>
+					</div>
+
+					<button
+						type="button"
+						class="grid size-9 place-items-center rounded-md border border-white/10 bg-white/5 text-white/70 hover:bg-white/10 hover:text-white"
+						aria-label="Close place panel"
+						onclick={() => {
+							placePanelOpen = false;
+						}}
+					>
+						×
+					</button>
+				</div>
+
+				<p class="m-0 text-sm leading-6 text-white/62">
+					{contextPlace.description || 'This place is quiet for now.'}
 				</p>
 
-				{#if worldReady}
-					<p class="m-0">
-						Camera zoom:
-						{worldZoom.toFixed(2)}×
-					</p>
-				{/if}
-			</div>
-		</section>
-
-		<div class="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_23rem]">
-			<div class="grid min-w-0 gap-6">
-				<section
-					class="rounded-[var(--orelunza-radius-large)] border border-[var(--orelunza-border)] bg-[var(--orelunza-background-soft)] p-4 sm:p-5"
-				>
-					<div class="mb-4">
-						<p
-							class="mb-1 text-xs font-semibold tracking-[0.16em] text-[var(--orelunza-accent)] uppercase"
-						>
-							Regions
-						</p>
-
-						<h2 class="m-0 text-lg font-semibold text-[var(--orelunza-text)]">
-							Explore another area
-						</h2>
+				<dl class="mt-4 grid grid-cols-2 gap-2 text-xs">
+					<div class="rounded-md border border-white/10 bg-white/[0.03] p-3">
+						<dt class="text-white/38">Region</dt>
+						<dd class="mt-1 mb-0 font-semibold">{selectedRegion.name}</dd>
 					</div>
 
-					<RegionList
-						regions={worldState.regions}
-						selectedRegionId={selectedRegion.id}
-						loading={worldState.loading === 'regions' ||
-							worldState.loading === 'world' ||
-							switchingRegionId !== null}
-						onSelect={handleRegionSelect}
-					/>
-				</section>
-
-				<section
-					class="rounded-[var(--orelunza-radius-large)] border border-[var(--orelunza-border)] bg-[var(--orelunza-background-soft)] p-4 sm:p-5"
-				>
-					<div
-						class="mb-5 rounded-2xl border border-[var(--orelunza-border)] bg-[var(--orelunza-surface)] p-5"
-					>
-						<div class="flex flex-col justify-between gap-4 sm:flex-row sm:items-start">
-							<div>
-								<p
-									class="mb-1 text-xs font-semibold tracking-[0.16em] text-[var(--orelunza-accent)] uppercase"
-								>
-									Selected region
-								</p>
-
-								<h2
-									class="m-0 text-2xl font-semibold tracking-[-0.03em] text-[var(--orelunza-text)]"
-								>
-									{selectedRegion.name}
-								</h2>
-
-								<p class="mt-3 mb-0 max-w-3xl text-sm leading-6 text-[var(--orelunza-text-soft)]">
-									{selectedRegion.description || 'This region does not have a description yet.'}
-								</p>
-							</div>
-
-							{#if switchingRegionId}
-								<span
-									class="rounded-full border border-[var(--orelunza-border)] bg-[var(--orelunza-background-soft)] px-3 py-1.5 text-xs font-semibold text-[var(--orelunza-text-muted)]"
-								>
-									Loading region…
-								</span>
-							{/if}
-						</div>
+					<div class="rounded-md border border-white/10 bg-white/[0.03] p-3">
+						<dt class="text-white/38">Distance</dt>
+						<dd class="mt-1 mb-0 font-semibold">
+							{distanceToContextPlace === null ? 'Unknown' : `${Math.round(distanceToContextPlace)} m`}
+						</dd>
 					</div>
 
-					<PlaceList
-						places={worldState.places}
-						selectedPlaceId={selectedPlace?.id}
-						currentPlaceId={positionInsideSelectedRegion ? worldState.position?.place_id : null}
-						{movingPlaceId}
-						loading={worldState.loading === 'places'}
-						onSelect={handlePlaceSelect}
-						onMove={moveToPlace}
-					/>
-				</section>
-			</div>
+					<div class="rounded-md border border-white/10 bg-white/[0.03] p-3">
+						<dt class="text-white/38">Biome</dt>
+						<dd class="mt-1 mb-0 font-semibold">{natureState.currentBiome?.name ?? 'Regional'}</dd>
+					</div>
 
-			<aside class="grid gap-5 xl:sticky xl:top-24">
-				{#if selectedPlace}
-					<section
-						class="overflow-hidden rounded-[var(--orelunza-radius-medium)] border border-[var(--orelunza-border)] bg-[var(--orelunza-surface)]"
+					<div class="rounded-md border border-white/10 bg-white/[0.03] p-3">
+						<dt class="text-white/38">Environment</dt>
+						<dd class="mt-1 mb-0 font-semibold">
+							{natureState.environment?.terrain_condition ?? 'Quiet'}
+						</dd>
+					</div>
+				</dl>
+
+				<div class="mt-4 grid gap-2">
+					<Button
+						fullWidth
+						variant="secondary"
+						disabled={movingPlaceId !== null}
+						onclick={() => {
+							walkToPlace(contextPlace);
+						}}
 					>
-						<header class="border-b border-[var(--orelunza-border)] px-5 py-4">
-							<p
-								class="mb-1 text-xs font-semibold tracking-[0.16em] text-[var(--orelunza-accent)] uppercase"
-							>
-								Selected place
-							</p>
+						Walk there
+					</Button>
 
-							<h2 class="m-0 text-lg font-semibold text-[var(--orelunza-text)]">
-								{selectedPlace.name}
-							</h2>
-						</header>
+					<Button
+						fullWidth
+						loading={movingPlaceId === contextPlace.id}
+						disabled={movingPlaceId !== null || worldState.position?.place_id === contextPlace.id}
+						onclick={() => {
+							void moveToPlace(contextPlace);
+						}}
+					>
+						{worldState.position?.place_id === contextPlace.id ? 'You are here' : 'Enter place'}
+					</Button>
 
-						<div class="p-5">
-							<p class="m-0 text-sm leading-6 text-[var(--orelunza-text-soft)]">
-								{selectedPlace.description || 'This place does not have a description yet.'}
-							</p>
-
-							<dl class="mt-4 grid grid-cols-2 gap-3">
-								<div
-									class="rounded-xl border border-[var(--orelunza-border)] bg-[var(--orelunza-background-soft)] p-3"
-								>
-									<dt class="text-xs text-[var(--orelunza-text-muted)]">Type</dt>
-
-									<dd
-										class="mt-1 mb-0 text-sm font-semibold text-[var(--orelunza-text)] capitalize"
-									>
-										{selectedPlace.type || 'Unspecified'}
-									</dd>
-								</div>
-
-								<div
-									class="rounded-xl border border-[var(--orelunza-border)] bg-[var(--orelunza-background-soft)] p-3"
-								>
-									<dt class="text-xs text-[var(--orelunza-text-muted)]">Position</dt>
-
-									<dd class="mt-1 mb-0 font-mono text-xs font-semibold text-[var(--orelunza-text)]">
-										{selectedPlace.position_x.toFixed(0)},
-										{selectedPlace.position_y.toFixed(0)}
-									</dd>
-								</div>
-							</dl>
-
-							<div class="mt-5 grid gap-3">
-								<Button
-									fullWidth
-									loading={movingPlaceId === selectedPlace.id}
-									disabled={movingPlaceId !== null ||
-										worldState.position?.place_id === selectedPlace.id}
-									onclick={() => {
-										void moveToPlace(selectedPlace);
-									}}
-								>
-									{worldState.position?.place_id === selectedPlace.id
-										? 'You are here'
-										: 'Go to this place'}
-								</Button>
-
-								<a
-									href={`/city/places/${encodeURIComponent(selectedPlace.id)}`}
-									class="inline-flex items-center justify-center rounded-xl border border-[var(--orelunza-border)] bg-[var(--orelunza-background-soft)] px-4 py-2.5 text-sm font-semibold text-[var(--orelunza-text-soft)] transition hover:border-[var(--orelunza-border-strong)] hover:text-[var(--orelunza-text)]"
-								>
-									Open place details
-								</a>
-							</div>
-						</div>
-					</section>
-				{/if}
-
-				<PositionPanel
-					position={worldState.position}
-					region={positionRegion}
-					place={positionPlace}
-					refreshing={refreshingPosition}
-					onRefresh={refreshPosition}
-				/>
-
-				<BiomePanel
-					biome={natureState.currentBiome}
-					area={natureState.selectedArea}
-					loading={natureState.loading === 'nature' ||
-						natureState.loading === 'biomes' ||
-						natureState.loading === 'region' ||
-						natureState.loading === 'place'}
-				/>
-
-				<EnvironmentPanel
-					environment={natureState.environment}
-					area={natureState.selectedArea}
-					loading={natureState.loading === 'environment'}
-					refreshing={refreshingEnvironment}
-					onRefresh={natureState.selectedArea ? refreshEnvironment : undefined}
-				/>
+					<Button
+						fullWidth
+						variant="ghost"
+						onclick={() => {
+							void goto(`/city/places/${encodeURIComponent(contextPlace.id)}`);
+						}}
+					>
+						Open details
+					</Button>
+				</div>
 			</aside>
-		</div>
+		{/if}
 	{:else}
-		<section
-			class="rounded-[var(--orelunza-radius-large)] border border-[var(--orelunza-border)] bg-[var(--orelunza-surface)] px-6 py-14 text-center"
-		>
-			<h1 class="m-0 text-2xl font-semibold text-[var(--orelunza-text)]">The city is empty</h1>
-
-			<p class="mx-auto mt-3 mb-0 max-w-lg text-sm leading-6 text-[var(--orelunza-text-muted)]">
-				No enabled region is currently available in this world.
-			</p>
-		</section>
+		<div class="absolute inset-0 grid place-items-center px-5 text-center">
+			<div class="max-w-lg rounded-md border border-white/10 bg-[#1a1e22] p-6 text-white">
+				<h1 class="m-0 text-2xl font-semibold">The city is empty</h1>
+				<p class="mt-3 mb-0 text-sm leading-6 text-white/52">
+					No enabled region is currently available in this world.
+				</p>
+			</div>
+		</div>
 	{/if}
-</div>
+</section>
+
+<style>
+	.city-world {
+		height: calc(100dvh - 4rem);
+	}
+
+	:global(.city-world canvas) {
+		min-height: 100%;
+	}
+</style>

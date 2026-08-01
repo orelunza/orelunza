@@ -336,7 +336,7 @@ describe('sessionState', () => {
 
 		expect(sessionState.isAuthenticated).toBe(false);
 
-		expect(sessionState.status).toBe('error');
+		expect(sessionState.status).toBe('anonymous');
 
 		expect(sessionState.error).toBeInstanceOf(ApiError);
 

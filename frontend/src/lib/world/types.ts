@@ -68,6 +68,7 @@ export interface PlaceMarkerModel extends WorldEntity {
 	label: string;
 	selected: boolean;
 	current: boolean;
+	nearby: boolean;
 	interactive: boolean;
 }
 
@@ -188,6 +189,14 @@ export interface WorldRendererEvents {
 
 	onBackgroundPointer?: (event: WorldPointerEvent) => void;
 
+	onLocalPositionChange?: (position: WorldPoint) => void;
+
+	onMovementChange?: (moving: boolean, position: WorldPoint) => void;
+
+	onNearbyPlaceChange?: (place: WorldPlace | null, distance: number | null) => void;
+
+	onDestinationChange?: (destination: WorldPoint | null) => void;
+
 	onReady?: () => void;
 
 	onError?: (error: Error) => void;
@@ -271,6 +280,7 @@ export function createPlaceMarkerModel(
 		label: place.name,
 		selected: options.selectedPlaceId === place.id,
 		current: options.currentPlaceId === place.id,
+		nearby: false,
 		interactive: place.enabled
 	};
 }

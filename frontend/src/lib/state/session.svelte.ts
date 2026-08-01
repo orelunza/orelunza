@@ -38,7 +38,7 @@ class SessionState {
 	}
 
 	get humanId(): string | null {
-		return this.identity?.human_id ?? null;
+		return this.identity?.human_id ?? '';
 	}
 
 	get personaId(): string | null {
@@ -47,6 +47,15 @@ class SessionState {
 
 	get avatar(): string {
 		return this.identity?.avatar ?? '';
+	}
+
+	private normalizeIdentity(response: CurrentIdentity): CurrentIdentity {
+		const candidate = response as CurrentIdentity & {
+			identity?: CurrentIdentity;
+			session?: CurrentIdentity;
+		};
+
+		return candidate.identity ?? candidate.session ?? response;
 	}
 
 	/**
@@ -65,7 +74,7 @@ class SessionState {
 				return this.identity;
 			}
 
-			this.identity = response;
+			this.identity = this.normalizeIdentity(response);
 			this.status = 'authenticated';
 
 			return this.identity;
@@ -108,7 +117,7 @@ class SessionState {
 				return response;
 			}
 
-			this.identity = response;
+			this.identity = this.normalizeIdentity(response);
 			this.status = 'authenticated';
 
 			return response;
@@ -141,7 +150,7 @@ class SessionState {
 				return response;
 			}
 
-			this.identity = response;
+			this.identity = this.normalizeIdentity(response);
 			this.status = 'authenticated';
 
 			return response;

@@ -837,12 +837,6 @@ test.describe('city flow', () => {
 		await page.goto('/city');
 
 		await expect(
-			page.getByRole('heading', {
-				name: 'Welcome back, Forest Citizen'
-			})
-		).toBeVisible();
-
-		await expect(
 			page
 				.getByText('Green Quarter', {
 					exact: true
@@ -851,37 +845,9 @@ test.describe('city flow', () => {
 		).toBeVisible();
 
 		await expect(
-			page
-				.getByText('Community Garden', {
-					exact: true
-				})
-				.first()
-		).toBeVisible();
-
-		await expect(
-			page
-				.getByText('Old Library', {
-					exact: true
-				})
-				.first()
-		).toBeVisible();
-
-		await expect(
-			page.getByText('Temperate Forest', {
+			page.getByText('Community Garden', {
 				exact: true
-			})
-		).toBeVisible();
-
-		await expect(
-			page.getByText('Leaves move softly above the quiet paths.', {
-				exact: true
-			})
-		).toBeVisible();
-
-		await expect(
-			page.getByText('You are in Community Garden', {
-				exact: true
-			})
+			}).first()
 		).toBeVisible();
 
 		const canvas = page.locator('canvas[aria-label="Orelunza interactive world"]');
@@ -889,22 +855,37 @@ test.describe('city flow', () => {
 		await expect(canvas).toBeVisible({
 			timeout: 15_000
 		});
-	});
 
-	test('opens a place and moves the citizen there', async ({ page }) => {
-		const backend = await installCityBackend(page);
+		const canvasBox = await canvas.boundingBox();
+		const viewport = page.viewportSize();
 
-		await page.goto('/city/places/place-library');
+		expect(canvasBox?.height ?? 0).toBeGreaterThan(500);
+		expect(canvasBox?.width ?? 0).toBeGreaterThan((viewport?.width ?? 0) * 0.6);
+
+		await page.getByRole('button', { name: 'Open city menu' }).click();
+
+		await expect(page.getByRole('dialog', { name: 'City menu' })).toBeVisible();
 
 		await expect(
-			page
-				.getByRole('heading', {
-					name: 'Old Library',
-					exact: true
-				})
-				.first()
+			page.getByRole('button', {
+				name: /Old Library/
+			})
 		).toBeVisible();
+	});
 
+	test('selects a place from the world UI and moves the citizen there', async ({ page }) => {
+		const backend = await installCityBackend(page);
+
+		await page.goto('/city');
+
+		await expect(page.locator('canvas[aria-label="Orelunza interactive world"]')).toBeVisible({
+			timeout: 15_000
+		});
+
+		await page.getByRole('button', { name: 'Open city menu' }).click();
+		await page.getByRole('button', { name: /Old Library/ }).click();
+
+		await expect(page.getByLabel('Selected place')).toBeVisible();
 		await expect(
 			page
 				.getByText('A silent library filled with books and warm wooden rooms.', {
@@ -913,32 +894,31 @@ test.describe('city flow', () => {
 				.first()
 		).toBeVisible();
 
-		await expect(
-			page.getByText('Old trees surround the library in complete silence.', {
-				exact: true
-			})
-		).toBeVisible();
+		await page.getByRole('button', { name: 'Walk there' }).click();
 
-		const moveRequest = page.waitForRequest(
-			(request) => request.method() === 'POST' && normalizedPath(request) === '/api/world/me/move'
-		);
-
-		await page
-			.getByRole('button', {
-				name: 'Go to this place'
-			})
-			.click();
-
-		const request = await moveRequest;
-
-		expect(request.postDataJSON()).toMatchObject({
-			region_id: 'region-green',
-
-			place_id: 'place-library',
-
-			position_x: 520,
-			position_y: 330
+		await expect(page.getByText('Walking')).toBeVisible();
+		await expect(page.getByText('Walking')).toBeHidden({
+			timeout: 20_000
 		});
+
+		const enterPlaceButton = page.getByRole('button', {
+			name: 'Enter place'
+		});
+
+		await expect(enterPlaceButton).toBeEnabled();
+		await enterPlaceButton.click();
+
+		await expect
+			.poll(() =>
+				backend.moveRequests.some(
+					(request) =>
+						request.region_id === 'region-green' &&
+						request.place_id === 'place-library' &&
+						request.position_x === 520 &&
+						request.position_y === 330
+				)
+			)
+			.toBe(true);
 
 		await expect(
 			page.getByRole('button', {
@@ -954,8 +934,6 @@ test.describe('city flow', () => {
 			position_x: 520,
 			position_y: 330
 		});
-
-		expect(backend.moveRequests).toHaveLength(1);
 	});
 
 	test('opens another region with its places and biome', async ({ page }) => {
@@ -967,13 +945,13 @@ test.describe('city flow', () => {
 			page.getByRole('heading', {
 				name: 'River District',
 				exact: true
-			})
+			}).first()
 		).toBeVisible();
 
 		await expect(
 			page.getByText('A quiet district built alongside the river.', {
 				exact: true
-			})
+			}).first()
 		).toBeVisible();
 
 		await expect(
