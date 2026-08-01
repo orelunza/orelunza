@@ -1,4 +1,4 @@
-import { Group, Vector3 } from 'three';
+import { Group, Object3D, Quaternion, Vector3 } from 'three';
 import {
 	DEFAULT_CHARACTER_APPEARANCE,
 	normalizeCharacterAppearance,
@@ -9,7 +9,13 @@ import {
 	type HumanoidAnimationBlendSnapshot
 } from './HumanoidAnimationController';
 import { HumanoidAnimator } from './HumanoidAnimator';
-import { HumanoidModel, type HumanoidLoadStatus, type HumanoidModelSource } from './HumanoidModel';
+import {
+	countClipTrackMatches,
+	HumanoidModel,
+	normalizeMixamoBoneName,
+	type HumanoidLoadStatus,
+	type HumanoidModelSource
+} from './HumanoidModel';
 import type { HumanoidAnimationSnapshot } from './HumanoidPose';
 import type { PlayerState } from './PlayerState';
 
@@ -30,7 +36,32 @@ export interface PlayerAvatarMetrics {
 	ready: boolean;
 	error: string | null;
 	animationBlend: HumanoidAnimationBlendSnapshot;
+	debug: PlayerAvatarDebugSnapshot;
 	animation: HumanoidAnimationSnapshot;
+}
+
+export interface PlayerAvatarDebugSnapshot {
+	modelSource: string;
+	ready: boolean;
+	currentAction: string;
+	previousAction: string | null;
+	mixerTime: number;
+	actionTime: number;
+	actionWeight: number;
+	activeActionCount: number;
+	totalTrackCount: number;
+	matchedTrackCount: number;
+	unmatchedTrackCount: number;
+	hipsBoneName: string;
+	leftUpperLegBoneName: string;
+	rightUpperLegBoneName: string;
+	leftHandBoneName: string;
+	rightHandBoneName: string;
+	hipsQuaternion: number[];
+	leftUpperLegQuaternion: number[];
+	rightUpperLegQuaternion: number[];
+	leftHandQuaternion: number[];
+	rightHandQuaternion: number[];
 }
 
 export class PlayerAvatar {
@@ -43,6 +74,7 @@ export class PlayerAvatar {
 	private readonly tempRightFoot = new Vector3();
 	private readonly tempForward = new Vector3();
 	private readonly tempRight = new Vector3();
+	private readonly emptyQuaternion = new Quaternion();
 	private updateMs = 0;
 	private status: HumanoidLoadStatus = 'loading';
 	private error: string | null = null;
@@ -79,6 +111,7 @@ export class PlayerAvatar {
 			ready: this.status === 'ready',
 			error: this.error,
 			animationBlend: this.animationController?.snapshot ?? emptyBlendSnapshot(),
+			debug: this.debugSnapshot(),
 			animation: this.animator.diagnostics
 		};
 	}
@@ -117,7 +150,6 @@ export class PlayerAvatar {
 		const snapshot = this.animator.diagnostics;
 
 		this.animationController?.update(snapshot.locomotionState, snapshot.speed, deltaSeconds);
-		this.model?.applyPostAnimationAdjustments();
 
 		if (player.onGround) {
 			this.applyFootGrounding(player, pose);
@@ -135,7 +167,6 @@ export class PlayerAvatar {
 
 	updatePreview(deltaSeconds: number): void {
 		this.animationController?.playPreview(deltaSeconds);
-		this.model?.applyPostAnimationAdjustments();
 	}
 
 	dispose(): void {
@@ -156,7 +187,7 @@ export class PlayerAvatar {
 			}
 
 			this.model = model;
-			this.animationController = new HumanoidAnimationController(model.object, model.clips, {
+			this.animationController = new HumanoidAnimationController(model.animationRoot, model.clips, {
 				strict: true
 			});
 			this.object.add(model.object);
@@ -177,11 +208,54 @@ export class PlayerAvatar {
 			}
 
 			this.model = model;
-			this.animationController = new HumanoidAnimationController(model.object, model.clips);
+			this.animationController = new HumanoidAnimationController(model.animationRoot, model.clips);
 			this.object.add(model.object);
 			this.status = 'ready';
 			this.error = error instanceof Error ? error.message : String(error);
 		}
+	}
+
+	private debugSnapshot(): PlayerAvatarDebugSnapshot {
+		const blend = this.animationController?.snapshot ?? emptyBlendSnapshot();
+		const model = this.model;
+		const clip = model?.clips.find((candidate) => candidate.name === blend.currentAction);
+		const trackStats =
+			model && clip
+				? countClipTrackMatches(clip, model.animationRoot)
+				: {
+						totalTrackCount: 0,
+						matchedTrackCount: 0,
+						unmatchedTrackCount: 0
+					};
+		const hips = model ? findBoneByCanonicalName(model.animationRoot, 'hips') : null;
+		const leftUpperLeg = model ? findBoneByCanonicalName(model.animationRoot, 'leftupleg') : null;
+		const rightUpperLeg = model ? findBoneByCanonicalName(model.animationRoot, 'rightupleg') : null;
+		const leftHand = model ? findBoneByCanonicalName(model.animationRoot, 'lefthand') : null;
+		const rightHand = model ? findBoneByCanonicalName(model.animationRoot, 'righthand') : null;
+
+		return {
+			modelSource: String(model?.source ?? this.status),
+			ready: this.status === 'ready',
+			currentAction: blend.currentAction,
+			previousAction: blend.previousAction,
+			mixerTime: blend.mixerTime,
+			actionTime: blend.actionTime,
+			actionWeight: blend.actionWeight,
+			activeActionCount: blend.activeActionCount,
+			totalTrackCount: trackStats.totalTrackCount,
+			matchedTrackCount: trackStats.matchedTrackCount,
+			unmatchedTrackCount: trackStats.unmatchedTrackCount,
+			hipsBoneName: hips?.name ?? '',
+			leftUpperLegBoneName: leftUpperLeg?.name ?? '',
+			rightUpperLegBoneName: rightUpperLeg?.name ?? '',
+			leftHandBoneName: leftHand?.name ?? '',
+			rightHandBoneName: rightHand?.name ?? '',
+			hipsQuaternion: quaternionArray(hips ?? this.emptyQuaternion),
+			leftUpperLegQuaternion: quaternionArray(leftUpperLeg ?? this.emptyQuaternion),
+			rightUpperLegQuaternion: quaternionArray(rightUpperLeg ?? this.emptyQuaternion),
+			leftHandQuaternion: quaternionArray(leftHand ?? this.emptyQuaternion),
+			rightHandQuaternion: quaternionArray(rightHand ?? this.emptyQuaternion)
+		};
 	}
 
 	private applyFootGrounding(
@@ -221,6 +295,36 @@ function emptyBlendSnapshot(): HumanoidAnimationBlendSnapshot {
 		weights: {},
 		clipCount: 0,
 		mixerTime: 0,
-		transitionCount: 0
+		transitionCount: 0,
+		actionTime: 0,
+		actionWeight: 0,
+		activeActionCount: 0
 	};
+}
+
+function findBoneByCanonicalName(root: Object3D, canonicalName: string): Object3D | null {
+	let found: Object3D | null = null;
+
+	root.traverse((child) => {
+		if (found || child.type !== 'Bone') {
+			return;
+		}
+
+		if (normalizeMixamoBoneName(child.name) === canonicalName) {
+			found = child;
+		}
+	});
+
+	return found;
+}
+
+function quaternionArray(source: Object3D | Quaternion): number[] {
+	const quaternion = source instanceof Quaternion ? source : source.quaternion;
+
+	return [
+		Number(quaternion.x.toFixed(6)),
+		Number(quaternion.y.toFixed(6)),
+		Number(quaternion.z.toFixed(6)),
+		Number(quaternion.w.toFixed(6))
+	];
 }

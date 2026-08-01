@@ -2,9 +2,7 @@ import {
 	AnimationClip,
 	Group,
 	Mesh,
-	Quaternion,
 	SkinnedMesh,
-	Vector3,
 	VectorKeyframeTrack,
 	type BufferGeometry,
 	type Material,
@@ -65,7 +63,7 @@ let sourceAssetPromise: Promise<HumanoidSourceAsset> | null = null;
 export class HumanoidModel {
 	readonly object = new Group();
 	readonly isRiggedHumanoid = true;
-	private readonly armCorrections: Array<{ bone: Object3D; correction: Quaternion }> = [];
+	readonly animationRoot: Object3D;
 	private constructor(
 		readonly source: HumanoidModelSource,
 		readonly rig: HumanoidRig | null,
@@ -79,7 +77,8 @@ export class HumanoidModel {
 		this.object.userData.avatarRole = 'peaceful-citizen-explorer';
 		this.object.userData.noMilitaryGear = true;
 		this.object.add(modelObject);
-		this.captureArmCorrections();
+		this.animationRoot =
+			source === 'fbx' ? (findPrimarySkeletonRoot(modelObject) ?? modelObject) : this.object;
 	}
 
 	static async loadDefault(appearance: CharacterAppearanceV1): Promise<HumanoidModel> {
@@ -126,16 +125,6 @@ export class HumanoidModel {
 		this.rig?.applyPose(pose);
 	}
 
-	applyPostAnimationAdjustments(): void {
-		if (this.source !== 'fbx') {
-			return;
-		}
-
-		for (const { bone, correction } of this.armCorrections) {
-			bone.quaternion.premultiply(correction);
-		}
-	}
-
 	dispose(): void {
 		this.rig?.dispose();
 
@@ -161,33 +150,7 @@ export class HumanoidModel {
 
 		return this;
 	}
-
-	private captureArmCorrections(): void {
-		if (this.source !== 'fbx') {
-			return;
-		}
-
-		this.addArmCorrection('mixamorigLeftArm', -1.45);
-		this.addArmCorrection('mixamorigRightArm', 1.45);
-		this.addArmCorrection('mixamorigLeftForeArm', -0.28);
-		this.addArmCorrection('mixamorigRightForeArm', 0.28);
-	}
-
-	private addArmCorrection(name: string, zRadians: number): void {
-		const bone = this.object.getObjectByName(name);
-
-		if (!bone) {
-			return;
-		}
-
-		this.armCorrections.push({
-			bone,
-			correction: new Quaternion().setFromAxisAngle(ARM_CORRECTION_AXIS, zRadians)
-		});
-	}
 }
-
-const ARM_CORRECTION_AXIS = new Vector3(0, 0, 1);
 
 export function canonicalClipNameFromAsset(assetName: string): string | null {
 	const normalized = assetName.toLowerCase().replace(/\\/g, '/').split('/').at(-1) ?? assetName;
@@ -212,7 +175,9 @@ export function canonicalClipNameFromAsset(assetName: string): string | null {
 
 export function neutralizeRootMotionHorizontal(clip: AnimationClip): AnimationClip {
 	const tracks = clip.tracks.map((track) => {
-		if (track.name !== 'mixamorigHips.position') {
+		const [targetName, propertyName] = track.name.split('.');
+
+		if (normalizeMixamoBoneName(targetName) !== 'hips' || propertyName !== 'position') {
 			return track.clone();
 		}
 
@@ -227,6 +192,55 @@ export function neutralizeRootMotionHorizontal(clip: AnimationClip): AnimationCl
 	});
 
 	return new AnimationClip(clip.name, clip.duration, tracks);
+}
+
+export function normalizeMixamoBoneName(name: string): string {
+	return name
+		.replace(/\\/g, '/')
+		.split('/')
+		.at(-1)!
+		.replace(/^.*:/, '')
+		.replace(/^mixamorig/i, '')
+		.replace(/^beta[_-]?joints:?/i, '')
+		.replace(/[^a-z0-9]/gi, '')
+		.toLowerCase();
+}
+
+export function countClipTrackMatches(
+	clip: AnimationClip,
+	root: Object3D
+): {
+	totalTrackCount: number;
+	matchedTrackCount: number;
+	unmatchedTrackCount: number;
+	matchedBoneNames: string[];
+} {
+	const boneNames = new Set<string>();
+
+	root.traverse((child) => {
+		if (child.type === 'Bone') {
+			boneNames.add(normalizeMixamoBoneName(child.name));
+		}
+	});
+
+	const matched = new Set<string>();
+	let matchedTrackCount = 0;
+
+	for (const track of clip.tracks) {
+		const boneName = normalizeMixamoBoneName(track.name.split('.')[0]);
+
+		if (boneNames.has(boneName)) {
+			matchedTrackCount += 1;
+			matched.add(boneName);
+		}
+	}
+
+	return {
+		totalTrackCount: clip.tracks.length,
+		matchedTrackCount,
+		unmatchedTrackCount: clip.tracks.length - matchedTrackCount,
+		matchedBoneNames: [...matched].sort()
+	};
 }
 
 export async function loadHumanoidSourceAsset(): Promise<HumanoidSourceAsset> {
@@ -293,6 +307,20 @@ function prepareModelScene(scene: Object3D): void {
 		child.castShadow = false;
 		child.receiveShadow = false;
 	});
+}
+
+function findPrimarySkeletonRoot(object: Object3D): Object3D | null {
+	let primaryRoot: Object3D | null = null;
+
+	object.traverse((child) => {
+		if (primaryRoot || !(child instanceof SkinnedMesh)) {
+			return;
+		}
+
+		primaryRoot = child.skeleton.bones[0] ?? null;
+	});
+
+	return primaryRoot;
 }
 
 function measureModel(object: Object3D): HumanoidModelMetrics {

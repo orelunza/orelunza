@@ -2,6 +2,7 @@ import {
 	AnimationClip,
 	AnimationMixer,
 	BooleanKeyframeTrack,
+	LoopRepeat,
 	LoopOnce,
 	MathUtils,
 	NumberKeyframeTrack,
@@ -42,6 +43,9 @@ export interface HumanoidAnimationBlendSnapshot {
 	clipCount: number;
 	mixerTime: number;
 	transitionCount: number;
+	actionTime: number;
+	actionWeight: number;
+	activeActionCount: number;
 }
 
 export interface HumanoidAnimationControllerOptions {
@@ -54,8 +58,8 @@ const FALLBACK_TURN_CLIPS = new Set<HumanoidAnimationState>(['turn_left', 'turn_
 export class HumanoidAnimationController {
 	readonly mixer: AnimationMixer;
 	private readonly actions = new Map<string, AnimationAction>();
-	private readonly weights = new Map<string, number>();
 	private readonly fadeSeconds: number;
+	private readonly fadingOut: Array<{ action: AnimationAction; endTime: number }> = [];
 	private activeState: HumanoidAnimationState = 'idle';
 	private currentActionName = 'idle';
 	private previousActionName: string | null = null;
@@ -77,18 +81,22 @@ export class HumanoidAnimationController {
 
 		for (const state of HUMANOID_ANIMATION_STATES) {
 			const clipName = FALLBACK_TURN_CLIPS.has(state) ? 'idle' : state;
-			const clip = clipByName.get(clipName) ?? createEmptyClip(clipName);
+			const sourceClip = clipByName.get(clipName) ?? createEmptyClip(clipName);
+			const clip = FALLBACK_TURN_CLIPS.has(state) ? cloneClipAs(sourceClip, state) : sourceClip;
 			const action = this.mixer.clipAction(clip);
 			if (state === 'jump' || state === 'land' || state === 'reaction_shoved') {
 				action.setLoop(LoopOnce, 1);
 				action.clampWhenFinished = true;
+			} else {
+				action.setLoop(LoopRepeat, Number.POSITIVE_INFINITY);
 			}
 
-			action.play();
-			action.enabled = true;
+			action.enabled = state === 'idle';
 			action.setEffectiveWeight(state === 'idle' ? 1 : 0);
+			if (state === 'idle') {
+				action.play();
+			}
 			this.actions.set(state, action);
-			this.weights.set(state, state === 'idle' ? 1 : 0);
 		}
 	}
 
@@ -97,6 +105,7 @@ export class HumanoidAnimationController {
 		this.setState(targetState);
 		this.applyPlaybackScale(targetState, speed);
 		this.mixer.update(Math.min(deltaSeconds, 0.05));
+		this.cleanupFadedActions();
 	}
 
 	playPreview(deltaSeconds: number): void {
@@ -117,21 +126,28 @@ export class HumanoidAnimationController {
 		}
 
 		this.previousActionName = this.currentActionName;
-		this.weights.set(this.currentActionName, 0);
-		this.weights.set(state, 1);
 		this.currentActionName = state;
 		this.activeState = state;
 		this.transitionCount += 1;
-		previous?.fadeOut(this.fadeSeconds);
-		next.reset().play().fadeIn(this.fadeSeconds);
+		next.enabled = true;
+		next.reset();
+		next.setEffectiveWeight(1);
+		next.play();
+
+		if (previous && previous !== next) {
+			previous.enabled = true;
+			previous.crossFadeTo(next, this.fadeSeconds, false);
+			this.fadingOut.push({ action: previous, endTime: this.mixer.time + this.fadeSeconds });
+		}
 	}
 
 	get snapshot(): HumanoidAnimationBlendSnapshot {
 		const weights: Record<string, number> = {};
 
 		for (const [name, action] of this.actions) {
-			weights[name] = MathUtils.clamp(this.weights.get(name) ?? action.getEffectiveWeight(), 0, 1);
+			weights[name] = MathUtils.clamp(action.getEffectiveWeight(), 0, 1);
 		}
+		const action = this.actions.get(this.activeState);
 
 		return {
 			activeState: this.activeState,
@@ -140,7 +156,12 @@ export class HumanoidAnimationController {
 			weights,
 			clipCount: new Set([...this.actions.values()].map((action) => action.getClip().name)).size,
 			mixerTime: this.mixer.time,
-			transitionCount: this.transitionCount
+			transitionCount: this.transitionCount,
+			actionTime: action?.time ?? 0,
+			actionWeight: MathUtils.clamp(action?.getEffectiveWeight() ?? 0, 0, 1),
+			activeActionCount: [...this.actions.values()].filter(
+				(candidate) => candidate.enabled && candidate.getEffectiveWeight() > 0.01
+			).length
 		};
 	}
 
@@ -148,6 +169,7 @@ export class HumanoidAnimationController {
 		this.mixer.stopAllAction();
 		this.mixer.uncacheRoot(this.root);
 		this.actions.clear();
+		this.fadingOut.length = 0;
 	}
 
 	private applyPlaybackScale(state: HumanoidAnimationState, speed: number): void {
@@ -168,6 +190,21 @@ export class HumanoidAnimationController {
 			action.timeScale = MathUtils.clamp(speed / 8, 0.85, 1.35);
 		} else {
 			action.timeScale = 1;
+		}
+	}
+
+	private cleanupFadedActions(): void {
+		for (let index = this.fadingOut.length - 1; index >= 0; index -= 1) {
+			const entry = this.fadingOut[index];
+
+			if (this.mixer.time < entry.endTime) {
+				continue;
+			}
+
+			entry.action.stop();
+			entry.action.enabled = false;
+			entry.action.setEffectiveWeight(0);
+			this.fadingOut.splice(index, 1);
 		}
 	}
 }
@@ -223,4 +260,11 @@ function createEmptyClip(name: string): AnimationClip {
 	return new AnimationClip(name, 1, [
 		new BooleanKeyframeTrack('avatarRoot.visible', [0, 1], [true, true])
 	]);
+}
+
+function cloneClipAs(clip: AnimationClip, name: string): AnimationClip {
+	const clone = clip.clone();
+	clone.name = name;
+
+	return clone;
 }

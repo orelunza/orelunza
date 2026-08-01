@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { AnimationClip, AnimationMixer, VectorKeyframeTrack } from 'three';
+import {
+	AnimationClip,
+	AnimationMixer,
+	Bone,
+	QuaternionKeyframeTrack,
+	VectorKeyframeTrack
+} from 'three';
 
 import { GameLoop } from './GameLoop';
 import { GamePersistence } from './persistence/GamePersistence';
@@ -22,8 +28,10 @@ import { toHumanoidAppearance } from './player/HumanoidAppearance';
 import { HumanoidAnimator } from './player/HumanoidAnimator';
 import {
 	canonicalClipNameFromAsset,
+	countClipTrackMatches,
 	HumanoidModel,
-	neutralizeRootMotionHorizontal
+	neutralizeRootMotionHorizontal,
+	normalizeMixamoBoneName
 } from './player/HumanoidModel';
 import { HumanoidRig } from './player/HumanoidRig';
 import { PlayerAvatar } from './player/PlayerAvatar';
@@ -51,6 +59,112 @@ import {
 	chunkToWorld,
 	worldToChunk
 } from './world/voxel-types';
+
+function createTestMixamoSkeleton(): Bone {
+	const hips = namedBone('mixamorigHips');
+	const spine = namedBone('mixamorigSpine');
+	const leftArm = namedBone('mixamorigLeftArm');
+	const rightArm = namedBone('mixamorigRightArm');
+	const leftHand = namedBone('mixamorigLeftHand');
+	const rightHand = namedBone('mixamorigRightHand');
+	const leftUpperLeg = namedBone('mixamorigLeftUpLeg');
+	const rightUpperLeg = namedBone('mixamorigRightUpLeg');
+	const leftFoot = namedBone('mixamorigLeftFoot');
+	const rightFoot = namedBone('mixamorigRightFoot');
+
+	hips.add(spine, leftUpperLeg, rightUpperLeg);
+	spine.add(leftArm, rightArm);
+	leftArm.add(leftHand);
+	rightArm.add(rightHand);
+	leftUpperLeg.add(leftFoot);
+	rightUpperLeg.add(rightFoot);
+
+	return hips;
+}
+
+function namedBone(name: string): Bone {
+	const bone = new Bone();
+	bone.name = name;
+
+	return bone;
+}
+
+function testBones(root: Bone): {
+	hips: Bone;
+	leftUpperLeg: Bone;
+	rightUpperLeg: Bone;
+	leftArm: Bone;
+	rightArm: Bone;
+	leftHand: Bone;
+	rightHand: Bone;
+	rest: Bone['quaternion'];
+} {
+	const find = (name: string): Bone => {
+		const bone = root.getObjectByName(name);
+
+		if (!(bone instanceof Bone)) {
+			throw new Error(`Missing test bone ${name}`);
+		}
+
+		return bone;
+	};
+
+	return {
+		hips: find('mixamorigHips'),
+		leftUpperLeg: find('mixamorigLeftUpLeg'),
+		rightUpperLeg: find('mixamorigRightUpLeg'),
+		leftArm: find('mixamorigLeftArm'),
+		rightArm: find('mixamorigRightArm'),
+		leftHand: find('mixamorigLeftHand'),
+		rightHand: find('mixamorigRightHand'),
+		rest: root.quaternion.clone()
+	};
+}
+
+function createSyntheticLocomotionClips(): AnimationClip[] {
+	return [
+		createSyntheticMixamoClip('idle', 2, 0.08),
+		createSyntheticMixamoClip('walk', 1, 0.55),
+		createSyntheticMixamoClip('run', 0.7, 0.85),
+		createSyntheticMixamoClip('strafe_left', 1, 0.48),
+		createSyntheticMixamoClip('strafe_right', 1, -0.48),
+		createSyntheticMixamoClip('walk_backward', 1.2, -0.35),
+		createSyntheticMixamoClip('jump', 0.6, 0.65),
+		createSyntheticMixamoClip('fall', 1, 0.22),
+		createSyntheticMixamoClip('land', 0.45, -0.28),
+		createSyntheticMixamoClip('reaction_shoved', 1, 0.9)
+	];
+}
+
+function createSyntheticMixamoClip(
+	name: string,
+	duration: number,
+	amplitude: number
+): AnimationClip {
+	return new AnimationClip(name, duration, [
+		new VectorKeyframeTrack(
+			'mixamorigHips.position',
+			[0, duration / 2, duration],
+			[0, 0, 0, 0, 0.08, 0, 0, 0, 0]
+		),
+		quaternionTrack('mixamorigHips.quaternion', duration, amplitude * 0.12),
+		quaternionTrack('mixamorigLeftUpLeg.quaternion', duration, amplitude),
+		quaternionTrack('mixamorigRightUpLeg.quaternion', duration, -amplitude),
+		quaternionTrack('mixamorigLeftFoot.quaternion', duration, amplitude * 0.3),
+		quaternionTrack('mixamorigRightFoot.quaternion', duration, -amplitude * 0.3),
+		quaternionTrack('mixamorigLeftArm.quaternion', duration, -amplitude * 0.7),
+		quaternionTrack('mixamorigRightArm.quaternion', duration, amplitude * 0.7),
+		quaternionTrack('mixamorigLeftHand.quaternion', duration, -amplitude * 0.2),
+		quaternionTrack('mixamorigRightHand.quaternion', duration, amplitude * 0.2)
+	]);
+}
+
+function quaternionTrack(name: string, duration: number, angle: number): QuaternionKeyframeTrack {
+	const half = angle / 2;
+	const values = [0, 0, 0, 1, Math.sin(half), 0, 0, Math.cos(half), 0, 0, 0, 1];
+
+	return new QuaternionKeyframeTrack(name, [0, duration / 2, duration], values);
+}
 
 describe('voxel world coordinates', () => {
 	test('converts world coordinates to chunk coordinates', () => {
@@ -233,6 +347,21 @@ describe('humanoid avatar rig and animation', () => {
 		expect(values).toEqual([0, 1, 0, 0, 2, 0, 0, 1, 0]);
 	});
 
+	test('normalizes Mixamo bone names and counts real clip track matches', () => {
+		const root = createTestMixamoSkeleton();
+		const clip = createSyntheticMixamoClip('walk', 1, 0.6);
+		const stats = countClipTrackMatches(clip, root);
+
+		expect(normalizeMixamoBoneName('mixamorig:LeftUpLeg')).toBe('leftupleg');
+		expect(normalizeMixamoBoneName('Beta_Joints:Hips')).toBe('hips');
+		expect(stats.totalTrackCount).toBe(10);
+		expect(stats.matchedTrackCount).toBe(10);
+		expect(stats.unmatchedTrackCount).toBe(0);
+		expect(stats.matchedBoneNames).toEqual(
+			expect.arrayContaining(['hips', 'leftupleg', 'rightupleg', 'leftarm', 'righthand'])
+		);
+	});
+
 	test('creates an explicit fallback only when requested by tests or development', () => {
 		const model = HumanoidModel.createFallback(DEFAULT_CHARACTER_APPEARANCE);
 
@@ -293,6 +422,105 @@ describe('humanoid avatar rig and animation', () => {
 		expect(controller.snapshot.transitionCount).toBe(transitions);
 		controller.dispose();
 		model.dispose();
+	});
+
+	test('does not restart the same action and keeps active actions bounded', () => {
+		const root = createTestMixamoSkeleton();
+		const controller = new HumanoidAnimationController(root, createSyntheticLocomotionClips(), {
+			strict: true,
+			fadeSeconds: 0.05
+		});
+
+		controller.update('walk_forward', WALK_SPEED, 1 / 60);
+		const firstTransitionCount = controller.snapshot.transitionCount;
+		const firstActionTime = controller.snapshot.actionTime;
+
+		controller.update('walk_forward', WALK_SPEED, 1 / 60);
+		expect(controller.snapshot.transitionCount).toBe(firstTransitionCount);
+		expect(controller.snapshot.actionTime).toBeGreaterThan(firstActionTime);
+		expect(controller.snapshot.activeActionCount).toBeLessThanOrEqual(2);
+
+		for (let index = 0; index < 8; index += 1) {
+			controller.update('walk_forward', WALK_SPEED, 1 / 60);
+		}
+
+		expect(controller.snapshot.activeActionCount).toBe(1);
+		controller.dispose();
+	});
+
+	test('AnimationMixer moves hips, legs, arms and hands during walk', () => {
+		const root = createTestMixamoSkeleton();
+		const bones = testBones(root);
+		const controller = new HumanoidAnimationController(root, createSyntheticLocomotionClips(), {
+			strict: true
+		});
+
+		controller.update('walk_forward', WALK_SPEED, 1 / 30);
+		const first = {
+			hips: bones.hips.quaternion.clone(),
+			leftLeg: bones.leftUpperLeg.quaternion.clone(),
+			rightLeg: bones.rightUpperLeg.quaternion.clone(),
+			leftArm: bones.leftArm.quaternion.clone(),
+			leftHand: bones.leftHand.quaternion.clone()
+		};
+
+		for (let index = 0; index < 12; index += 1) {
+			controller.update('walk_forward', WALK_SPEED, 1 / 30);
+		}
+
+		expect(first.hips.angleTo(bones.hips.quaternion)).toBeGreaterThan(0.001);
+		expect(first.leftLeg.angleTo(bones.leftUpperLeg.quaternion)).toBeGreaterThan(0.05);
+		expect(first.rightLeg.angleTo(bones.rightUpperLeg.quaternion)).toBeGreaterThan(0.05);
+		expect(first.leftArm.angleTo(bones.leftArm.quaternion)).toBeGreaterThan(0.05);
+		expect(first.leftHand.angleTo(bones.leftHand.quaternion)).toBeGreaterThan(0.001);
+		expect(bones.leftUpperLeg.quaternion.angleTo(bones.rightUpperLeg.quaternion)).toBeGreaterThan(
+			0.05
+		);
+		controller.dispose();
+	});
+
+	test('hand quaternions stay finite and normalized across long locomotion transitions', () => {
+		const root = createTestMixamoSkeleton();
+		const bones = testBones(root);
+		const controller = new HumanoidAnimationController(root, createSyntheticLocomotionClips(), {
+			strict: true,
+			fadeSeconds: 0.05
+		});
+		const states = [
+			'walk_forward',
+			'run',
+			'strafe_left',
+			'strafe_right',
+			'walk_backward',
+			'idle'
+		] as const;
+		let maximumLeftHandAngle = 0;
+		let maximumRightHandAngle = 0;
+
+		for (let index = 0; index < 2400; index += 1) {
+			const state = states[Math.floor(index / 120) % states.length];
+			controller.update(state, state === 'run' ? SPRINT_SPEED : WALK_SPEED, 1 / 60);
+			for (const hand of [bones.leftHand, bones.rightHand]) {
+				const length = hand.quaternion.length();
+				expect(Number.isFinite(length)).toBe(true);
+				expect(length).toBeGreaterThan(0.99);
+				expect(length).toBeLessThan(1.01);
+			}
+			maximumLeftHandAngle = Math.max(
+				maximumLeftHandAngle,
+				bones.leftHand.quaternion.angleTo(bones.rest)
+			);
+			maximumRightHandAngle = Math.max(
+				maximumRightHandAngle,
+				bones.rightHand.quaternion.angleTo(bones.rest)
+			);
+			expect(controller.snapshot.activeActionCount).toBeLessThanOrEqual(2);
+		}
+
+		expect(maximumLeftHandAngle).toBeLessThan(1.2);
+		expect(maximumRightHandAngle).toBeLessThan(1.2);
+		expect(controller.snapshot.currentAction).not.toBe('reaction_shoved');
+		controller.dispose();
 	});
 
 	test('builds an articulated human hierarchy without a hat', () => {

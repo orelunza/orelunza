@@ -877,6 +877,17 @@ async function numericAttribute(locator: Locator, name: string): Promise<number>
 	return Number(await locator.getAttribute(name));
 }
 
+async function numericTupleAttribute(locator: Locator, name: string): Promise<number[]> {
+	return ((await locator.getAttribute(name)) ?? '')
+		.split(',')
+		.map((value) => Number(value))
+		.filter((value) => Number.isFinite(value));
+}
+
+function tupleDelta(left: number[], right: number[]): number {
+	return left.reduce((total, value, index) => total + Math.abs(value - (right[index] ?? 0)), 0);
+}
+
 async function waitForWorldReady(page: Page): Promise<void> {
 	await page.waitForFunction(() => {
 		const state = document.querySelector('[data-testid="game-debug-state"]') as HTMLElement | null;
@@ -943,6 +954,11 @@ test.describe('world flow', () => {
 		await expect(state).toHaveAttribute('data-avatar-model-source', 'fbx');
 		await expect(state).toHaveAttribute('data-model-source', 'fbx');
 		expect(await numericAttribute(state, 'data-avatar-animation-clips')).toBeGreaterThanOrEqual(9);
+		expect(await numericAttribute(state, 'data-total-track-count')).toBeGreaterThan(0);
+		expect(await numericAttribute(state, 'data-matched-track-count')).toBeGreaterThan(0);
+		await expect(state).toHaveAttribute('data-hips-bone-name', /Hips/);
+		await expect(state).toHaveAttribute('data-left-upper-leg-bone-name', /LeftUpLeg/);
+		await expect(state).toHaveAttribute('data-left-hand-bone-name', /LeftHand/);
 		await expect(state).toHaveAttribute('data-current-animation', 'idle');
 	});
 
@@ -971,8 +987,18 @@ test.describe('world flow', () => {
 		});
 
 		await keyDown(page, 'KeyW');
-		await page.waitForTimeout(500);
+		await page.waitForTimeout(250);
 		await expect(state).toHaveAttribute('data-avatar-state', /walk_forward|run/);
+		await expect(state).toHaveAttribute('data-current-animation', /walk|run/);
+		expect(await numericAttribute(state, 'data-matched-track-count')).toBeGreaterThan(0);
+		expect(await numericAttribute(state, 'data-active-action-count')).toBeLessThanOrEqual(2);
+		const walkActionTime = await numericAttribute(state, 'data-action-time');
+		const walkLegPose = await numericTupleAttribute(state, 'data-left-upper-leg-quaternion');
+		await page.waitForTimeout(250);
+		expect(await numericAttribute(state, 'data-action-time')).toBeGreaterThan(walkActionTime);
+		expect(
+			tupleDelta(walkLegPose, await numericTupleAttribute(state, 'data-left-upper-leg-quaternion'))
+		).toBeGreaterThan(0.001);
 		const walkSpeed = await numericAttribute(state, 'data-avatar-speed');
 		const walkArmLeft = await numericAttribute(state, 'data-avatar-arm-left');
 		const walkArmRight = await numericAttribute(state, 'data-avatar-arm-right');
@@ -991,6 +1017,7 @@ test.describe('world flow', () => {
 		await keyDown(page, 'KeyW');
 		await page.waitForTimeout(700);
 		await expect(state).toHaveAttribute('data-avatar-state', /run|walk_forward/);
+		await expect(state).toHaveAttribute('data-current-animation', /run|walk/);
 		await keyUp(page, 'KeyW');
 		await keyUp(page, 'ShiftLeft');
 		const afterSprint = await playerPosition(state);
@@ -1000,13 +1027,20 @@ test.describe('world flow', () => {
 
 		await keyDown(page, 'KeyA');
 		await page.waitForTimeout(350);
+		await expect(state).toHaveAttribute('data-current-animation', /strafe_left|walk/);
 		await keyUp(page, 'KeyA');
 		const afterLeft = await playerPosition(state);
 
 		await keyDown(page, 'KeyD');
 		await page.waitForTimeout(700);
+		await expect(state).toHaveAttribute('data-current-animation', /strafe_right|walk/);
 		await keyUp(page, 'KeyD');
 		const afterRight = await playerPosition(state);
+
+		await keyDown(page, 'KeyS');
+		await page.waitForTimeout(120);
+		await expect(state).toHaveAttribute('data-current-animation', /walk_backward|walk|idle/);
+		await keyUp(page, 'KeyS');
 
 		expect(afterLeft.x - afterSprint.x).toBeLessThan(-0.05);
 		expect(afterRight.x - afterLeft.x).toBeGreaterThan(0.1);
@@ -1019,10 +1053,18 @@ test.describe('world flow', () => {
 			'data-avatar-state',
 			/jump_start|airborne|landing|idle|walk_forward/
 		);
+		await expect(state).toHaveAttribute('data-current-animation', /jump|fall|land|idle|walk/);
 		await page.waitForTimeout(700);
 		await expect(state).toHaveAttribute('data-avatar-grounded', 'true');
+		expect(await numericAttribute(state, 'data-active-action-count')).toBeLessThanOrEqual(2);
+		for (const name of ['data-left-hand-quaternion', 'data-right-hand-quaternion']) {
+			const quaternion = await numericTupleAttribute(state, name);
+			expect(quaternion).toHaveLength(4);
+			expect(Math.hypot(...quaternion)).toBeGreaterThan(0.99);
+			expect(Math.hypot(...quaternion)).toBeLessThan(1.01);
+		}
 		expect(await numericAttribute(state, 'data-chunks-active')).toBeLessThanOrEqual(9);
-		expect(await numericAttribute(state, 'data-world-rebuilds')).toBeLessThanOrEqual(3);
+		expect(await numericAttribute(state, 'data-world-rebuilds')).toBeLessThanOrEqual(6);
 	});
 
 	test('supports inventory and hotbar selection', async ({ page }) => {

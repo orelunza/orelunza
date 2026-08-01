@@ -92,4 +92,22 @@ export interface GameDiagnosticsSnapshot {
 	avatarReady: boolean;
 	avatarCurrentAnimation: string;
 	avatarError: string | null;
+	avatarPreviousAnimation: string | null;
+	avatarMixerTime: number;
+	avatarActionTime: number;
+	avatarActionWeight: number;
+	avatarActiveActionCount: number;
+	avatarTotalTrackCount: number;
+	avatarMatchedTrackCount: number;
+	avatarUnmatchedTrackCount: number;
+	avatarHipsBoneName: string;
+	avatarLeftUpperLegBoneName: string;
+	avatarRightUpperLegBoneName: string;
+	avatarLeftHandBoneName: string;
+	avatarRightHandBoneName: string;
+	avatarHipsQuaternion: number[];
+	avatarLeftUpperLegQuaternion: number[];
+	avatarRightUpperLegQuaternion: number[];
+	avatarLeftHandQuaternion: number[];
+	avatarRightHandQuaternion: number[];
 }

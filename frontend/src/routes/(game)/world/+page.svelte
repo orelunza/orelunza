@@ -164,6 +164,30 @@
 				data-avatar-bones={snapshot.diagnostics?.avatarBones ?? 0}
 				data-avatar-animation-clips={snapshot.diagnostics?.avatarAnimationClips ?? 0}
 				data-current-animation={snapshot.diagnostics?.avatarCurrentAnimation ?? 'idle'}
+				data-previous-animation={snapshot.diagnostics?.avatarPreviousAnimation ?? ''}
+				data-mixer-time={snapshot.diagnostics?.avatarMixerTime.toFixed(3) ?? '0'}
+				data-action-time={snapshot.diagnostics?.avatarActionTime.toFixed(3) ?? '0'}
+				data-action-weight={snapshot.diagnostics?.avatarActionWeight.toFixed(3) ?? '0'}
+				data-active-action-count={snapshot.diagnostics?.avatarActiveActionCount ?? 0}
+				data-total-track-count={snapshot.diagnostics?.avatarTotalTrackCount ?? 0}
+				data-matched-track-count={snapshot.diagnostics?.avatarMatchedTrackCount ?? 0}
+				data-unmatched-track-count={snapshot.diagnostics?.avatarUnmatchedTrackCount ?? 0}
+				data-hips-bone-name={snapshot.diagnostics?.avatarHipsBoneName ?? ''}
+				data-left-upper-leg-bone-name={snapshot.diagnostics?.avatarLeftUpperLegBoneName ?? ''}
+				data-right-upper-leg-bone-name={snapshot.diagnostics?.avatarRightUpperLegBoneName ?? ''}
+				data-left-hand-bone-name={snapshot.diagnostics?.avatarLeftHandBoneName ?? ''}
+				data-right-hand-bone-name={snapshot.diagnostics?.avatarRightHandBoneName ?? ''}
+				data-hips-quaternion={snapshot.diagnostics?.avatarHipsQuaternion.join(',') ?? '0,0,0,1'}
+				data-left-upper-leg-quaternion={snapshot.diagnostics?.avatarLeftUpperLegQuaternion.join(
+					','
+				) ?? '0,0,0,1'}
+				data-right-upper-leg-quaternion={snapshot.diagnostics?.avatarRightUpperLegQuaternion.join(
+					','
+				) ?? '0,0,0,1'}
+				data-left-hand-quaternion={snapshot.diagnostics?.avatarLeftHandQuaternion.join(',') ??
+					'0,0,0,1'}
+				data-right-hand-quaternion={snapshot.diagnostics?.avatarRightHandQuaternion.join(',') ??
+					'0,0,0,1'}
 				data-avatar-error={snapshot.diagnostics?.avatarError ?? ''}
 				data-avatar-state={snapshot.avatar?.locomotionState ?? 'idle'}
 				data-avatar-speed={snapshot.avatar?.speed.toFixed(3) ?? '0'}

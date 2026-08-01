@@ -104,7 +104,25 @@ export class GameEngine {
 		avatarAnimationClips: 0,
 		avatarReady: false,
 		avatarCurrentAnimation: 'idle',
-		avatarError: null
+		avatarError: null,
+		avatarPreviousAnimation: null,
+		avatarMixerTime: 0,
+		avatarActionTime: 0,
+		avatarActionWeight: 0,
+		avatarActiveActionCount: 0,
+		avatarTotalTrackCount: 0,
+		avatarMatchedTrackCount: 0,
+		avatarUnmatchedTrackCount: 0,
+		avatarHipsBoneName: '',
+		avatarLeftUpperLegBoneName: '',
+		avatarRightUpperLegBoneName: '',
+		avatarLeftHandBoneName: '',
+		avatarRightHandBoneName: '',
+		avatarHipsQuaternion: [0, 0, 0, 1],
+		avatarLeftUpperLegQuaternion: [0, 0, 0, 1],
+		avatarRightUpperLegQuaternion: [0, 0, 0, 1],
+		avatarLeftHandQuaternion: [0, 0, 0, 1],
+		avatarRightHandQuaternion: [0, 0, 0, 1]
 	};
 
 	constructor(private readonly options: GameEngineOptions) {
@@ -356,6 +374,7 @@ export class GameEngine {
 
 	private recordAvatarMetrics(): void {
 		const avatarMetrics = this.avatar.diagnostics;
+		const debug = avatarMetrics.debug;
 		this.diagnostics.avatarUpdateMs = avatarMetrics.updateMs;
 		this.diagnostics.avatarObjects = avatarMetrics.objectCount;
 		this.diagnostics.avatarTriangles = avatarMetrics.triangles;
@@ -368,6 +387,32 @@ export class GameEngine {
 		this.diagnostics.avatarReady = avatarMetrics.ready;
 		this.diagnostics.avatarCurrentAnimation = avatarMetrics.animationBlend.currentAction;
 		this.diagnostics.avatarError = avatarMetrics.error;
+		this.diagnostics.avatarPreviousAnimation = debug.previousAction;
+		this.diagnostics.avatarMixerTime = debug.mixerTime;
+		this.diagnostics.avatarActionTime = debug.actionTime;
+		this.diagnostics.avatarActionWeight = debug.actionWeight;
+		this.diagnostics.avatarActiveActionCount = debug.activeActionCount;
+		this.diagnostics.avatarTotalTrackCount = debug.totalTrackCount;
+		this.diagnostics.avatarMatchedTrackCount = debug.matchedTrackCount;
+		this.diagnostics.avatarUnmatchedTrackCount = debug.unmatchedTrackCount;
+		this.diagnostics.avatarHipsBoneName = debug.hipsBoneName;
+		this.diagnostics.avatarLeftUpperLegBoneName = debug.leftUpperLegBoneName;
+		this.diagnostics.avatarRightUpperLegBoneName = debug.rightUpperLegBoneName;
+		this.diagnostics.avatarLeftHandBoneName = debug.leftHandBoneName;
+		this.diagnostics.avatarRightHandBoneName = debug.rightHandBoneName;
+		this.diagnostics.avatarHipsQuaternion = debug.hipsQuaternion;
+		this.diagnostics.avatarLeftUpperLegQuaternion = debug.leftUpperLegQuaternion;
+		this.diagnostics.avatarRightUpperLegQuaternion = debug.rightUpperLegQuaternion;
+		this.diagnostics.avatarLeftHandQuaternion = debug.leftHandQuaternion;
+		this.diagnostics.avatarRightHandQuaternion = debug.rightHandQuaternion;
+
+		if (import.meta.env.DEV || import.meta.env.MODE === 'test') {
+			(
+				globalThis as typeof globalThis & {
+					__ORELUNZA_AVATAR_DEBUG__?: typeof debug;
+				}
+			).__ORELUNZA_AVATAR_DEBUG__ = debug;
+		}
 	}
 
 	private breakTarget(): void {
