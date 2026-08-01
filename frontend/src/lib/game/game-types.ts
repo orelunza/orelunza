@@ -42,6 +42,7 @@ export interface GameSnapshot {
 	message: string | null;
 	error: string | null;
 	mobileLimited: boolean;
+	diagnostics?: GameDiagnosticsSnapshot;
 }
 
 export interface GameEngineOptions {
@@ -54,4 +55,24 @@ export interface GameEngineOptions {
 	onSnapshot?: (snapshot: GameSnapshot) => void;
 	onError?: (error: Error) => void;
 	onMove?: (position: WorldCoordinate, yaw: number, pitch: number) => void | Promise<void>;
+}
+
+export interface GameDiagnosticsSnapshot {
+	startCount: number;
+	activeLoops: number;
+	fps: number;
+	frameTimeMs: number;
+	physicsMs: number;
+	collisionCells: number;
+	cameraMs: number;
+	renderMs: number;
+	svelteCallbacksPerSecond: number;
+	backendCallsPerSecond: number;
+	hudUpdatesPerSecond: number;
+	chunksActive: number;
+	threeObjects: number;
+	drawCalls: number;
+	triangles: number;
+	worldRebuilds: number;
+	chunkRefreshes: number;
 }

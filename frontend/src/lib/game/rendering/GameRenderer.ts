@@ -29,8 +29,8 @@ export class GameRenderer {
 			alpha: false,
 			powerPreference: 'high-performance'
 		});
-		this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-		this.renderer.shadowMap.enabled = true;
+		this.renderer.setPixelRatio(1);
+		this.renderer.shadowMap.enabled = false;
 		configureSky(this.scene);
 		addWorldLighting(this.scene);
 		this.scene.add(this.selection.object);

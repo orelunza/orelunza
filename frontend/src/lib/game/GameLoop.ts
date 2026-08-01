@@ -7,7 +7,7 @@ const FIXED_STEP = 1 / 60;
 const MAX_ACCUMULATED = 0.18;
 
 export class GameLoop {
-	private frame = 0;
+	private frame: number | null = null;
 	private lastTime = 0;
 	private accumulator = 0;
 	private running = false;
@@ -25,8 +25,21 @@ export class GameLoop {
 	}
 
 	stop(): void {
+		if (!this.running && this.frame === null) {
+			return;
+		}
+
 		this.running = false;
-		cancelAnimationFrame(this.frame);
+		this.accumulator = 0;
+
+		if (this.frame !== null) {
+			cancelAnimationFrame(this.frame);
+			this.frame = null;
+		}
+	}
+
+	get isRunning(): boolean {
+		return this.running;
 	}
 
 	private readonly tick = (time: number): void => {

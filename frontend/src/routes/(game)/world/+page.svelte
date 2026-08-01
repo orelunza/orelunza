@@ -124,6 +124,38 @@
 		/>
 
 		{#if snapshot}
+			<div
+				class="sr-only"
+				data-testid="game-debug-state"
+				data-player-x={snapshot.player.position.x.toFixed(3)}
+				data-player-y={snapshot.player.position.y.toFixed(3)}
+				data-player-z={snapshot.player.position.z.toFixed(3)}
+				data-player-yaw={snapshot.player.yaw.toFixed(3)}
+				data-zone={snapshot.zoneName}
+				data-build-mode={snapshot.buildMode ? 'true' : 'false'}
+				data-pointer-locked={snapshot.pointerLocked ? 'true' : 'false'}
+				data-fps={snapshot.diagnostics?.fps.toFixed(1) ?? '0'}
+				data-frame-ms={snapshot.diagnostics?.frameTimeMs.toFixed(2) ?? '0'}
+				data-physics-ms={snapshot.diagnostics?.physicsMs.toFixed(2) ?? '0'}
+				data-camera-ms={snapshot.diagnostics?.cameraMs.toFixed(2) ?? '0'}
+				data-render-ms={snapshot.diagnostics?.renderMs.toFixed(2) ?? '0'}
+				data-collision-cells={snapshot.diagnostics?.collisionCells ?? 0}
+				data-callbacks-per-second={snapshot.diagnostics?.svelteCallbacksPerSecond.toFixed(1) ?? '0'}
+				data-backend-calls-per-second={snapshot.diagnostics?.backendCallsPerSecond.toFixed(1) ??
+					'0'}
+				data-hud-updates-per-second={snapshot.diagnostics?.hudUpdatesPerSecond.toFixed(1) ?? '0'}
+				data-chunks-active={snapshot.diagnostics?.chunksActive ?? 0}
+				data-three-objects={snapshot.diagnostics?.threeObjects ?? 0}
+				data-draw-calls={snapshot.diagnostics?.drawCalls ?? 0}
+				data-triangles={snapshot.diagnostics?.triangles ?? 0}
+				data-engine-starts={snapshot.diagnostics?.startCount ?? 0}
+				data-active-loops={snapshot.diagnostics?.activeLoops ?? 0}
+				data-world-rebuilds={snapshot.diagnostics?.worldRebuilds ?? 0}
+				data-chunk-refreshes={snapshot.diagnostics?.chunkRefreshes ?? 0}
+			>
+				Game state
+			</div>
+
 			<GameHud
 				{snapshot}
 				onHotbarSelect={(index) => {

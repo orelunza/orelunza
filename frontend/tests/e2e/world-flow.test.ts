@@ -1,6 +1,7 @@
 import {
 	expect,
 	test,
+	type Locator,
 	type Page,
 	type Request as PlaywrightRequest,
 	type Route
@@ -860,6 +861,39 @@ async function installCharacter(page: Page): Promise<void> {
 	);
 }
 
+async function playerPosition(locator: Locator): Promise<{
+	x: number;
+	y: number;
+	z: number;
+}> {
+	return {
+		x: Number(await locator.getAttribute('data-player-x')),
+		y: Number(await locator.getAttribute('data-player-y')),
+		z: Number(await locator.getAttribute('data-player-z'))
+	};
+}
+
+async function numericAttribute(locator: Locator, name: string): Promise<number> {
+	return Number(await locator.getAttribute(name));
+}
+
+async function keyDown(page: Page, code: string): Promise<void> {
+	await page.evaluate((keyCode) => {
+		window.dispatchEvent(new KeyboardEvent('keydown', { code: keyCode }));
+	}, code);
+}
+
+async function keyUp(page: Page, code: string): Promise<void> {
+	await page.evaluate((keyCode) => {
+		window.dispatchEvent(new KeyboardEvent('keyup', { code: keyCode }));
+	}, code);
+}
+
+async function pressKey(page: Page, code: string): Promise<void> {
+	await keyDown(page, code);
+	await keyUp(page, code);
+}
+
 test.describe('world flow', () => {
 	test('opens a full-screen voxel game without the dashboard shell', async ({ page }) => {
 		await installCityBackend(page);
@@ -881,6 +915,72 @@ test.describe('world flow', () => {
 		await expect(canvas).toHaveAttribute('data-camera', 'third-person');
 		await expect(page.getByText('Spawn Meadow')).toBeVisible();
 		await expect(page.getByText('The city lies beyond the meadow.')).toBeVisible();
+		const state = page.getByTestId('game-debug-state');
+		await expect(state).toHaveAttribute('data-zone', 'Spawn Meadow');
+		expect(Number(await state.getAttribute('data-player-y'))).toBeGreaterThan(9);
+		await page.waitForTimeout(1200);
+		expect(await numericAttribute(state, 'data-engine-starts')).toBe(1);
+		expect(await numericAttribute(state, 'data-active-loops')).toBe(1);
+		expect(await numericAttribute(state, 'data-chunks-active')).toBeLessThanOrEqual(9);
+		expect(await numericAttribute(state, 'data-callbacks-per-second')).toBeLessThanOrEqual(12);
+		expect(await numericAttribute(state, 'data-three-objects')).toBeLessThan(250);
+	});
+
+	test('moves forward, strafes correctly and sprints from spawn', async ({ page }) => {
+		test.setTimeout(60_000);
+		await installCityBackend(page);
+		await installCharacter(page);
+
+		await page.goto('/world');
+
+		const canvas = page.locator('canvas[aria-label="Orelunza voxel world"]');
+		await expect(canvas).toBeVisible({
+			timeout: 15_000
+		});
+
+		const state = page.getByTestId('game-debug-state');
+		await expect(state).toHaveAttribute('data-zone', 'Spawn Meadow');
+		const start = await playerPosition(state);
+
+		await canvas.click({
+			position: {
+				x: 120,
+				y: 120
+			}
+		});
+
+		await keyDown(page, 'KeyW');
+		await page.waitForTimeout(500);
+		await keyUp(page, 'KeyW');
+		const afterWalk = await playerPosition(state);
+		const walkDistance = Math.hypot(afterWalk.x - start.x, afterWalk.z - start.z);
+		expect(walkDistance).toBeGreaterThan(0.05);
+
+		await page.waitForTimeout(400);
+
+		await keyDown(page, 'ShiftLeft');
+		await keyDown(page, 'KeyW');
+		await page.waitForTimeout(700);
+		await keyUp(page, 'KeyW');
+		await keyUp(page, 'ShiftLeft');
+		const afterSprint = await playerPosition(state);
+		const sprintDistance = Math.hypot(afterSprint.x - afterWalk.x, afterSprint.z - afterWalk.z);
+		expect(sprintDistance).toBeGreaterThan(walkDistance * 1.1);
+
+		await keyDown(page, 'KeyA');
+		await page.waitForTimeout(350);
+		await keyUp(page, 'KeyA');
+		const afterLeft = await playerPosition(state);
+
+		await keyDown(page, 'KeyD');
+		await page.waitForTimeout(700);
+		await keyUp(page, 'KeyD');
+		const afterRight = await playerPosition(state);
+
+		expect(afterLeft.x - afterSprint.x).toBeLessThan(-0.05);
+		expect(afterRight.x - afterLeft.x).toBeGreaterThan(0.1);
+		expect(await numericAttribute(state, 'data-chunks-active')).toBeLessThanOrEqual(9);
+		expect(await numericAttribute(state, 'data-world-rebuilds')).toBeLessThanOrEqual(3);
 	});
 
 	test('supports inventory and hotbar selection', async ({ page }) => {
@@ -892,6 +992,7 @@ test.describe('world flow', () => {
 		await expect(page.locator('canvas[aria-label="Orelunza voxel world"]')).toBeVisible({
 			timeout: 15_000
 		});
+		await expect(page.getByTestId('game-debug-state')).toHaveAttribute('data-zone', 'Spawn Meadow');
 
 		await page.getByRole('button', { name: /Hotbar slot 3 Glass/ }).click({
 			force: true
@@ -901,7 +1002,7 @@ test.describe('world flow', () => {
 			'true'
 		);
 
-		await page.keyboard.press('KeyI');
+		await pressKey(page, 'KeyI');
 		await expect(page.getByRole('dialog', { name: 'Inventory' })).toBeVisible();
 	});
 
@@ -914,11 +1015,12 @@ test.describe('world flow', () => {
 		await expect(page.locator('canvas[aria-label="Orelunza voxel world"]')).toBeVisible({
 			timeout: 15_000
 		});
+		await expect(page.getByTestId('game-debug-state')).toHaveAttribute('data-zone', 'Spawn Meadow');
 
-		await page.keyboard.press('KeyB');
+		await pressKey(page, 'KeyB');
 		await expect(page.getByText('Build Mode')).toBeVisible();
 
-		await page.keyboard.press('Escape');
+		await pressKey(page, 'Escape');
 		await expect(page.getByRole('dialog', { name: 'Pause menu' })).toBeVisible();
 		await expect(page.getByRole('link', { name: 'Profile' })).toHaveAttribute('href', '/profile');
 	});

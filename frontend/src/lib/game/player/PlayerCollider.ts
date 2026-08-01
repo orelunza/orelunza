@@ -3,7 +3,17 @@ import type { BlockCoordinate, WorldCoordinate } from '../world/voxel-types';
 import type { PlayerState } from './PlayerState';
 
 export class PlayerCollider {
+	private cellsTested = 0;
+
 	constructor(private readonly world: VoxelWorld) {}
+
+	get lastCellsTested(): number {
+		return this.cellsTested;
+	}
+
+	resetFrameStats(): void {
+		this.cellsTested = 0;
+	}
 
 	intersectsPlayerBlock(player: PlayerState, block: BlockCoordinate): boolean {
 		return intersectsAabb(
@@ -27,17 +37,23 @@ export class PlayerCollider {
 	}
 
 	wouldCollide(player: PlayerState, position: WorldCoordinate): boolean {
-		const minX = Math.floor(position.x - player.radius);
-		const maxX = Math.floor(position.x + player.radius);
+		return this.wouldCollideAabb(position, player.radius, player.height);
+	}
+
+	wouldCollideAabb(position: WorldCoordinate, radius: number, height: number): boolean {
+		const minX = Math.floor(position.x - radius);
+		const maxX = Math.floor(position.x + radius);
 		const minY = Math.floor(position.y);
-		const maxY = Math.floor(position.y + player.height);
-		const minZ = Math.floor(position.z - player.radius);
-		const maxZ = Math.floor(position.z + player.radius);
+		const maxY = Math.floor(position.y + height);
+		const minZ = Math.floor(position.z - radius);
+		const maxZ = Math.floor(position.z + radius);
 
 		for (let x = minX; x <= maxX; x += 1) {
 			for (let y = minY; y <= maxY; y += 1) {
 				for (let z = minZ; z <= maxZ; z += 1) {
-					if (this.world.isSolidAt({ x, y, z })) {
+					this.cellsTested += 1;
+
+					if (this.world.isSolidLoadedAt({ x, y, z })) {
 						return true;
 					}
 				}
@@ -45,6 +61,13 @@ export class PlayerCollider {
 		}
 
 		return false;
+	}
+
+	isGrounded(player: PlayerState, position = player.position): boolean {
+		return this.wouldCollide(player, {
+			...position,
+			y: position.y - 0.06
+		});
 	}
 }
 
