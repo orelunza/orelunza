@@ -1,4 +1,9 @@
-import { clampWorldValue, distanceBetweenPoints, type WorldBounds, type WorldPoint } from '$lib/world/types';
+import {
+	clampWorldValue,
+	distanceBetweenPoints,
+	type WorldBounds,
+	type WorldPoint
+} from '$lib/world/types';
 
 export interface MovementSystemOptions {
 	initialPosition: WorldPoint;
@@ -103,7 +108,8 @@ export class MovementSystem {
 			direction.x !== 0 ||
 			direction.y !== 0 ||
 			(this.destinationValue !== null &&
-				distanceBetweenPoints(this.positionValue, this.destinationValue) > this.destinationTolerance);
+				distanceBetweenPoints(this.positionValue, this.destinationValue) >
+					this.destinationTolerance);
 
 		if (changed) {
 			this.onPositionChange?.(this.position);

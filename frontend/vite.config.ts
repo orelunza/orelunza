@@ -134,6 +134,10 @@ export default defineConfig(({ mode }) => {
 			strictPort: true
 		},
 
+		build: {
+			chunkSizeWarningLimit: 650
+		},
+
 		test: {
 			include: ['src/**/*.test.ts', 'src/**/*.spec.ts', 'tests/unit/**/*.test.ts'],
 			exclude: [

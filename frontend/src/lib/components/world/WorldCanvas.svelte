@@ -110,11 +110,7 @@
 	});
 
 	const containerClasses = $derived(
-		[
-			'relative overflow-hidden',
-			'bg-[var(--orelunza-background-soft)]',
-			className
-		]
+		['relative overflow-hidden', 'bg-[var(--orelunza-background-soft)]', className]
 			.filter(Boolean)
 			.join(' ')
 	);

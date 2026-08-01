@@ -62,14 +62,20 @@ export class InteractionSystem {
 
 	selectPlace(placeId: string | null): InteractionState {
 		this.selectedPlaceId = placeId;
-		this.stateValue = this.createState(this.stateValue.nearbyPlace, this.stateValue.distanceToNearbyPlace);
+		this.stateValue = this.createState(
+			this.stateValue.nearbyPlace,
+			this.stateValue.distanceToNearbyPlace
+		);
 
 		return this.state;
 	}
 
 	setCurrentPlace(placeId: string | null): InteractionState {
 		this.currentPlaceId = placeId;
-		this.stateValue = this.createState(this.stateValue.nearbyPlace, this.stateValue.distanceToNearbyPlace);
+		this.stateValue = this.createState(
+			this.stateValue.nearbyPlace,
+			this.stateValue.distanceToNearbyPlace
+		);
 
 		return this.state;
 	}
