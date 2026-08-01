@@ -96,7 +96,15 @@ export class GameEngine {
 		avatarUpdateMs: 0,
 		avatarObjects: 0,
 		avatarTriangles: 0,
-		avatarDrawCalls: 0
+		avatarDrawCalls: 0,
+		avatarSkinnedMeshes: 0,
+		avatarMaterials: 0,
+		avatarBones: 0,
+		avatarModelSource: 'loading',
+		avatarAnimationClips: 0,
+		avatarReady: false,
+		avatarCurrentAnimation: 'idle',
+		avatarError: null
 	};
 
 	constructor(private readonly options: GameEngineOptions) {
@@ -163,6 +171,8 @@ export class GameEngine {
 
 		try {
 			await this.persistence.load();
+			await this.avatar.ready;
+			this.recordAvatarMetrics();
 			this.refreshChunksForPlayer(true);
 			this.renderer.rebuildWorld(this.world);
 			this.diagnostics.worldRebuilds += 1;
@@ -350,6 +360,14 @@ export class GameEngine {
 		this.diagnostics.avatarObjects = avatarMetrics.objectCount;
 		this.diagnostics.avatarTriangles = avatarMetrics.triangles;
 		this.diagnostics.avatarDrawCalls = avatarMetrics.meshCount;
+		this.diagnostics.avatarSkinnedMeshes = avatarMetrics.skinnedMeshCount;
+		this.diagnostics.avatarMaterials = avatarMetrics.materialCount;
+		this.diagnostics.avatarBones = avatarMetrics.boneCount;
+		this.diagnostics.avatarModelSource = avatarMetrics.modelSource;
+		this.diagnostics.avatarAnimationClips = avatarMetrics.animationBlend.clipCount;
+		this.diagnostics.avatarReady = avatarMetrics.ready;
+		this.diagnostics.avatarCurrentAnimation = avatarMetrics.animationBlend.currentAction;
+		this.diagnostics.avatarError = avatarMetrics.error;
 	}
 
 	private breakTarget(): void {

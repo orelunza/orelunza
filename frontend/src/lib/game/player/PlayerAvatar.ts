@@ -4,54 +4,88 @@ import {
 	normalizeCharacterAppearance,
 	type CharacterAppearanceV1
 } from '../character/CharacterAppearance';
+import {
+	HumanoidAnimationController,
+	type HumanoidAnimationBlendSnapshot
+} from './HumanoidAnimationController';
 import { HumanoidAnimator } from './HumanoidAnimator';
-import { HumanoidRig } from './HumanoidRig';
+import { HumanoidModel, type HumanoidLoadStatus, type HumanoidModelSource } from './HumanoidModel';
 import type { HumanoidAnimationSnapshot } from './HumanoidPose';
 import type { PlayerState } from './PlayerState';
 
 export interface PlayerAvatarOptions {
 	groundHeightAt?: (x: number, z: number) => number;
+	allowFallback?: boolean;
 }
 
 export interface PlayerAvatarMetrics {
 	updateMs: number;
 	objectCount: number;
 	meshCount: number;
+	skinnedMeshCount: number;
+	materialCount: number;
+	boneCount: number;
 	triangles: number;
+	modelSource: HumanoidModelSource | HumanoidLoadStatus;
+	ready: boolean;
+	error: string | null;
+	animationBlend: HumanoidAnimationBlendSnapshot;
 	animation: HumanoidAnimationSnapshot;
 }
 
 export class PlayerAvatar {
-	readonly object: Group;
-	readonly rig: HumanoidRig;
+	readonly object = new Group();
 	readonly animator = new HumanoidAnimator();
+	readonly ready: Promise<void>;
+	private model: HumanoidModel | null = null;
+	private animationController: HumanoidAnimationController | null = null;
 	private readonly tempLeftFoot = new Vector3();
 	private readonly tempRightFoot = new Vector3();
 	private readonly tempForward = new Vector3();
 	private readonly tempRight = new Vector3();
 	private updateMs = 0;
+	private status: HumanoidLoadStatus = 'loading';
+	private error: string | null = null;
+	private disposed = false;
 	private lookTarget: Vector3 | null = null;
 
 	constructor(
 		appearance: CharacterAppearanceV1 = DEFAULT_CHARACTER_APPEARANCE,
 		private readonly options: PlayerAvatarOptions = {}
 	) {
-		this.rig = new HumanoidRig(normalizeCharacterAppearance(appearance));
-		this.object = this.rig.object;
+		this.object.name = 'playerAvatar';
+		this.ready = this.load(normalizeCharacterAppearance(appearance));
 	}
 
 	get diagnostics(): PlayerAvatarMetrics {
+		const metrics = this.model?.metrics ?? {
+			objectCount: 1,
+			meshCount: 0,
+			skinnedMeshCount: 0,
+			materialCount: 0,
+			boneCount: 0,
+			triangles: 0
+		};
+
 		return {
 			updateMs: this.updateMs,
-			objectCount: this.rig.objectCount,
-			meshCount: this.rig.meshCount,
-			triangles: this.rig.triangleCount,
+			objectCount: metrics.objectCount,
+			meshCount: metrics.meshCount,
+			skinnedMeshCount: metrics.skinnedMeshCount,
+			materialCount: metrics.materialCount,
+			boneCount: metrics.boneCount,
+			triangles: metrics.triangles,
+			modelSource: this.model?.source ?? this.status,
+			ready: this.status === 'ready',
+			error: this.error,
+			animationBlend: this.animationController?.snapshot ?? emptyBlendSnapshot(),
 			animation: this.animator.diagnostics
 		};
 	}
 
-	updateAppearance(appearance: CharacterAppearanceV1): void {
-		this.rig.updateAppearance(normalizeCharacterAppearance(appearance));
+	async updateAppearance(appearance: CharacterAppearanceV1): Promise<void> {
+		await this.ready;
+		this.model?.updateAppearance(normalizeCharacterAppearance(appearance));
 	}
 
 	setHandTarget(): void {
@@ -80,19 +114,74 @@ export class PlayerAvatar {
 			grounded: player.onGround,
 			deltaSeconds
 		});
+		const snapshot = this.animator.diagnostics;
+
+		this.animationController?.update(snapshot.locomotionState, snapshot.speed, deltaSeconds);
+		this.model?.applyPostAnimationAdjustments();
 
 		if (player.onGround) {
 			this.applyFootGrounding(player, pose);
 		}
 
-		this.rig.applyPose(pose);
-		this.object.position.set(player.position.x, player.position.y + 0.12, player.position.z);
+		this.model?.applyPose(pose);
+		this.object.position.set(
+			player.position.x,
+			player.position.y + (this.model?.modelOffsetY ?? 0),
+			player.position.z
+		);
 		this.object.rotation.y = this.animator.bodyYaw;
 		this.updateMs = performance.now() - startedAt;
 	}
 
+	updatePreview(deltaSeconds: number): void {
+		this.animationController?.playPreview(deltaSeconds);
+		this.model?.applyPostAnimationAdjustments();
+	}
+
 	dispose(): void {
-		this.rig.dispose();
+		this.disposed = true;
+		this.animationController?.dispose();
+		this.model?.dispose();
+		this.object.clear();
+	}
+
+	private async load(appearance: CharacterAppearanceV1): Promise<void> {
+		try {
+			const model = await HumanoidModel.loadDefault(appearance);
+
+			if (this.disposed) {
+				model.dispose();
+
+				return;
+			}
+
+			this.model = model;
+			this.animationController = new HumanoidAnimationController(model.object, model.clips, {
+				strict: true
+			});
+			this.object.add(model.object);
+			this.status = 'ready';
+		} catch (error) {
+			if (!this.options.allowFallback) {
+				this.status = 'failed';
+				this.error = error instanceof Error ? error.message : String(error);
+				throw error;
+			}
+
+			const model = HumanoidModel.createFallback(appearance);
+
+			if (this.disposed) {
+				model.dispose();
+
+				return;
+			}
+
+			this.model = model;
+			this.animationController = new HumanoidAnimationController(model.object, model.clips);
+			this.object.add(model.object);
+			this.status = 'ready';
+			this.error = error instanceof Error ? error.message : String(error);
+		}
 	}
 
 	private applyFootGrounding(
@@ -101,7 +190,7 @@ export class PlayerAvatar {
 	): void {
 		const groundHeightAt = this.options.groundHeightAt;
 
-		if (!groundHeightAt) {
+		if (!groundHeightAt || this.model?.source !== 'procedural-fallback') {
 			return;
 		}
 
@@ -122,4 +211,16 @@ export class PlayerAvatar {
 		pose.leftFootLift += Math.max(-0.03, Math.min(0.08, leftGround - player.position.y));
 		pose.rightFootLift += Math.max(-0.03, Math.min(0.08, rightGround - player.position.y));
 	}
+}
+
+function emptyBlendSnapshot(): HumanoidAnimationBlendSnapshot {
+	return {
+		activeState: 'idle',
+		currentAction: 'idle',
+		previousAction: null,
+		weights: {},
+		clipCount: 0,
+		mixerTime: 0,
+		transitionCount: 0
+	};
 }

@@ -156,6 +156,15 @@
 				data-avatar-objects={snapshot.diagnostics?.avatarObjects ?? 0}
 				data-avatar-triangles={snapshot.diagnostics?.avatarTriangles ?? 0}
 				data-avatar-draw-calls={snapshot.diagnostics?.avatarDrawCalls ?? 0}
+				data-avatar-ready={snapshot.diagnostics?.avatarReady ? 'true' : 'false'}
+				data-avatar-model-source={snapshot.diagnostics?.avatarModelSource ?? ''}
+				data-model-source={snapshot.diagnostics?.avatarModelSource ?? ''}
+				data-skinned-mesh-count={snapshot.diagnostics?.avatarSkinnedMeshes ?? 0}
+				data-avatar-materials={snapshot.diagnostics?.avatarMaterials ?? 0}
+				data-avatar-bones={snapshot.diagnostics?.avatarBones ?? 0}
+				data-avatar-animation-clips={snapshot.diagnostics?.avatarAnimationClips ?? 0}
+				data-current-animation={snapshot.diagnostics?.avatarCurrentAnimation ?? 'idle'}
+				data-avatar-error={snapshot.diagnostics?.avatarError ?? ''}
 				data-avatar-state={snapshot.avatar?.locomotionState ?? 'idle'}
 				data-avatar-speed={snapshot.avatar?.speed.toFixed(3) ?? '0'}
 				data-avatar-gait-phase={snapshot.avatar?.gaitPhase.toFixed(3) ?? '0'}

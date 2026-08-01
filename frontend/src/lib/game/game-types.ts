@@ -84,4 +84,12 @@ export interface GameDiagnosticsSnapshot {
 	avatarObjects: number;
 	avatarTriangles: number;
 	avatarDrawCalls: number;
+	avatarSkinnedMeshes: number;
+	avatarMaterials: number;
+	avatarBones: number;
+	avatarModelSource: string;
+	avatarAnimationClips: number;
+	avatarReady: boolean;
+	avatarCurrentAnimation: string;
+	avatarError: string | null;
 }

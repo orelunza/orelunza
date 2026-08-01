@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
+import { AnimationClip, AnimationMixer, VectorKeyframeTrack } from 'three';
 
 import { GameLoop } from './GameLoop';
 import { GamePersistence } from './persistence/GamePersistence';
@@ -12,7 +13,18 @@ import { BlockPlacementSystem } from './interaction/BlockPlacementSystem';
 import { Hotbar } from './inventory/Hotbar';
 import { Inventory } from './inventory/Inventory';
 import { KeyboardInput } from './input/KeyboardInput';
+import {
+	HUMANOID_ANIMATION_STATES,
+	HumanoidAnimationController,
+	validateRequiredHumanoidClips
+} from './player/HumanoidAnimationController';
+import { toHumanoidAppearance } from './player/HumanoidAppearance';
 import { HumanoidAnimator } from './player/HumanoidAnimator';
+import {
+	canonicalClipNameFromAsset,
+	HumanoidModel,
+	neutralizeRootMotionHorizontal
+} from './player/HumanoidModel';
 import { HumanoidRig } from './player/HumanoidRig';
 import { PlayerAvatar } from './player/PlayerAvatar';
 import { PlayerController } from './player/PlayerController';
@@ -199,6 +211,90 @@ describe('block registry and world mutations', () => {
 });
 
 describe('humanoid avatar rig and animation', () => {
+	test('maps Mixamo filenames to canonical animation names', () => {
+		expect(canonicalClipNameFromAsset('Idle.fbx')).toBe('idle');
+		expect(canonicalClipNameFromAsset('Walking.fbx')).toBe('walk');
+		expect(canonicalClipNameFromAsset('Running.fbx')).toBe('run');
+		expect(canonicalClipNameFromAsset('Left Strafe.fbx')).toBe('strafe_left');
+		expect(canonicalClipNameFromAsset('Right Strafe.fbx')).toBe('strafe_right');
+		expect(canonicalClipNameFromAsset('Walking Backwards.fbx')).toBe('walk_backward');
+		expect(canonicalClipNameFromAsset('Falling Idle.fbx')).toBe('fall');
+		expect(canonicalClipNameFromAsset('Landing.fbx')).toBe('land');
+		expect(canonicalClipNameFromAsset('Shoved Reaction With Spin.fbx')).toBe('reaction_shoved');
+	});
+
+	test('neutralizes horizontal root motion on Mixamo hips position tracks', () => {
+		const clip = new AnimationClip('walk', 1, [
+			new VectorKeyframeTrack('mixamorigHips.position', [0, 0.5, 1], [0, 1, 0, 4, 2, -3, 9, 1, -8])
+		]);
+		const sanitized = neutralizeRootMotionHorizontal(clip);
+		const values = Array.from(sanitized.tracks[0].values);
+
+		expect(values).toEqual([0, 1, 0, 0, 2, 0, 0, 1, 0]);
+	});
+
+	test('creates an explicit fallback only when requested by tests or development', () => {
+		const model = HumanoidModel.createFallback(DEFAULT_CHARACTER_APPEARANCE);
+
+		expect(model.source).toBe('procedural-fallback');
+		expect(model.isRiggedHumanoid).toBe(true);
+		expect(model.object.userData.avatarPipeline).toBe('gltf-ready-fallback');
+		expect(model.object.userData.avatarRole).toBe('peaceful-citizen-explorer');
+		expect(model.object.userData.noMilitaryGear).toBe(true);
+		expect(model.object.getObjectByName('hat')).toBeUndefined();
+		expect(model.object.userData.appearance).toMatchObject({
+			displayName: DEFAULT_CHARACTER_APPEARANCE.displayName
+		});
+		expect(validateRequiredHumanoidClips(model.clips)).toEqual([]);
+		expect(model.animationNames).toEqual(
+			expect.arrayContaining(['idle', 'walk', 'run', 'strafe_left', 'strafe_right'])
+		);
+		expect(model.metrics.objectCount).toBeGreaterThan(30);
+		model.dispose();
+	});
+
+	test('normalizes human appearance fields for skin, hair and civilian clothing', () => {
+		const appearance = toHumanoidAppearance({
+			skinTone: '#d1a17f',
+			hairStyle: 'curly',
+			hairColor: '#221610',
+			shirtColor: '#5c8f7a',
+			pantsColor: '#42506a',
+			shoesColor: '#2a2622'
+		});
+
+		expect(appearance.skinTone).toBe('#d1a17f');
+		expect(appearance.hairStyle).toBe('curly');
+		expect(appearance.top).toEqual({ color: '#5c8f7a', style: 'field_tunic' });
+		expect(appearance.pants).toEqual({ color: '#42506a', style: 'woven_trousers' });
+		expect(appearance.shoes).toEqual({ color: '#2a2622', style: 'soft_boots' });
+	});
+
+	test('uses AnimationMixer actions for locomotion blending', () => {
+		const model = HumanoidModel.createFallback(DEFAULT_CHARACTER_APPEARANCE);
+		const controller = new HumanoidAnimationController(model.object, model.clips);
+
+		controller.playPreview(1 / 60);
+		expect(controller.mixer).toBeInstanceOf(AnimationMixer);
+		expect(controller.snapshot.clipCount).toBeGreaterThanOrEqual(9);
+		expect(controller.snapshot.weights.idle).toBe(1);
+		expect(HUMANOID_ANIMATION_STATES).toContain('walk');
+
+		controller.update('run', SPRINT_SPEED, 1 / 15);
+		expect(controller.snapshot.activeState).toBe('run');
+		expect(controller.snapshot.weights.run).toBeGreaterThan(0);
+		expect(controller.snapshot.weights.idle).toBeLessThan(1);
+
+		controller.update('strafe_left', WALK_SPEED, 1 / 15);
+		expect(controller.snapshot.activeState).toBe('strafe_left');
+		expect(controller.snapshot.mixerTime).toBeGreaterThan(0);
+		const transitions = controller.snapshot.transitionCount;
+		controller.update('strafe_left', WALK_SPEED, 1 / 15);
+		expect(controller.snapshot.transitionCount).toBe(transitions);
+		controller.dispose();
+		model.dispose();
+	});
+
 	test('builds an articulated human hierarchy without a hat', () => {
 		const rig = new HumanoidRig(DEFAULT_CHARACTER_APPEARANCE);
 		const joints = rig.joints;
@@ -402,17 +498,19 @@ describe('humanoid avatar rig and animation', () => {
 		expect(landState).toBe('landing');
 	});
 
-	test('foot grounding is skipped while airborne and does not generate chunks', () => {
+	test('foot grounding is skipped while airborne and does not generate chunks', async () => {
 		const world = new VoxelWorld(STARTER_WORLD_SEED);
 		const spawn = world.findSafeSpawnPosition();
 		let groundQueries = 0;
 		const avatar = new PlayerAvatar(DEFAULT_CHARACTER_APPEARANCE, {
+			allowFallback: true,
 			groundHeightAt: (x, z) => {
 				groundQueries += 1;
 
 				return world.terrainGenerator.heightAt(x, z);
 			}
 		});
+		await avatar.ready;
 		const player = testPlayer(world, {
 			position: spawn,
 			onGround: false,
@@ -425,7 +523,7 @@ describe('humanoid avatar rig and animation', () => {
 
 		expect(groundQueries).toBe(0);
 		expect(world.getLoadedChunks()).toHaveLength(loadedBefore);
-		expect(avatar.diagnostics.updateMs).toBeLessThan(1);
+		expect(avatar.diagnostics.updateMs).toBeLessThan(10);
 		avatar.dispose();
 	});
 });

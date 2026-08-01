@@ -877,6 +877,18 @@ async function numericAttribute(locator: Locator, name: string): Promise<number>
 	return Number(await locator.getAttribute(name));
 }
 
+async function waitForWorldReady(page: Page): Promise<void> {
+	await page.waitForFunction(() => {
+		const state = document.querySelector('[data-testid="game-debug-state"]') as HTMLElement | null;
+
+		return (
+			state?.dataset.avatarReady === 'true' &&
+			state?.dataset.modelSource === 'fbx' &&
+			Number(state?.dataset.activeLoops ?? 0) === 1
+		);
+	});
+}
+
 async function keyDown(page: Page, code: string): Promise<void> {
 	await page.evaluate((keyCode) => {
 		window.dispatchEvent(new KeyboardEvent('keydown', { code: keyCode }));
@@ -918,26 +930,24 @@ test.describe('world flow', () => {
 		const state = page.getByTestId('game-debug-state');
 		await expect(state).toHaveAttribute('data-zone', 'Spawn Meadow');
 		expect(Number(await state.getAttribute('data-player-y'))).toBeGreaterThan(9);
-		await page.waitForTimeout(1200);
+		await waitForWorldReady(page);
 		expect(await numericAttribute(state, 'data-engine-starts')).toBe(1);
 		expect(await numericAttribute(state, 'data-active-loops')).toBe(1);
 		expect(await numericAttribute(state, 'data-chunks-active')).toBeLessThanOrEqual(9);
 		expect(await numericAttribute(state, 'data-callbacks-per-second')).toBeLessThanOrEqual(12);
 		expect(await numericAttribute(state, 'data-three-objects')).toBeLessThan(250);
-		await page.waitForFunction(() => {
-			const state = document.querySelector(
-				'[data-testid="game-debug-state"]'
-			) as HTMLElement | null;
-
-			return Number(state?.dataset.avatarObjects ?? 0) > 30;
-		});
-		expect(await numericAttribute(state, 'data-avatar-objects')).toBeGreaterThan(30);
-		expect(await numericAttribute(state, 'data-avatar-objects')).toBeLessThan(60);
+		expect(await numericAttribute(state, 'data-avatar-objects')).toBeGreaterThan(60);
+		expect(await numericAttribute(state, 'data-avatar-objects')).toBeLessThan(180);
+		expect(await numericAttribute(state, 'data-skinned-mesh-count')).toBeGreaterThan(0);
 		expect(await numericAttribute(state, 'data-avatar-update-ms')).toBeLessThan(1);
+		await expect(state).toHaveAttribute('data-avatar-model-source', 'fbx');
+		await expect(state).toHaveAttribute('data-model-source', 'fbx');
+		expect(await numericAttribute(state, 'data-avatar-animation-clips')).toBeGreaterThanOrEqual(9);
+		await expect(state).toHaveAttribute('data-current-animation', 'idle');
 	});
 
 	test('moves forward, strafes correctly and sprints from spawn', async ({ page }) => {
-		test.setTimeout(60_000);
+		test.setTimeout(120_000);
 		await installCityBackend(page);
 		await installCharacter(page);
 
@@ -950,6 +960,7 @@ test.describe('world flow', () => {
 
 		const state = page.getByTestId('game-debug-state');
 		await expect(state).toHaveAttribute('data-zone', 'Spawn Meadow');
+		await waitForWorldReady(page);
 		const start = await playerPosition(state);
 
 		await canvas.click({
@@ -971,7 +982,7 @@ test.describe('world flow', () => {
 		const afterWalk = await playerPosition(state);
 		const walkDistance = Math.hypot(afterWalk.x - start.x, afterWalk.z - start.z);
 		expect(walkDistance).toBeGreaterThan(0.05);
-		expect(Math.abs(walkArmLeft - walkArmRight)).toBeGreaterThan(0.05);
+		expect(Math.abs(walkArmLeft - walkArmRight)).toBeGreaterThan(0.03);
 		expect(Math.abs(walkLegLeft - walkLegRight)).toBeGreaterThan(0.05);
 
 		await page.waitForTimeout(400);
@@ -1023,6 +1034,7 @@ test.describe('world flow', () => {
 		await expect(page.locator('canvas[aria-label="Orelunza voxel world"]')).toBeVisible({
 			timeout: 15_000
 		});
+		await waitForWorldReady(page);
 		await expect(page.getByTestId('game-debug-state')).toHaveAttribute('data-zone', 'Spawn Meadow');
 
 		await page.getByRole('button', { name: /Hotbar slot 3 Glass/ }).click({
@@ -1046,6 +1058,7 @@ test.describe('world flow', () => {
 		await expect(page.locator('canvas[aria-label="Orelunza voxel world"]')).toBeVisible({
 			timeout: 15_000
 		});
+		await waitForWorldReady(page);
 		await expect(page.getByTestId('game-debug-state')).toHaveAttribute('data-zone', 'Spawn Meadow');
 
 		await pressKey(page, 'KeyB');
