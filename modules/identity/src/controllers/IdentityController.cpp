@@ -24,6 +24,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace orelunza::identity::controllers
 {
@@ -117,11 +118,17 @@ namespace orelunza::identity::controllers
         const vix::Request &request)
     {
       const auto body = request.json();
+      auto display_name = read_json_string(body, "display_name");
+
+      if (display_name.empty())
+      {
+        display_name = read_json_string(body, "displayName");
+      }
 
       return http::RegisterRequest{
           read_json_string(body, "email"),
           read_json_string(body, "password"),
-          read_json_string(body, "display_name"),
+          std::move(display_name),
           read_json_string(body, "avatar")};
     }
 

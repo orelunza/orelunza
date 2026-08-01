@@ -1,0 +1,1043 @@
+import {
+	expect,
+	test,
+	type Page,
+	type Request as PlaywrightRequest,
+	type Route
+} from '@playwright/test';
+
+interface TestRegion {
+	id: string;
+	name: string;
+	slug: string;
+	description: string;
+
+	enabled: boolean;
+	created_at: number;
+	updated_at: number;
+}
+
+interface TestPlace {
+	id: string;
+	region_id: string;
+
+	name: string;
+	description: string;
+	type: string;
+
+	position_x: number;
+	position_y: number;
+
+	enabled: boolean;
+	created_at: number;
+	updated_at: number;
+}
+
+interface TestPosition {
+	human_id: string;
+	region_id: string;
+	place_id: string | null;
+
+	position_x: number;
+	position_y: number;
+
+	updated_at: number;
+}
+
+interface TestBiome {
+	id: string;
+	name: string;
+	slug: string;
+	description: string;
+
+	terrain_type: string;
+	vegetation_type: string;
+
+	enabled: boolean;
+	created_at: number;
+	updated_at: number;
+}
+
+interface TestNaturalArea {
+	id: string;
+	biome_id: string;
+	region_id: string;
+	place_id: string | null;
+
+	name: string;
+	description: string;
+
+	enabled: boolean;
+	created_at: number;
+	updated_at: number;
+}
+
+interface TestEnvironment {
+	natural_area_id: string;
+
+	terrain_condition: string;
+	vegetation_condition: string;
+	ambient_description: string;
+
+	vegetation_density: number;
+	water_level: number;
+
+	updated_at: number;
+}
+
+interface CityBackendState {
+	position: TestPosition;
+	moveRequests: Array<Record<string, unknown>>;
+}
+
+const NOW = 1_788_000_000;
+
+const IDENTITY = {
+	account_id: 'account-city-e2e',
+	human_id: 'human-city-e2e',
+	persona_id: 'persona-city-e2e',
+
+	email: 'citizen@orelunza.test',
+	display_name: 'Forest Citizen',
+	avatar: '',
+
+	active: true,
+	email_verified: true,
+
+	session_id: 'session-city-e2e',
+	session_expires_at: 1_799_000_000
+};
+
+const REGIONS: TestRegion[] = [
+	{
+		id: 'region-green',
+		name: 'Green Quarter',
+		slug: 'green-quarter',
+
+		description: 'A calm district of trees, gardens and old paths.',
+
+		enabled: true,
+		created_at: NOW,
+		updated_at: NOW
+	},
+
+	{
+		id: 'region-river',
+		name: 'River District',
+		slug: 'river-district',
+
+		description: 'A quiet district built alongside the river.',
+
+		enabled: true,
+		created_at: NOW,
+		updated_at: NOW
+	}
+];
+
+const PLACES: TestPlace[] = [
+	{
+		id: 'place-garden',
+		region_id: 'region-green',
+
+		name: 'Community Garden',
+
+		description: 'A shared garden where citizens can rest among plants.',
+
+		type: 'garden',
+
+		position_x: 220,
+		position_y: 260,
+
+		enabled: true,
+		created_at: NOW,
+		updated_at: NOW
+	},
+
+	{
+		id: 'place-library',
+		region_id: 'region-green',
+
+		name: 'Old Library',
+
+		description: 'A silent library filled with books and warm wooden rooms.',
+
+		type: 'library',
+
+		position_x: 520,
+		position_y: 330,
+
+		enabled: true,
+		created_at: NOW,
+		updated_at: NOW
+	},
+
+	{
+		id: 'place-dock',
+		region_id: 'region-river',
+
+		name: 'River Dock',
+
+		description: 'A wooden dock overlooking the slow river.',
+
+		type: 'dock',
+
+		position_x: 310,
+		position_y: 420,
+
+		enabled: true,
+		created_at: NOW,
+		updated_at: NOW
+	}
+];
+
+const BIOMES: TestBiome[] = [
+	{
+		id: 'biome-forest',
+		name: 'Temperate Forest',
+		slug: 'temperate-forest',
+
+		description: 'A green biome with trees, grass and mild water levels.',
+
+		terrain_type: 'forest',
+		vegetation_type: 'woodland',
+
+		enabled: true,
+		created_at: NOW,
+		updated_at: NOW
+	},
+
+	{
+		id: 'biome-wetland',
+		name: 'River Wetland',
+		slug: 'river-wetland',
+
+		description: 'A wet biome shaped by the nearby river.',
+
+		terrain_type: 'wetland',
+		vegetation_type: 'river grass',
+
+		enabled: true,
+		created_at: NOW,
+		updated_at: NOW
+	}
+];
+
+const AREAS: TestNaturalArea[] = [
+	{
+		id: 'area-green',
+		biome_id: 'biome-forest',
+		region_id: 'region-green',
+		place_id: null,
+
+		name: 'Green Quarter Woodland',
+
+		description: 'The regional woodland surrounding Green Quarter.',
+
+		enabled: true,
+		created_at: NOW,
+		updated_at: NOW
+	},
+
+	{
+		id: 'area-library',
+		biome_id: 'biome-forest',
+		region_id: 'region-green',
+		place_id: 'place-library',
+
+		name: 'Library Garden',
+
+		description: 'An old garden growing quietly around the library.',
+
+		enabled: true,
+		created_at: NOW,
+		updated_at: NOW
+	},
+
+	{
+		id: 'area-river',
+		biome_id: 'biome-wetland',
+		region_id: 'region-river',
+		place_id: null,
+
+		name: 'River District Wetland',
+
+		description: 'The river and wet grass surrounding the district.',
+
+		enabled: true,
+		created_at: NOW,
+		updated_at: NOW
+	},
+
+	{
+		id: 'area-dock',
+		biome_id: 'biome-wetland',
+		region_id: 'region-river',
+		place_id: 'place-dock',
+
+		name: 'Dock Riverside',
+
+		description: 'The immediate riverside environment around the dock.',
+
+		enabled: true,
+		created_at: NOW,
+		updated_at: NOW
+	}
+];
+
+const ENVIRONMENTS: TestEnvironment[] = [
+	{
+		natural_area_id: 'area-green',
+
+		terrain_condition: 'healthy',
+		vegetation_condition: 'growing',
+
+		ambient_description: 'Leaves move softly above the quiet paths.',
+
+		vegetation_density: 0.82,
+		water_level: 0.34,
+
+		updated_at: NOW
+	},
+
+	{
+		natural_area_id: 'area-library',
+
+		terrain_condition: 'stable',
+		vegetation_condition: 'mature',
+
+		ambient_description: 'Old trees surround the library in complete silence.',
+
+		vegetation_density: 0.76,
+		water_level: 0.25,
+
+		updated_at: NOW
+	},
+
+	{
+		natural_area_id: 'area-river',
+
+		terrain_condition: 'wet',
+		vegetation_condition: 'dense',
+
+		ambient_description: 'Water moves slowly beside the tall river grass.',
+
+		vegetation_density: 0.68,
+		water_level: 0.88,
+
+		updated_at: NOW
+	},
+
+	{
+		natural_area_id: 'area-dock',
+
+		terrain_condition: 'damp',
+		vegetation_condition: 'healthy',
+
+		ambient_description: 'The dock creaks gently above the moving water.',
+
+		vegetation_density: 0.48,
+		water_level: 0.94,
+
+		updated_at: NOW
+	}
+];
+
+function normalizedPath(request: PlaywrightRequest): string {
+	const pathname = new URL(request.url()).pathname;
+
+	const normalized = pathname.replace(/\/+$/, '');
+
+	return normalized || '/';
+}
+
+function responseHeaders(request: PlaywrightRequest): Record<string, string> {
+	const origin = request.headers().origin;
+
+	return {
+		'content-type': 'application/json; charset=utf-8',
+
+		'access-control-allow-origin': origin || '*',
+
+		'access-control-allow-credentials': 'true',
+
+		'access-control-allow-methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
+
+		'access-control-allow-headers': 'content-type, accept, authorization, x-request-id'
+	};
+}
+
+async function fulfillJson(route: Route, payload: unknown, status = 200): Promise<void> {
+	await route.fulfill({
+		status,
+
+		headers: responseHeaders(route.request()),
+
+		body: JSON.stringify(payload)
+	});
+}
+
+function readJsonBody(request: PlaywrightRequest): Record<string, unknown> {
+	try {
+		const payload = request.postDataJSON();
+
+		if (typeof payload === 'object' && payload !== null && !Array.isArray(payload)) {
+			return payload as Record<string, unknown>;
+		}
+	} catch {
+		/*
+		 * Invalid test request bodies are represented as an empty object.
+		 */
+	}
+
+	return {};
+}
+
+function findRegion(regionId: string): TestRegion | undefined {
+	return REGIONS.find((region) => region.id === regionId);
+}
+
+function findPlace(placeId: string): TestPlace | undefined {
+	return PLACES.find((place) => place.id === placeId);
+}
+
+function placesForRegion(regionId: string): TestPlace[] {
+	return PLACES.filter((place) => place.region_id === regionId);
+}
+
+function findBiome(biomeId: string): TestBiome | undefined {
+	return BIOMES.find((biome) => biome.id === biomeId);
+}
+
+function findArea(areaId: string): TestNaturalArea | undefined {
+	return AREAS.find((area) => area.id === areaId);
+}
+
+function areaForRegion(regionId: string): TestNaturalArea | undefined {
+	return AREAS.find((area) => area.region_id === regionId && area.place_id === null);
+}
+
+function areaForPlace(placeId: string): TestNaturalArea | undefined {
+	return AREAS.find((area) => area.place_id === placeId);
+}
+
+function findEnvironment(areaId: string): TestEnvironment | undefined {
+	return ENVIRONMENTS.find((environment) => environment.natural_area_id === areaId);
+}
+
+function identityResponse(): Record<string, unknown> {
+	return {
+		ok: true,
+
+		identity: IDENTITY,
+		profile: IDENTITY,
+		session: IDENTITY,
+
+		...IDENTITY
+	};
+}
+
+function regionResponse(region: TestRegion): Record<string, unknown> {
+	return {
+		ok: true,
+		region,
+		...region
+	};
+}
+
+function placeResponse(place: TestPlace): Record<string, unknown> {
+	return {
+		ok: true,
+		place,
+		...place
+	};
+}
+
+function areaResponse(area: TestNaturalArea | undefined): Record<string, unknown> {
+	return {
+		ok: true,
+
+		area: area ?? null,
+		natural_area: area ?? null,
+		areas: area ? [area] : []
+	};
+}
+
+function environmentResponse(environment: TestEnvironment | undefined): Record<string, unknown> {
+	return {
+		ok: true,
+
+		environment: environment ?? null,
+
+		state: environment ?? null,
+
+		environment_state: environment ?? null
+	};
+}
+
+async function installCityBackend(page: Page): Promise<CityBackendState> {
+	const state: CityBackendState = {
+		position: {
+			human_id: IDENTITY.human_id,
+
+			region_id: 'region-green',
+
+			place_id: 'place-garden',
+
+			position_x: 220,
+			position_y: 260,
+
+			updated_at: NOW
+		},
+
+		moveRequests: []
+	};
+
+	await page.route('**/api/**', async (route) => {
+		const request = route.request();
+
+		const method = request.method().toUpperCase();
+
+		const pathname = normalizedPath(request);
+
+		if (method === 'OPTIONS') {
+			await route.fulfill({
+				status: 204,
+				headers: responseHeaders(request)
+			});
+
+			return;
+		}
+
+		if (method === 'GET' && pathname === '/api/identity/me') {
+			await fulfillJson(route, identityResponse());
+
+			return;
+		}
+
+		if (method === 'POST' && pathname === '/api/identity/logout') {
+			await fulfillJson(route, {
+				ok: true
+			});
+
+			return;
+		}
+
+		if (method === 'GET' && pathname === '/api/world') {
+			await fulfillJson(route, {
+				ok: true,
+
+				id: 'world-orelunza',
+				world_id: 'world-orelunza',
+
+				name: 'Orelunza',
+
+				regions: REGIONS
+			});
+
+			return;
+		}
+
+		if (method === 'GET' && pathname === '/api/world/regions') {
+			await fulfillJson(route, {
+				ok: true,
+				regions: REGIONS
+			});
+
+			return;
+		}
+
+		const regionPlacesMatch = pathname.match(/^\/api\/world\/regions\/([^/]+)\/places$/);
+
+		if (method === 'GET' && regionPlacesMatch) {
+			const regionId = decodeURIComponent(regionPlacesMatch[1]);
+
+			const region = findRegion(regionId);
+
+			if (!region) {
+				await fulfillJson(
+					route,
+					{
+						ok: false,
+						error: 'region_not_found',
+
+						message: 'The requested region does not exist.'
+					},
+					404
+				);
+
+				return;
+			}
+
+			await fulfillJson(route, {
+				ok: true,
+
+				region,
+				places: placesForRegion(regionId)
+			});
+
+			return;
+		}
+
+		const regionMatch = pathname.match(/^\/api\/world\/regions\/([^/]+)$/);
+
+		if (method === 'GET' && regionMatch) {
+			const region = findRegion(decodeURIComponent(regionMatch[1]));
+
+			if (!region) {
+				await fulfillJson(
+					route,
+					{
+						ok: false,
+						error: 'region_not_found',
+
+						message: 'The requested region does not exist.'
+					},
+					404
+				);
+
+				return;
+			}
+
+			await fulfillJson(route, regionResponse(region));
+
+			return;
+		}
+
+		const placeMatch = pathname.match(/^\/api\/world\/places\/([^/]+)$/);
+
+		if (method === 'GET' && placeMatch) {
+			const place = findPlace(decodeURIComponent(placeMatch[1]));
+
+			if (!place) {
+				await fulfillJson(
+					route,
+					{
+						ok: false,
+						error: 'place_not_found',
+
+						message: 'The requested place does not exist.'
+					},
+					404
+				);
+
+				return;
+			}
+
+			await fulfillJson(route, placeResponse(place));
+
+			return;
+		}
+
+		if (method === 'GET' && pathname === '/api/world/me/position') {
+			await fulfillJson(route, {
+				ok: true,
+
+				position: state.position,
+
+				human_position: state.position
+			});
+
+			return;
+		}
+
+		if (method === 'POST' && pathname === '/api/world/me/move') {
+			const body = readJsonBody(request);
+
+			state.moveRequests.push(body);
+
+			const placeId = typeof body.place_id === 'string' ? body.place_id : null;
+
+			const place = placeId ? findPlace(placeId) : undefined;
+
+			const regionId = typeof body.region_id === 'string' ? body.region_id : place?.region_id;
+
+			const region = regionId ? findRegion(regionId) : undefined;
+
+			if (!region) {
+				await fulfillJson(
+					route,
+					{
+						ok: false,
+						error: 'region_not_found',
+
+						message: 'The requested destination region does not exist.'
+					},
+					404
+				);
+
+				return;
+			}
+
+			state.position = {
+				human_id: IDENTITY.human_id,
+
+				region_id: region.id,
+
+				place_id: place?.id ?? null,
+
+				position_x:
+					typeof body.position_x === 'number' ? body.position_x : (place?.position_x ?? 0),
+
+				position_y:
+					typeof body.position_y === 'number' ? body.position_y : (place?.position_y ?? 0),
+
+				updated_at: NOW + 60
+			};
+
+			await fulfillJson(route, {
+				ok: true,
+
+				position: state.position,
+
+				human_position: state.position
+			});
+
+			return;
+		}
+
+		if (method === 'GET' && pathname === '/api/nature') {
+			await fulfillJson(route, {
+				ok: true,
+
+				id: 'nature-orelunza',
+				nature_id: 'nature-orelunza',
+
+				biomes: BIOMES
+			});
+
+			return;
+		}
+
+		if (method === 'GET' && pathname === '/api/nature/biomes') {
+			await fulfillJson(route, {
+				ok: true,
+				biomes: BIOMES
+			});
+
+			return;
+		}
+
+		const biomeAreasMatch = pathname.match(/^\/api\/nature\/biomes\/([^/]+)\/areas$/);
+
+		if (method === 'GET' && biomeAreasMatch) {
+			const biomeId = decodeURIComponent(biomeAreasMatch[1]);
+
+			await fulfillJson(route, {
+				ok: true,
+
+				areas: AREAS.filter((area) => area.biome_id === biomeId)
+			});
+
+			return;
+		}
+
+		const biomeMatch = pathname.match(/^\/api\/nature\/biomes\/([^/]+)$/);
+
+		if (method === 'GET' && biomeMatch) {
+			const biome = findBiome(decodeURIComponent(biomeMatch[1]));
+
+			if (!biome) {
+				await fulfillJson(
+					route,
+					{
+						ok: false,
+						error: 'biome_not_found',
+
+						message: 'The requested biome does not exist.'
+					},
+					404
+				);
+
+				return;
+			}
+
+			await fulfillJson(route, {
+				ok: true,
+				biome,
+				...biome
+			});
+
+			return;
+		}
+
+		const environmentMatch = pathname.match(/^\/api\/nature\/areas\/([^/]+)\/state$/);
+
+		if (method === 'GET' && environmentMatch) {
+			const environment = findEnvironment(decodeURIComponent(environmentMatch[1]));
+
+			await fulfillJson(route, environmentResponse(environment));
+
+			return;
+		}
+
+		const areaMatch = pathname.match(/^\/api\/nature\/areas\/([^/]+)$/);
+
+		if (method === 'GET' && areaMatch) {
+			const area = findArea(decodeURIComponent(areaMatch[1]));
+
+			if (!area) {
+				await fulfillJson(
+					route,
+					{
+						ok: false,
+						error: 'natural_area_not_found',
+
+						message: 'The requested natural area does not exist.'
+					},
+					404
+				);
+
+				return;
+			}
+
+			await fulfillJson(route, areaResponse(area));
+
+			return;
+		}
+
+		const regionNatureMatch = pathname.match(/^\/api\/nature\/regions\/([^/]+)$/);
+
+		if (method === 'GET' && regionNatureMatch) {
+			const area = areaForRegion(decodeURIComponent(regionNatureMatch[1]));
+
+			await fulfillJson(route, areaResponse(area));
+
+			return;
+		}
+
+		const placeNatureMatch = pathname.match(/^\/api\/nature\/places\/([^/]+)$/);
+
+		if (method === 'GET' && placeNatureMatch) {
+			const area = areaForPlace(decodeURIComponent(placeNatureMatch[1]));
+
+			await fulfillJson(route, areaResponse(area));
+
+			return;
+		}
+
+		await fulfillJson(
+			route,
+			{
+				ok: false,
+				error: 'not_found',
+
+				message: `No test endpoint matches ${method} ${pathname}.`
+			},
+			404
+		);
+	});
+
+	return state;
+}
+
+test.describe('city flow', () => {
+	test('loads the city, position and natural environment', async ({ page }) => {
+		await installCityBackend(page);
+
+		await page.goto('/city');
+
+		await expect(
+			page.getByRole('heading', {
+				name: 'Welcome back, Forest Citizen'
+			})
+		).toBeVisible();
+
+		await expect(
+			page
+				.getByText('Green Quarter', {
+					exact: true
+				})
+				.first()
+		).toBeVisible();
+
+		await expect(
+			page
+				.getByText('Community Garden', {
+					exact: true
+				})
+				.first()
+		).toBeVisible();
+
+		await expect(
+			page
+				.getByText('Old Library', {
+					exact: true
+				})
+				.first()
+		).toBeVisible();
+
+		await expect(
+			page.getByText('Temperate Forest', {
+				exact: true
+			})
+		).toBeVisible();
+
+		await expect(
+			page.getByText('Leaves move softly above the quiet paths.', {
+				exact: true
+			})
+		).toBeVisible();
+
+		await expect(
+			page.getByText('You are in Community Garden', {
+				exact: true
+			})
+		).toBeVisible();
+
+		const canvas = page.locator('canvas[aria-label="Orelunza interactive world"]');
+
+		await expect(canvas).toBeVisible({
+			timeout: 15_000
+		});
+	});
+
+	test('opens a place and moves the citizen there', async ({ page }) => {
+		const backend = await installCityBackend(page);
+
+		await page.goto('/city/places/place-library');
+
+		await expect(
+			page
+				.getByRole('heading', {
+					name: 'Old Library',
+					exact: true
+				})
+				.first()
+		).toBeVisible();
+
+		await expect(
+			page
+				.getByText('A silent library filled with books and warm wooden rooms.', {
+					exact: true
+				})
+				.first()
+		).toBeVisible();
+
+		await expect(
+			page.getByText('Old trees surround the library in complete silence.', {
+				exact: true
+			})
+		).toBeVisible();
+
+		const moveRequest = page.waitForRequest(
+			(request) => request.method() === 'POST' && normalizedPath(request) === '/api/world/me/move'
+		);
+
+		await page
+			.getByRole('button', {
+				name: 'Go to this place'
+			})
+			.click();
+
+		const request = await moveRequest;
+
+		expect(request.postDataJSON()).toMatchObject({
+			region_id: 'region-green',
+
+			place_id: 'place-library',
+
+			position_x: 520,
+			position_y: 330
+		});
+
+		await expect(
+			page.getByRole('button', {
+				name: 'You are here'
+			})
+		).toBeVisible();
+
+		expect(backend.position).toMatchObject({
+			region_id: 'region-green',
+
+			place_id: 'place-library',
+
+			position_x: 520,
+			position_y: 330
+		});
+
+		expect(backend.moveRequests).toHaveLength(1);
+	});
+
+	test('opens another region with its places and biome', async ({ page }) => {
+		await installCityBackend(page);
+
+		await page.goto('/city/regions/region-river');
+
+		await expect(
+			page.getByRole('heading', {
+				name: 'River District',
+				exact: true
+			})
+		).toBeVisible();
+
+		await expect(
+			page.getByText('A quiet district built alongside the river.', {
+				exact: true
+			})
+		).toBeVisible();
+
+		await expect(
+			page
+				.getByText('River Dock', {
+					exact: true
+				})
+				.first()
+		).toBeVisible();
+
+		await expect(
+			page.getByText('River Wetland', {
+				exact: true
+			})
+		).toBeVisible();
+
+		await expect(
+			page.getByText('Water moves slowly beside the tall river grass.', {
+				exact: true
+			})
+		).toBeVisible();
+
+		await expect(page.getByText('Viewing River District')).toHaveCount(0);
+	});
+
+	test('moves to a place in another region from its detail page', async ({ page }) => {
+		const backend = await installCityBackend(page);
+
+		await page.goto('/city/places/place-dock');
+
+		await expect(
+			page
+				.getByRole('heading', {
+					name: 'River Dock',
+					exact: true
+				})
+				.first()
+		).toBeVisible();
+
+		await expect(
+			page.getByText('The dock creaks gently above the moving water.', {
+				exact: true
+			})
+		).toBeVisible();
+
+		await page
+			.getByRole('button', {
+				name: 'Go to this place'
+			})
+			.click();
+
+		await expect(
+			page.getByRole('button', {
+				name: 'You are here'
+			})
+		).toBeVisible();
+
+		expect(backend.position).toMatchObject({
+			region_id: 'region-river',
+
+			place_id: 'place-dock',
+
+			position_x: 310,
+			position_y: 420
+		});
+	});
+});
