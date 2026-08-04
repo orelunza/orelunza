@@ -21,3 +21,7 @@ decisions/
 storage/*
 !storage/.gitkeep
 plan.md
+
+# Local Reallusion source assets
+frontend/static/assets/characters/orelunza-citizen/reallusion/
+reallusion-character-preview.png
