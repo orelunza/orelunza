@@ -3,14 +3,31 @@
 
 	import { GameEngine } from '$lib/game/GameEngine';
 	import type { GameEngineOptions, GameSnapshot } from '$lib/game/game-types';
+	import type { BlockType } from '$lib/game/world/voxel-types';
+
+	type GameCommand =
+		| {
+				type: 'pause' | 'resume' | 'inventory' | 'close-inventory' | 'save';
+				token: number;
+		  }
+		| {
+				type: 'hotbar';
+				index: number;
+				token: number;
+		  }
+		| {
+				type: 'open-build-catalog' | 'close-build-catalog';
+				token: number;
+		  }
+		| {
+				type: 'select-build-block';
+				blockType: BlockType;
+				token: number;
+		  };
 
 	interface Props extends Omit<GameEngineOptions, 'canvas' | 'onSnapshot'> {
 		onSnapshot?: (snapshot: GameSnapshot) => void;
-		command?: {
-			type: 'pause' | 'resume' | 'inventory' | 'close-inventory' | 'save' | 'hotbar';
-			index?: number;
-			token: number;
-		};
+		command?: GameCommand;
 	}
 
 	let {
@@ -61,18 +78,42 @@
 
 		lastCommandToken = command.token;
 
-		if (command.type === 'pause') {
-			engine.pause();
-		} else if (command.type === 'resume') {
-			engine.resume();
-		} else if (command.type === 'inventory') {
-			engine.openInventory();
-		} else if (command.type === 'close-inventory') {
-			engine.closeInventory();
-		} else if (command.type === 'save') {
-			void engine.saveNow();
-		} else if (command.type === 'hotbar' && command.index !== undefined) {
-			engine.selectHotbar(command.index);
+		switch (command.type) {
+			case 'pause':
+				engine.pause();
+				break;
+
+			case 'resume':
+				engine.resume();
+				break;
+
+			case 'inventory':
+				engine.openInventory();
+				break;
+
+			case 'close-inventory':
+				engine.closeInventory();
+				break;
+
+			case 'save':
+				void engine.saveNow();
+				break;
+
+			case 'hotbar':
+				engine.selectHotbar(command.index);
+				break;
+
+			case 'open-build-catalog':
+				engine.openBuildCatalog();
+				break;
+
+			case 'close-build-catalog':
+				engine.closeBuildCatalog();
+				break;
+
+			case 'select-build-block':
+				engine.selectBuildBlock(command.blockType);
+				break;
 		}
 	});
 </script>

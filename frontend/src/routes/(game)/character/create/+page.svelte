@@ -97,6 +97,17 @@
 				</label>
 
 				<label class="grid gap-1 text-sm">
+					<span class="text-white/68">Body type</span>
+					<select
+						class="rounded-sm border border-white/12 bg-black/20 px-3 py-2 text-white outline-none focus:border-[#f97316]"
+						bind:value={appearance.bodyType}
+					>
+						<option value="neutral_m">Neutral M</option>
+						<option value="neutral_f">Neutral F</option>
+					</select>
+				</label>
+
+				<label class="grid gap-1 text-sm">
 					<span class="text-white/68">Hair style</span>
 					<select
 						class="rounded-sm border border-white/12 bg-black/20 px-3 py-2 text-white outline-none focus:border-[#f97316]"

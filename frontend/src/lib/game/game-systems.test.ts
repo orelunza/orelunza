@@ -26,6 +26,7 @@ import {
 } from './player/HumanoidAnimationController';
 import { toHumanoidAppearance } from './player/HumanoidAppearance';
 import { HumanoidAnimator } from './player/HumanoidAnimator';
+import type { HumanoidAnimationSnapshot } from './player/HumanoidPose';
 import {
 	canonicalClipNameFromAsset,
 	countClipTrackMatches,
@@ -36,6 +37,7 @@ import {
 import { HumanoidRig } from './player/HumanoidRig';
 import { PlayerAvatar } from './player/PlayerAvatar';
 import { PlayerController } from './player/PlayerController';
+import type { PlayerState } from './player/PlayerState';
 import {
 	SPRINT_SPEED,
 	WALK_SPEED,
@@ -47,7 +49,9 @@ import {
 	MAX_CAMERA_PITCH,
 	MIN_CAMERA_DISTANCE,
 	MIN_CAMERA_PITCH,
-	ThirdPersonCamera
+	ThirdPersonCamera,
+	dampAngle,
+	angleDelta
 } from './player/ThirdPersonCamera';
 import { BlockRegistry } from './world/BlockRegistry';
 import { TerrainGenerator } from './world/TerrainGenerator';
@@ -164,6 +168,36 @@ function quaternionTrack(name: string, duration: number, angle: number): Quatern
 	const values = [0, 0, 0, 1, Math.sin(half), 0, 0, Math.cos(half), 0, 0, 0, 1];
 
 	return new QuaternionKeyframeTrack(name, [0, duration / 2, duration], values);
+}
+
+function locomotionSnapshot(
+	overrides: Partial<HumanoidAnimationSnapshot> = {}
+): HumanoidAnimationSnapshot {
+	return {
+		locomotionState: 'idle',
+		speed: 0,
+		gaitPhase: 0,
+		armLeftAngle: 0,
+		armRightAngle: 0,
+		legLeftAngle: 0,
+		legRightAngle: 0,
+		grounded: true,
+		headYaw: 0,
+		bodyYaw: Math.PI,
+		cameraYaw: Math.PI,
+		desiredMovementYaw: Math.PI,
+		localForwardSpeed: 0,
+		localSideSpeed: 0,
+		verticalSpeed: 0,
+		stepActive: false,
+		stepHeight: 0,
+		leadingFoot: null,
+		stepStartedAt: -1,
+		mouseLookActive: false,
+		cameraRecentering: false,
+		updateMs: 0,
+		...overrides
+	};
 }
 
 describe('voxel world coordinates', () => {
@@ -448,6 +482,95 @@ describe('humanoid avatar rig and animation', () => {
 		controller.dispose();
 	});
 
+	test('keeps a 10 second walk on one action without periodic restarts', () => {
+		const root = createTestMixamoSkeleton();
+		const bones = testBones(root);
+		const controller = new HumanoidAnimationController(root, createSyntheticLocomotionClips(), {
+			strict: true,
+			fadeSeconds: 0.05
+		});
+		let maxActiveActions = 0;
+
+		for (let index = 0; index < 600; index += 1) {
+			controller.update(
+				locomotionSnapshot({
+					locomotionState: 'walk_forward',
+					speed: WALK_SPEED,
+					localForwardSpeed: WALK_SPEED
+				}),
+				1 / 60
+			);
+			maxActiveActions = Math.max(maxActiveActions, controller.snapshot.activeActionCount);
+			expect(controller.snapshot.currentAction).toBe('walk');
+			expect(controller.snapshot.currentAction).not.toBe('turn_left');
+			expect(controller.snapshot.currentAction).not.toBe('turn_right');
+			expect(controller.snapshot.currentAction).not.toBe('reaction_shoved');
+		}
+
+		expect(controller.snapshot.transitionCount).toBe(1);
+		expect(controller.snapshot.activeActionCount).toBe(1);
+		expect(maxActiveActions).toBeLessThanOrEqual(2);
+		expect(controller.snapshot.actionTime).toBeGreaterThan(9.5);
+		expect(bones.leftHand.quaternion.length()).toBeGreaterThan(0.99);
+		expect(bones.leftHand.quaternion.length()).toBeLessThan(1.01);
+		controller.dispose();
+	});
+
+	test('step overlay moves the leading leg and leaves hands unchanged', () => {
+		const stepRoot = createTestMixamoSkeleton();
+		const referenceRoot = createTestMixamoSkeleton();
+		const stepBones = testBones(stepRoot);
+		const referenceBones = testBones(referenceRoot);
+		const stepController = new HumanoidAnimationController(
+			stepRoot,
+			createSyntheticLocomotionClips(),
+			{
+				strict: true,
+				fadeSeconds: 0.01
+			}
+		);
+		const referenceController = new HumanoidAnimationController(
+			referenceRoot,
+			createSyntheticLocomotionClips(),
+			{
+				strict: true,
+				fadeSeconds: 0.01
+			}
+		);
+		const base = locomotionSnapshot({
+			locomotionState: 'walk_forward',
+			speed: WALK_SPEED,
+			localForwardSpeed: WALK_SPEED
+		});
+
+		stepController.update(
+			locomotionSnapshot({
+				...base,
+				stepActive: true,
+				stepHeight: 0.8,
+				leadingFoot: 'left',
+				stepStartedAt: 1
+			}),
+			1 / 60
+		);
+		referenceController.update(base, 1 / 60);
+
+		expect(stepController.snapshot.stepActive).toBe(true);
+		expect(stepController.snapshot.stepHeight).toBeGreaterThan(0);
+		expect(stepController.snapshot.leadingFoot).toBe('left');
+		expect(
+			stepBones.leftUpperLeg.quaternion.angleTo(referenceBones.leftUpperLeg.quaternion)
+		).toBeGreaterThan(0.001);
+		expect(stepBones.leftHand.quaternion.angleTo(referenceBones.leftHand.quaternion)).toBeLessThan(
+			0.0001
+		);
+		expect(
+			stepBones.rightHand.quaternion.angleTo(referenceBones.rightHand.quaternion)
+		).toBeLessThan(0.0001);
+		stepController.dispose();
+		referenceController.dispose();
+	});
+
 	test('AnimationMixer moves hips, legs, arms and hands during walk', () => {
 		const root = createTestMixamoSkeleton();
 		const bones = testBones(root);
@@ -689,6 +812,78 @@ describe('humanoid avatar rig and animation', () => {
 		expect(rotate(30)).toBeCloseTo(rotate(120), 1);
 	});
 
+	test('dampAngle crosses the -PI/+PI boundary through the shortest path', () => {
+		const current = Math.PI - 0.05;
+		const target = -Math.PI + 0.05;
+		const next = dampAngle(current, target, 8, 1 / 60);
+
+		expect(Math.abs(next)).toBeGreaterThan(Math.PI - 0.06);
+		expect(next).not.toBeNaN();
+	});
+
+	test('camera yaw and body yaw are independent during mouse look', () => {
+		const animator = new HumanoidAnimator();
+		const initial = animator.bodyYaw;
+
+		for (let index = 0; index < 60; index += 1) {
+			animator.update({
+				cameraYaw: initial + Math.PI / 2,
+				bodyYaw: initial,
+				desiredMovementYaw: initial,
+				velocityX: 0,
+				velocityY: 0,
+				velocityZ: 0,
+				grounded: true,
+				deltaSeconds: 1 / 60,
+				stepEvent: null
+			});
+		}
+
+		expect(animator.diagnostics.locomotionState).toBe('idle');
+		expect(animator.bodyYaw).toBeCloseTo(initial, 5);
+		expect(Math.abs(animator.diagnostics.headYaw)).toBeLessThanOrEqual(0.78);
+	});
+
+	test('short strafe does not rotate the body instantly and prolonged strafe turns gradually', () => {
+		const animator = new HumanoidAnimator();
+		const initial = animator.bodyYaw;
+
+		for (let index = 0; index < 12; index += 1) {
+			animator.update({
+				cameraYaw: initial,
+				bodyYaw: initial,
+				desiredMovementYaw: -Math.PI / 2,
+				velocityX: -WALK_SPEED,
+				velocityY: 0,
+				velocityZ: 0,
+				grounded: true,
+				deltaSeconds: 1 / 60,
+				stepEvent: null
+			});
+		}
+
+		const shortYaw = animator.bodyYaw;
+		expect(animator.diagnostics.locomotionState).toBe('strafe_left');
+		expect(Math.abs(angleDelta(initial, shortYaw))).toBeLessThan(0.2);
+
+		for (let index = 0; index < 120; index += 1) {
+			animator.update({
+				cameraYaw: initial,
+				bodyYaw: shortYaw,
+				desiredMovementYaw: -Math.PI / 2,
+				velocityX: -WALK_SPEED,
+				velocityY: 0,
+				velocityZ: 0,
+				grounded: true,
+				deltaSeconds: 1 / 60,
+				stepEvent: null
+			});
+		}
+
+		expect(Math.abs(angleDelta(shortYaw, animator.bodyYaw))).toBeGreaterThan(0.2);
+		expect(Math.abs(angleDelta(initial, animator.bodyYaw))).toBeLessThan(Math.PI / 2);
+	});
+
 	test('head yaw is clamped and jump, airborne and landing states are distinct', () => {
 		const animator = new HumanoidAnimator();
 		animator.update({
@@ -784,17 +979,14 @@ describe('player physics', () => {
 
 	test('detects ground and prevents falling through solid blocks', () => {
 		const world = new VoxelWorld(STARTER_WORLD_SEED);
-		const player = {
-			playerId: 'p',
-			worldId: 'w',
+		const player = testPlayer(world, {
 			position: { x: 0.5, y: world.terrainGenerator.heightAt(0, 0) + 1.02, z: 0.5 },
 			velocity: { x: 0, y: -1, z: 0 },
 			yaw: 0,
-			pitch: 0,
-			onGround: false,
-			height: 1.78,
-			radius: 0.32
-		};
+			cameraYaw: 0,
+			bodyYaw: 0,
+			onGround: false
+		});
 		const physics = new PlayerPhysics(world);
 
 		for (let step = 0; step < 120; step += 1) {
@@ -808,17 +1000,14 @@ describe('player physics', () => {
 	test('jumps only from the ground', () => {
 		const world = new VoxelWorld(STARTER_WORLD_SEED);
 		const height = world.terrainGenerator.heightAt(0, 0);
-		const player = {
-			playerId: 'p',
-			worldId: 'w',
+		const player = testPlayer(world, {
 			position: { x: 0.5, y: height + 1.02, z: 0.5 },
 			velocity: { x: 0, y: 0, z: 0 },
 			yaw: 0,
-			pitch: 0,
-			onGround: true,
-			height: 1.78,
-			radius: 0.32
-		};
+			cameraYaw: 0,
+			bodyYaw: 0,
+			onGround: true
+		});
 		const physics = new PlayerPhysics(world);
 
 		physics.step(player, { forward: 0, right: 0, jump: true, sprint: false }, 1 / 60);
@@ -926,7 +1115,9 @@ describe('player physics', () => {
 		const spawn = world.findSafeSpawnPosition();
 		const player = testPlayer(world, {
 			position: { ...spawn },
-			yaw: Math.PI / 2
+			yaw: Math.PI / 2,
+			cameraYaw: Math.PI / 2,
+			bodyYaw: Math.PI / 2
 		});
 		const physics = new PlayerPhysics(world);
 		const obstacleX = Math.floor(spawn.x + 1);
@@ -934,22 +1125,40 @@ describe('player physics', () => {
 		const baseY = Math.floor(spawn.y);
 
 		world.setBlock({ x: obstacleX, y: baseY, z: obstacleZ }, 'brick');
+		let stepEvents = 0;
+		let stepHeight = 0;
+		let leadingFoot = '';
 		for (let index = 0; index < 24; index += 1) {
 			physics.step(player, move(1, 0), 1 / 60);
+			if (player.stepEvent) {
+				stepEvents += 1;
+				stepHeight = player.stepEvent.height;
+				leadingFoot = player.stepEvent.leadingFoot;
+			}
 		}
 
 		expect(player.position.y).toBeGreaterThan(spawn.y + 0.5);
+		expect(stepEvents).toBe(1);
+		expect(stepHeight).toBeGreaterThan(0);
+		expect(['left', 'right']).toContain(leadingFoot);
 
 		const wallPlayer = testPlayer(world, {
 			position: { ...spawn },
-			yaw: Math.PI / 2
+			yaw: Math.PI / 2,
+			cameraYaw: Math.PI / 2,
+			bodyYaw: Math.PI / 2
 		});
+		let wallStepEvents = 0;
 		world.setBlock({ x: obstacleX, y: baseY + 1, z: obstacleZ }, 'brick');
 		for (let index = 0; index < 24; index += 1) {
 			physics.step(wallPlayer, move(1, 0), 1 / 60);
+			if (wallPlayer.stepEvent) {
+				wallStepEvents += 1;
+			}
 		}
 
 		expect(wallPlayer.position.x).toBeLessThan(obstacleX);
+		expect(wallStepEvents).toBe(0);
 	});
 
 	test('does not step up while airborne or into a low ceiling', () => {
@@ -965,7 +1174,9 @@ describe('player physics', () => {
 
 		const ceilingPlayer = testPlayer(world, {
 			position: { ...spawn },
-			yaw: Math.PI / 2
+			yaw: Math.PI / 2,
+			cameraYaw: Math.PI / 2,
+			bodyYaw: Math.PI / 2
 		});
 		for (let index = 0; index < 24; index += 1) {
 			physics.step(ceilingPlayer, move(1, 0), 1 / 60);
@@ -975,6 +1186,8 @@ describe('player physics', () => {
 		const airPlayer = testPlayer(world, {
 			position: { ...spawn, y: spawn.y + 2 },
 			yaw: Math.PI / 2,
+			cameraYaw: Math.PI / 2,
+			bodyYaw: Math.PI / 2,
 			onGround: false
 		});
 		physics.step(airPlayer, move(1, 0), 1 / 60);
@@ -1017,6 +1230,38 @@ describe('player physics', () => {
 		camera.update(player);
 
 		expect(camera.currentDistance).toBeLessThan(camera.orbitDistance);
+	});
+
+	test('mouse look suspends camera recentering, then body yaw is followed smoothly', () => {
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		const player = testPlayer(world, {
+			bodyYaw: Math.PI / 2,
+			cameraYaw: Math.PI,
+			velocity: { x: WALK_SPEED, y: 0, z: 0 }
+		});
+		const camera = new ThirdPersonCamera(1, world);
+		camera.setOrientation(Math.PI, 0.34);
+
+		camera.applyMouse(player, { x: 80, y: 0 });
+		camera.update(player, 1 / 60);
+		const yawDuringMouse = camera.orientationYaw;
+
+		expect(player.mouseLookActive).toBe(true);
+		expect(player.cameraRecentering).toBe(false);
+		expect(camera.orientationYaw).toBeCloseTo(yawDuringMouse);
+
+		for (let index = 0; index < 90; index += 1) {
+			camera.update(player, 1 / 60);
+		}
+
+		const yawAfterDelay = camera.orientationYaw;
+		camera.update(player, 1 / 60);
+		expect(player.mouseLookActive).toBe(false);
+		expect(player.cameraRecentering).toBe(true);
+		expect(Math.abs(camera.orientationYaw - yawDuringMouse)).toBeGreaterThan(0.001);
+		expect(Math.abs(camera.orientationYaw - player.bodyYaw)).toBeLessThan(
+			Math.abs(yawAfterDelay - player.bodyYaw)
+		);
 	});
 });
 
@@ -1151,7 +1396,7 @@ function testPlayer(
 	};
 }
 
-function baseTestPlayer(world: VoxelWorld) {
+function baseTestPlayer(world: VoxelWorld): PlayerState {
 	return {
 		playerId: 'p',
 		worldId: 'w',
@@ -1161,7 +1406,17 @@ function baseTestPlayer(world: VoxelWorld) {
 		pitch: 0,
 		onGround: true,
 		height: 1.78,
-		radius: 0.32
+		radius: 0.32,
+		cameraYaw: Math.PI,
+		bodyYaw: Math.PI,
+		desiredMovementYaw: Math.PI,
+		headYaw: 0,
+		localForwardSpeed: 0,
+		localSideSpeed: 0,
+		verticalSpeed: 0,
+		stepEvent: null,
+		mouseLookActive: false,
+		cameraRecentering: false
 	};
 }
 

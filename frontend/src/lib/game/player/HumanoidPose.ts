@@ -12,12 +12,16 @@ export type HumanoidLocomotionState =
 	| 'turn_right';
 
 export interface HumanoidAnimationInput {
-	yaw: number;
+	yaw?: number;
+	cameraYaw?: number;
+	bodyYaw?: number;
+	desiredMovementYaw?: number;
 	velocityX: number;
 	velocityY: number;
 	velocityZ: number;
 	grounded: boolean;
 	deltaSeconds: number;
+	stepEvent?: PlayerStepEvent | null;
 }
 
 export interface HumanoidAnimationSnapshot {
@@ -31,6 +35,17 @@ export interface HumanoidAnimationSnapshot {
 	grounded: boolean;
 	headYaw: number;
 	bodyYaw: number;
+	cameraYaw: number;
+	desiredMovementYaw: number;
+	localForwardSpeed: number;
+	localSideSpeed: number;
+	verticalSpeed: number;
+	stepActive: boolean;
+	stepHeight: number;
+	leadingFoot: 'left' | 'right' | null;
+	stepStartedAt: number;
+	mouseLookActive: boolean;
+	cameraRecentering: boolean;
 	updateMs: number;
 }
 
@@ -95,3 +110,4 @@ export function createNeutralPose(): HumanoidPose {
 		blink: 0
 	};
 }
+import type { PlayerStepEvent } from './PlayerState';

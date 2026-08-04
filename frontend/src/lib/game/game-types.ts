@@ -10,7 +10,14 @@ import type { PerformanceSnapshot } from './debug/PerformanceMonitor';
 import type { HumanoidAnimationSnapshot } from './player/HumanoidPose';
 
 export type GameStatus =
-	'booting' | 'loading-world' | 'playing' | 'paused' | 'inventory' | 'error' | 'destroyed';
+	| 'booting'
+	| 'loading-world'
+	| 'playing'
+	| 'paused'
+	| 'inventory'
+	| 'build-catalog'
+	| 'error'
+	| 'destroyed';
 
 export type SaveStatus = 'idle' | 'dirty' | 'saving' | 'saved' | 'error';
 
@@ -40,6 +47,9 @@ export interface GameSnapshot {
 	zoneName: string;
 	targetedBlock: TargetedBlock | null;
 	buildMode: boolean;
+	buildCatalogOpen: boolean;
+	selectedBuildBlock: BlockType | null;
+	creativeBuild: boolean;
 	introVisible: boolean;
 	message: string | null;
 	error: string | null;
@@ -89,6 +99,8 @@ export interface GameDiagnosticsSnapshot {
 	avatarBones: number;
 	avatarModelSource: string;
 	avatarAnimationClips: number;
+	avatarRetargetedClipCount: number;
+	avatarTargetSkeletonBoneCount: number;
 	avatarReady: boolean;
 	avatarCurrentAnimation: string;
 	avatarError: string | null;
@@ -97,6 +109,19 @@ export interface GameDiagnosticsSnapshot {
 	avatarActionTime: number;
 	avatarActionWeight: number;
 	avatarActiveActionCount: number;
+	locomotionCameraYaw: number;
+	locomotionBodyYaw: number;
+	locomotionDesiredMovementYaw: number;
+	locomotionHeadYaw: number;
+	locomotionLocalForwardSpeed: number;
+	locomotionLocalSideSpeed: number;
+	locomotionVerticalSpeed: number;
+	locomotionGrounded: boolean;
+	locomotionStepActive: boolean;
+	locomotionStepHeight: number;
+	locomotionLeadingFoot: 'left' | 'right' | null;
+	locomotionMouseLookActive: boolean;
+	locomotionCameraRecentering: boolean;
 	avatarTotalTrackCount: number;
 	avatarMatchedTrackCount: number;
 	avatarUnmatchedTrackCount: number;

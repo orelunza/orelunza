@@ -21,8 +21,9 @@ import { WorldSyncService } from './persistence/WorldSyncService';
 import { PlayerAvatar } from './player/PlayerAvatar';
 import { PlayerController } from './player/PlayerController';
 import { GameRenderer } from './rendering/GameRenderer';
+import { BlockRegistry } from './world/BlockRegistry';
 import { createStarterWorld } from './world/WorldGenerator';
-import { STARTER_WORLD_SEED, worldToChunk } from './world/voxel-types';
+import { STARTER_WORLD_SEED, type BlockType, worldToChunk } from './world/voxel-types';
 
 const CHUNK_RADIUS = 1;
 const SNAPSHOT_INTERVAL_MS = 100;
@@ -69,6 +70,8 @@ export class GameEngine {
 	private destroyed = false;
 	private mobileLimited = false;
 	private buildMode = false;
+	private selectedBuildBlock: BlockType | null = null;
+	private readonly creativeBuild = true;
 	private introVisible = true;
 	private diagnosticsWindowStartedAt = performance.now();
 	private diagnosticsFrameCount = 0;
@@ -102,6 +105,8 @@ export class GameEngine {
 		avatarBones: 0,
 		avatarModelSource: 'loading',
 		avatarAnimationClips: 0,
+		avatarRetargetedClipCount: 0,
+		avatarTargetSkeletonBoneCount: 0,
 		avatarReady: false,
 		avatarCurrentAnimation: 'idle',
 		avatarError: null,
@@ -110,6 +115,19 @@ export class GameEngine {
 		avatarActionTime: 0,
 		avatarActionWeight: 0,
 		avatarActiveActionCount: 0,
+		locomotionCameraYaw: 0,
+		locomotionBodyYaw: 0,
+		locomotionDesiredMovementYaw: 0,
+		locomotionHeadYaw: 0,
+		locomotionLocalForwardSpeed: 0,
+		locomotionLocalSideSpeed: 0,
+		locomotionVerticalSpeed: 0,
+		locomotionGrounded: false,
+		locomotionStepActive: false,
+		locomotionStepHeight: 0,
+		locomotionLeadingFoot: null,
+		locomotionMouseLookActive: false,
+		locomotionCameraRecentering: false,
 		avatarTotalTrackCount: 0,
 		avatarMatchedTrackCount: 0,
 		avatarUnmatchedTrackCount: 0,
@@ -248,8 +266,77 @@ export class GameEngine {
 		this.emitSnapshot();
 	}
 
+	openBuildCatalog(): void {
+		if (this.status !== 'playing') {
+			return;
+		}
+
+		this.status = 'build-catalog';
+		this.target = null;
+		this.renderer.setSelection(null);
+		this.pointerLock.exit();
+		this.message = 'Choose a block';
+		this.emitSnapshot();
+	}
+
+	closeBuildCatalog(): void {
+		if (this.status !== 'build-catalog') {
+			return;
+		}
+
+		this.status = 'playing';
+		this.pointerLock.request();
+		this.message = this.buildMode ? 'Build Mode' : 'Exploration Mode';
+		this.emitSnapshot();
+	}
+
+	selectBuildBlock(type: BlockType): boolean {
+		const definition = BlockRegistry.get(type);
+
+		if (type === 'air' || !definition.placeable) {
+			return false;
+		}
+
+		this.selectedBuildBlock = type;
+		this.buildMode = true;
+
+		if (this.status === 'build-catalog') {
+			this.status = 'playing';
+			this.pointerLock.request();
+		}
+
+		this.message = `Selected ${definition.label} — right click to place`;
+		this.emitSnapshot();
+
+		return true;
+	}
+
+	exitBuildMode(): void {
+		if (this.status === 'destroyed') {
+			return;
+		}
+
+		this.buildMode = false;
+		this.selectedBuildBlock = null;
+		this.target = null;
+		this.renderer.setSelection(null);
+
+		if (this.status === 'build-catalog') {
+			this.status = 'playing';
+			this.pointerLock.request();
+		}
+
+		this.message = 'Exploration Mode';
+		this.emitSnapshot();
+	}
+
 	selectHotbar(index: number): void {
 		this.hotbar.select(index);
+
+		if (this.buildMode) {
+			this.selectBuildBlockFromHotbar();
+		}
+
 		this.emitSnapshot();
 	}
 
@@ -286,6 +373,8 @@ export class GameEngine {
 		if (commands.pause) {
 			if (this.status === 'playing') {
 				this.pause();
+			} else if (this.status === 'build-catalog') {
+				this.closeBuildCatalog();
 			} else {
 				this.resume();
 			}
@@ -295,21 +384,29 @@ export class GameEngine {
 			this.openInventory();
 		}
 
-		if (commands.build && this.status === 'playing') {
-			this.buildMode = !this.buildMode;
-			this.message = this.buildMode ? 'Build Mode' : 'Exploration Mode';
+		if (commands.build) {
+			if (this.status === 'playing') {
+				this.openBuildCatalog();
+			} else if (this.status === 'build-catalog') {
+				this.closeBuildCatalog();
+			}
 		}
 
 		if (commands.hotbarIndex !== null) {
 			this.hotbar.select(commands.hotbarIndex);
+
+			if (this.buildMode) {
+				this.selectBuildBlockFromHotbar();
+			}
 		}
 
 		const wheel = this.mouse.consumeWheel();
 
 		if (wheel !== 0) {
-			if (this.buildMode) {
+			if (this.status === 'playing' && this.buildMode) {
 				this.hotbar.next(wheel);
-			} else {
+				this.selectBuildBlockFromHotbar();
+			} else if (this.status === 'playing') {
 				this.player.camera.applyZoom(wheel);
 			}
 		}
@@ -347,10 +444,11 @@ export class GameEngine {
 		);
 		this.recordAvatarMetrics();
 
-		this.target = this.buildMode
+		const canTargetBlock = this.status === 'playing' && this.buildMode;
+		this.target = canTargetBlock
 			? this.raycaster.raycast(this.player.camera.camera, this.renderer.lookups)
 			: null;
-		this.renderer.setSelection(this.buildMode ? (this.target?.block ?? null) : null);
+		this.renderer.setSelection(canTargetBlock ? (this.target?.block ?? null) : null);
 
 		const action = this.mouse.consumeAction();
 
@@ -384,6 +482,8 @@ export class GameEngine {
 		this.diagnostics.avatarBones = avatarMetrics.boneCount;
 		this.diagnostics.avatarModelSource = avatarMetrics.modelSource;
 		this.diagnostics.avatarAnimationClips = avatarMetrics.animationBlend.clipCount;
+		this.diagnostics.avatarRetargetedClipCount = avatarMetrics.retargetedClipCount;
+		this.diagnostics.avatarTargetSkeletonBoneCount = avatarMetrics.targetSkeletonBoneCount;
 		this.diagnostics.avatarReady = avatarMetrics.ready;
 		this.diagnostics.avatarCurrentAnimation = avatarMetrics.animationBlend.currentAction;
 		this.diagnostics.avatarError = avatarMetrics.error;
@@ -392,6 +492,19 @@ export class GameEngine {
 		this.diagnostics.avatarActionTime = debug.actionTime;
 		this.diagnostics.avatarActionWeight = debug.actionWeight;
 		this.diagnostics.avatarActiveActionCount = debug.activeActionCount;
+		this.diagnostics.locomotionCameraYaw = debug.cameraYaw;
+		this.diagnostics.locomotionBodyYaw = debug.bodyYaw;
+		this.diagnostics.locomotionDesiredMovementYaw = debug.desiredMovementYaw;
+		this.diagnostics.locomotionHeadYaw = debug.headYaw;
+		this.diagnostics.locomotionLocalForwardSpeed = debug.localForwardSpeed;
+		this.diagnostics.locomotionLocalSideSpeed = debug.localSideSpeed;
+		this.diagnostics.locomotionVerticalSpeed = debug.verticalSpeed;
+		this.diagnostics.locomotionGrounded = debug.grounded;
+		this.diagnostics.locomotionStepActive = debug.stepActive;
+		this.diagnostics.locomotionStepHeight = debug.stepHeight;
+		this.diagnostics.locomotionLeadingFoot = debug.leadingFoot;
+		this.diagnostics.locomotionMouseLookActive = debug.mouseLookActive;
+		this.diagnostics.locomotionCameraRecentering = debug.cameraRecentering;
 		this.diagnostics.avatarTotalTrackCount = debug.totalTrackCount;
 		this.diagnostics.avatarMatchedTrackCount = debug.matchedTrackCount;
 		this.diagnostics.avatarUnmatchedTrackCount = debug.unmatchedTrackCount;
@@ -410,8 +523,74 @@ export class GameEngine {
 			(
 				globalThis as typeof globalThis & {
 					__ORELUNZA_AVATAR_DEBUG__?: typeof debug;
+					__ORELUNZA_LOCOMOTION_DEBUG__?: {
+						cameraYaw: number;
+						bodyYaw: number;
+						desiredMovementYaw: number;
+						headYaw: number;
+						localForwardSpeed: number;
+						localSideSpeed: number;
+						verticalSpeed: number;
+						grounded: boolean;
+						currentAction: string;
+						previousAction: string | null;
+						activeActionCount: number;
+						actionTime: number;
+						actionWeight: number;
+						mixerTime: number;
+						mouseLookActive: boolean;
+						cameraRecentering: boolean;
+						stepActive: boolean;
+						stepHeight: number;
+						leadingFoot: 'left' | 'right' | null;
+					};
 				}
 			).__ORELUNZA_AVATAR_DEBUG__ = debug;
+			(
+				globalThis as typeof globalThis & {
+					__ORELUNZA_LOCOMOTION_DEBUG__?: {
+						cameraYaw: number;
+						bodyYaw: number;
+						desiredMovementYaw: number;
+						headYaw: number;
+						localForwardSpeed: number;
+						localSideSpeed: number;
+						verticalSpeed: number;
+						grounded: boolean;
+						currentAction: string;
+						previousAction: string | null;
+						activeActionCount: number;
+						actionTime: number;
+						actionWeight: number;
+						mixerTime: number;
+						mouseLookActive: boolean;
+						cameraRecentering: boolean;
+						stepActive: boolean;
+						stepHeight: number;
+						leadingFoot: 'left' | 'right' | null;
+					};
+				}
+			).__ORELUNZA_LOCOMOTION_DEBUG__ = {
+				cameraYaw: debug.cameraYaw,
+				bodyYaw: debug.bodyYaw,
+				desiredMovementYaw: debug.desiredMovementYaw,
+				headYaw: debug.headYaw,
+				localForwardSpeed: debug.localForwardSpeed,
+				localSideSpeed: debug.localSideSpeed,
+				verticalSpeed: debug.verticalSpeed,
+				grounded: debug.grounded,
+				currentAction: debug.currentAction,
+				previousAction: debug.previousAction,
+				activeActionCount: debug.activeActionCount,
+				actionTime: debug.actionTime,
+				actionWeight: debug.actionWeight,
+				mixerTime: debug.mixerTime,
+				mouseLookActive: debug.mouseLookActive,
+				cameraRecentering: debug.cameraRecentering,
+				stepActive: debug.stepActive,
+				stepHeight: debug.stepHeight,
+				leadingFoot: debug.leadingFoot
+			};
 		}
 	}
 
@@ -427,6 +606,7 @@ export class GameEngine {
 
 	private placeSelectedBlock(): void {
 		const stack = this.inventory.getSelectedStack(this.hotbar.selectedIndex);
+		const selected = this.selectedBuildBlock ?? stack?.type ?? null;
 		const system = new BlockPlacementSystem(
 			this.world,
 			this.inventory,
@@ -435,10 +615,24 @@ export class GameEngine {
 			() => this.markWorldChanged()
 		);
 
-		if (system.place(this.target, stack?.type ?? null)) {
-			this.message = `Placed ${stack?.type ?? 'block'}`;
+		if (system.place(this.target, selected, this.creativeBuild)) {
+			this.message = `Placed ${selected ?? 'block'}`;
 		} else {
 			this.message = 'Cannot place here';
+		}
+	}
+
+	private selectBuildBlockFromHotbar(): void {
+		const stack = this.inventory.getSelectedStack(this.hotbar.selectedIndex);
+
+		if (!stack) {
+			return;
+		}
+
+		const definition = BlockRegistry.get(stack.type);
+
+		if (definition.placeable) {
+			this.selectedBuildBlock = stack.type;
 		}
 	}
 
@@ -561,6 +755,9 @@ export class GameEngine {
 				? `${this.target.block.x},${this.target.block.y},${this.target.block.z}`
 				: '',
 			this.buildMode ? 1 : 0,
+			this.status === 'build-catalog' ? 1 : 0,
+			this.selectedBuildBlock ?? '',
+			this.creativeBuild ? 1 : 0,
 			this.introVisible ? 1 : 0,
 			this.message ?? '',
 			this.error ?? ''
@@ -591,6 +788,9 @@ export class GameEngine {
 			),
 			targetedBlock: this.target,
 			buildMode: this.buildMode,
+			buildCatalogOpen: this.status === 'build-catalog',
+			selectedBuildBlock: this.selectedBuildBlock,
+			creativeBuild: this.creativeBuild,
 			introVisible: this.introVisible,
 			message: this.message,
 			error: this.error,

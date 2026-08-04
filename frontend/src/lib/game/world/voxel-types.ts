@@ -1,3 +1,5 @@
+import type { BuildCategory } from '../build/build-types';
+
 export type BlockType =
 	| 'air'
 	| 'grass'
@@ -41,11 +43,14 @@ export interface VoxelBlock {
 export interface BlockDefinition {
 	type: BlockType;
 	label: string;
+	description: string;
+	category: BuildCategory;
 	color: number;
 	solid: boolean;
 	passable: boolean;
 	collectable: boolean;
 	transparent: boolean;
+	placeable: boolean;
 	hardness: number;
 }
 

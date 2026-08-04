@@ -1,6 +1,9 @@
+export type CharacterBodyType = 'neutral_m' | 'neutral_f';
+
 export interface CharacterAppearanceV1 {
 	version: 1;
 	displayName: string;
+	bodyType: CharacterBodyType;
 	skinTone: string;
 	hairStyle: 'shaved' | 'short' | 'curly' | 'afro' | 'long' | 'braids_simple' | 'none';
 	hairColor: string;
@@ -12,6 +15,7 @@ export interface CharacterAppearanceV1 {
 export const DEFAULT_CHARACTER_APPEARANCE: CharacterAppearanceV1 = {
 	version: 1,
 	displayName: 'Orelunza Citizen',
+	bodyType: 'neutral_m',
 	skinTone: '#b98565',
 	hairStyle: 'short',
 	hairColor: '#3b2b22',
@@ -29,18 +33,21 @@ const HAIR_STYLES = new Set<CharacterAppearanceV1['hairStyle']>([
 	'braids_simple',
 	'none'
 ]);
+const BODY_TYPES = new Set<CharacterBodyType>(['neutral_m', 'neutral_f']);
 const COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
 
 export function normalizeCharacterAppearance(
 	value: Partial<CharacterAppearanceV1> | null | undefined
 ): CharacterAppearanceV1 {
 	const hairStyle = HAIR_STYLES.has(value?.hairStyle ?? 'short') ? value?.hairStyle : 'short';
+	const bodyType = BODY_TYPES.has(value?.bodyType ?? 'neutral_m') ? value?.bodyType : 'neutral_m';
 
 	return {
 		...DEFAULT_CHARACTER_APPEARANCE,
 		...value,
 		version: 1,
 		displayName: value?.displayName?.trim() || DEFAULT_CHARACTER_APPEARANCE.displayName,
+		bodyType: bodyType ?? DEFAULT_CHARACTER_APPEARANCE.bodyType,
 		hairStyle: hairStyle ?? DEFAULT_CHARACTER_APPEARANCE.hairStyle,
 		skinTone: normalizeColor(value?.skinTone, DEFAULT_CHARACTER_APPEARANCE.skinTone),
 		hairColor: normalizeColor(value?.hairColor, DEFAULT_CHARACTER_APPEARANCE.hairColor),

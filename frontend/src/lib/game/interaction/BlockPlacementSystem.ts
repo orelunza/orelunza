@@ -15,15 +15,25 @@ export class BlockPlacementSystem {
 		private readonly onChanged: () => void
 	) {}
 
-	place(target: TargetedBlock | null, selected: BlockType | null): boolean {
+	place(target: TargetedBlock | null, selected: BlockType | null, creative = false): boolean {
 		if (!target || !selected || selected === 'air') {
 			return false;
 		}
 
 		const definition = BlockRegistry.get(selected);
 
-		if (!definition.solid || !this.inventory.removeItem(selected, 1)) {
+		if (!definition.placeable) {
 			return false;
+		}
+
+		let consumed = false;
+
+		if (!creative) {
+			consumed = this.inventory.removeItem(selected, 1);
+
+			if (!consumed) {
+				return false;
+			}
 		}
 
 		const position: BlockCoordinate = {
@@ -33,22 +43,28 @@ export class BlockPlacementSystem {
 		};
 
 		if (this.world.getBlock(position).type !== 'air') {
-			this.inventory.addItem(selected, 1);
+			this.refund(selected, consumed);
 			return false;
 		}
 
-		if (this.collider.intersectsPlayerBlock(this.player, position)) {
-			this.inventory.addItem(selected, 1);
+		if (definition.solid && this.collider.intersectsPlayerBlock(this.player, position)) {
+			this.refund(selected, consumed);
 			return false;
 		}
 
 		if (!this.world.setBlock(position, selected)) {
-			this.inventory.addItem(selected, 1);
+			this.refund(selected, consumed);
 			return false;
 		}
 
 		this.onChanged();
 
 		return true;
+	}
+
+	private refund(type: BlockType, consumed: boolean): void {
+		if (consumed) {
+			this.inventory.addItem(type, 1);
+		}
 	}
 }

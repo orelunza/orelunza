@@ -2,7 +2,7 @@ import type { MovementInput } from '../input/KeyboardInput';
 import type { VoxelWorld } from '../world/VoxelWorld';
 import type { WorldCoordinate } from '../world/voxel-types';
 import { PlayerCollider } from './PlayerCollider';
-import type { PlayerState } from './PlayerState';
+import type { LeadingFoot, PlayerState } from './PlayerState';
 
 export const WALK_SPEED = 5;
 export const SPRINT_SPEED = 8;
@@ -41,6 +41,7 @@ export function cameraRelativeMovement(yaw: number, input: MovementInput): Horiz
 export class PlayerPhysics {
 	readonly collider: PlayerCollider;
 	private readonly candidate = { x: 0, y: 0, z: 0 };
+	private stepSequence = 0;
 
 	constructor(private readonly world: VoxelWorld) {
 		this.collider = new PlayerCollider(world);
@@ -50,11 +51,16 @@ export class PlayerPhysics {
 		this.collider.resetFrameStats();
 		const delta = Math.min(deltaSeconds, MAX_DELTA);
 		const speed = input.sprint ? SPRINT_SPEED : WALK_SPEED;
-		const movement = cameraRelativeMovement(player.yaw, input);
+		const movement = cameraRelativeMovement(player.cameraYaw ?? player.yaw, input);
 		const targetX = movement.x * speed;
 		const targetZ = movement.z * speed;
 		const horizontalInput = Math.hypot(input.forward, input.right) > 0.001;
 		const rate = horizontalInput ? ACCELERATION : DECELERATION;
+		player.stepEvent = null;
+
+		if (Math.hypot(movement.x, movement.z) > 0.001) {
+			player.desiredMovementYaw = Math.atan2(movement.x, movement.z);
+		}
 
 		player.velocity.x = approach(player.velocity.x, targetX, rate * delta);
 		player.velocity.z = approach(player.velocity.z, targetZ, rate * delta);
@@ -65,6 +71,7 @@ export class PlayerPhysics {
 		}
 
 		player.velocity.y += GRAVITY_ACCELERATION * delta;
+		player.verticalSpeed = player.velocity.y;
 
 		this.moveAxis(player, 'x', player.velocity.x * delta);
 		this.moveAxis(player, 'z', player.velocity.z * delta);
@@ -141,6 +148,7 @@ export class PlayerPhysics {
 			return false;
 		}
 
+		const startY = player.position.y;
 		this.candidate.x = player.position.x;
 		this.candidate.y = player.position.y + STEP_HEIGHT;
 		this.candidate.z = player.position.z;
@@ -160,6 +168,14 @@ export class PlayerPhysics {
 		player.position.z = this.candidate.z;
 		player.velocity.y = 0;
 		player.onGround = false;
+		player.verticalSpeed = 0;
+		player.stepEvent = {
+			height: Math.max(0, player.position.y - startY),
+			directionX: axis === 'x' ? Math.sign(amount) : 0,
+			directionZ: axis === 'z' ? Math.sign(amount) : 0,
+			leadingFoot: nextLeadingFoot(player, this.stepSequence),
+			startedAt: ++this.stepSequence
+		};
 
 		return true;
 	}
@@ -197,6 +213,17 @@ export class PlayerPhysics {
 
 		return true;
 	}
+}
+
+function nextLeadingFoot(player: PlayerState, sequence: number): LeadingFoot {
+	const bodyYaw = player.bodyYaw ?? player.yaw;
+	const side = -Math.cos(bodyYaw) * player.velocity.x + Math.sin(bodyYaw) * player.velocity.z;
+
+	if (Math.abs(side) > 0.2) {
+		return side > 0 ? 'right' : 'left';
+	}
+
+	return sequence % 2 === 0 ? 'left' : 'right';
 }
 
 function approach(current: number, target: number, amount: number): number {

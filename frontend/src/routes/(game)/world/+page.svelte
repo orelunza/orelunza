@@ -3,6 +3,7 @@
 	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
 
+	import BuildCatalogOverlay from '$lib/components/game/BuildCatalogOverlay.svelte';
 	import GameCanvas from '$lib/components/game/GameCanvas.svelte';
 	import GameHud from '$lib/components/game/GameHud.svelte';
 	import InventoryOverlay from '$lib/components/game/InventoryOverlay.svelte';
@@ -12,39 +13,75 @@
 	import type { CharacterAppearanceV1 } from '$lib/game/character/CharacterAppearance';
 	import { CharacterStore } from '$lib/game/character/CharacterStore';
 	import type { GameSnapshot } from '$lib/game/game-types';
-	import { STARTER_WORLD_SEED } from '$lib/game/world/voxel-types';
+	import { STARTER_WORLD_SEED, type BlockType } from '$lib/game/world/voxel-types';
 	import { sessionState } from '$lib/state/session.svelte';
 	import { worldState } from '$lib/state/world.svelte';
+
+	type SimpleGameCommand =
+		| 'pause'
+		| 'resume'
+		| 'inventory'
+		| 'close-inventory'
+		| 'save'
+		| 'open-build-catalog'
+		| 'close-build-catalog';
+
+	type GameCommand =
+		| {
+				type: SimpleGameCommand;
+				token: number;
+		  }
+		| {
+				type: 'hotbar';
+				index: number;
+				token: number;
+		  }
+		| {
+				type: 'select-build-block';
+				blockType: BlockType;
+				token: number;
+		  };
 
 	let loading = $state(true);
 	let loadError = $state<ApiError | null>(null);
 	let snapshot = $state<GameSnapshot | null>(null);
 	let appearance = $state<CharacterAppearanceV1 | null>(null);
-	let command = $state<
-		| {
-				type: 'pause' | 'resume' | 'inventory' | 'close-inventory' | 'save' | 'hotbar';
-				index?: number;
-				token: number;
-		  }
-		| undefined
-	>(undefined);
+	let command = $state<GameCommand | undefined>(undefined);
 	let commandToken = 0;
 	let controller: AbortController | null = null;
+
 	const characterStore = new CharacterStore();
 
 	let regionName = $derived(
 		worldState.selectedRegion?.name ?? worldState.regions[0]?.name ?? 'Starter World'
 	);
+
 	let regionId = $derived(
 		worldState.selectedRegion?.id ?? worldState.regions[0]?.id ?? 'starter-world'
 	);
+
 	let playerId = $derived(sessionState.humanId || 'local-player');
 	let worldId = $derived(worldState.worldId ?? regionId);
 
-	function sendCommand(type: NonNullable<typeof command>['type'], index?: number): void {
+	function sendCommand(type: SimpleGameCommand): void {
 		command = {
 			type,
+			token: ++commandToken
+		};
+	}
+
+	function sendHotbarCommand(index: number): void {
+		command = {
+			type: 'hotbar',
 			index,
+			token: ++commandToken
+		};
+	}
+
+	function sendBuildBlockCommand(blockType: BlockType): void {
+		command = {
+			type: 'select-build-block',
+			blockType,
 			token: ++commandToken
 		};
 	}
@@ -62,10 +99,12 @@
 				await goto(resolve('/character/create'), {
 					replaceState: true
 				});
+
 				return;
 			}
 
 			appearance = character;
+
 			const regions = await worldState.loadWorld(controller.signal).catch(() => []);
 
 			if (regions.length > 0) {
@@ -133,6 +172,9 @@
 				data-player-yaw={snapshot.player.yaw.toFixed(3)}
 				data-zone={snapshot.zoneName}
 				data-build-mode={snapshot.buildMode ? 'true' : 'false'}
+				data-build-catalog-open={snapshot.buildCatalogOpen ? 'true' : 'false'}
+				data-selected-build-block={snapshot.selectedBuildBlock ?? ''}
+				data-creative-build={snapshot.creativeBuild ? 'true' : 'false'}
 				data-pointer-locked={snapshot.pointerLocked ? 'true' : 'false'}
 				data-fps={snapshot.diagnostics?.fps.toFixed(1) ?? '0'}
 				data-frame-ms={snapshot.diagnostics?.frameTimeMs.toFixed(2) ?? '0'}
@@ -163,12 +205,31 @@
 				data-avatar-materials={snapshot.diagnostics?.avatarMaterials ?? 0}
 				data-avatar-bones={snapshot.diagnostics?.avatarBones ?? 0}
 				data-avatar-animation-clips={snapshot.diagnostics?.avatarAnimationClips ?? 0}
+				data-retargeted-clip-count={snapshot.diagnostics?.avatarRetargetedClipCount ?? 0}
+				data-target-skeleton-bone-count={snapshot.diagnostics?.avatarTargetSkeletonBoneCount ?? 0}
 				data-current-animation={snapshot.diagnostics?.avatarCurrentAnimation ?? 'idle'}
 				data-previous-animation={snapshot.diagnostics?.avatarPreviousAnimation ?? ''}
 				data-mixer-time={snapshot.diagnostics?.avatarMixerTime.toFixed(3) ?? '0'}
 				data-action-time={snapshot.diagnostics?.avatarActionTime.toFixed(3) ?? '0'}
 				data-action-weight={snapshot.diagnostics?.avatarActionWeight.toFixed(3) ?? '0'}
 				data-active-action-count={snapshot.diagnostics?.avatarActiveActionCount ?? 0}
+				data-camera-yaw={snapshot.diagnostics?.locomotionCameraYaw.toFixed(3) ?? '0'}
+				data-body-yaw={snapshot.diagnostics?.locomotionBodyYaw.toFixed(3) ?? '0'}
+				data-desired-movement-yaw={snapshot.diagnostics?.locomotionDesiredMovementYaw.toFixed(3) ??
+					'0'}
+				data-head-yaw={snapshot.diagnostics?.locomotionHeadYaw.toFixed(3) ?? '0'}
+				data-local-forward-speed={snapshot.diagnostics?.locomotionLocalForwardSpeed.toFixed(3) ??
+					'0'}
+				data-local-side-speed={snapshot.diagnostics?.locomotionLocalSideSpeed.toFixed(3) ?? '0'}
+				data-vertical-speed={snapshot.diagnostics?.locomotionVerticalSpeed.toFixed(3) ?? '0'}
+				data-grounded={snapshot.diagnostics?.locomotionGrounded ? 'true' : 'false'}
+				data-step-active={snapshot.diagnostics?.locomotionStepActive ? 'true' : 'false'}
+				data-step-height={snapshot.diagnostics?.locomotionStepHeight.toFixed(3) ?? '0'}
+				data-leading-foot={snapshot.diagnostics?.locomotionLeadingFoot ?? ''}
+				data-mouse-look-active={snapshot.diagnostics?.locomotionMouseLookActive ? 'true' : 'false'}
+				data-camera-recentering={snapshot.diagnostics?.locomotionCameraRecentering
+					? 'true'
+					: 'false'}
 				data-total-track-count={snapshot.diagnostics?.avatarTotalTrackCount ?? 0}
 				data-matched-track-count={snapshot.diagnostics?.avatarMatchedTrackCount ?? 0}
 				data-unmatched-track-count={snapshot.diagnostics?.avatarUnmatchedTrackCount ?? 0}
@@ -205,13 +266,21 @@
 
 			<GameHud
 				{snapshot}
-				onHotbarSelect={(index) => {
-					sendCommand('hotbar', index);
-				}}
+				onHotbarSelect={sendHotbarCommand}
 				onPause={() => {
 					sendCommand('pause');
 				}}
 			/>
+
+			{#if snapshot.status === 'build-catalog'}
+				<BuildCatalogOverlay
+					selectedBlock={snapshot.selectedBuildBlock}
+					onSelect={sendBuildBlockCommand}
+					onClose={() => {
+						sendCommand('close-build-catalog');
+					}}
+				/>
+			{/if}
 
 			{#if snapshot.status === 'paused'}
 				<PauseMenu

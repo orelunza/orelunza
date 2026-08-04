@@ -12,6 +12,9 @@ const DEFAULT_CAMERA_DISTANCE = 6.4;
 const TARGET_HEIGHT = 1.42;
 const CAMERA_MARGIN = 0.34;
 const ZOOM_STEP = 0.0018;
+const RECENTER_DELAY_SECONDS = 1.35;
+const RECENTER_SPEED = 2.2;
+const RECENTER_MIN_SPEED = 0.6;
 
 export class ThirdPersonCamera {
 	readonly camera: PerspectiveCamera;
@@ -26,6 +29,8 @@ export class ThirdPersonCamera {
 	private readonly sample = new Vector3();
 	private readonly origin = new Vector3();
 	private updateMs = 0;
+	private mouseLookTimer = 0;
+	private recentering = false;
 
 	constructor(
 		aspect: number,
@@ -54,12 +59,26 @@ export class ThirdPersonCamera {
 		return this.updateMs;
 	}
 
+	get mouseLookActive(): boolean {
+		return this.mouseLookTimer > 0;
+	}
+
+	get cameraRecentering(): boolean {
+		return this.recentering;
+	}
+
 	setOrientation(yaw: number, pitch = 0.34): void {
 		this.yaw = yaw;
 		this.pitch = clamp(pitch, MIN_CAMERA_PITCH, MAX_CAMERA_PITCH);
+		this.mouseLookTimer = 0;
+		this.recentering = false;
 	}
 
 	applyMouse(_player: PlayerState, delta: MouseDelta): void {
+		if (Math.abs(delta.x) > 0 || Math.abs(delta.y) > 0) {
+			this.mouseLookTimer = RECENTER_DELAY_SECONDS;
+			this.recentering = false;
+		}
 		this.yaw -= delta.x * SENSITIVITY;
 		this.pitch = clamp(this.pitch + delta.y * SENSITIVITY, MIN_CAMERA_PITCH, MAX_CAMERA_PITCH);
 	}
@@ -72,8 +91,25 @@ export class ThirdPersonCamera {
 		);
 	}
 
-	update(player: PlayerState): void {
+	update(player: PlayerState, deltaSeconds = 1 / 60): void {
 		const startedAt = performance.now();
+		const delta = Math.min(deltaSeconds, 0.05);
+		const horizontalSpeed = Math.hypot(player.velocity.x, player.velocity.z);
+
+		if (this.mouseLookTimer > 0) {
+			this.mouseLookTimer = Math.max(0, this.mouseLookTimer - delta);
+		}
+
+		this.recentering = false;
+		if (this.mouseLookTimer <= 0 && horizontalSpeed > RECENTER_MIN_SPEED) {
+			const before = this.yaw;
+			this.yaw = dampAngle(this.yaw, player.bodyYaw, RECENTER_SPEED, delta);
+			this.recentering = Math.abs(angleDelta(before, this.yaw)) > 0.00001;
+		}
+		player.cameraYaw = this.yaw;
+		player.pitch = this.pitch;
+		player.mouseLookActive = this.mouseLookTimer > 0;
+		player.cameraRecentering = this.recentering;
 		this.target.set(player.position.x, player.position.y + TARGET_HEIGHT, player.position.z);
 		const horizontal = Math.cos(this.pitch);
 		this.direction
@@ -166,4 +202,23 @@ export class ThirdPersonCamera {
 
 function clamp(value: number, min: number, max: number): number {
 	return Math.max(min, Math.min(max, value));
+}
+
+export function dampAngle(
+	current: number,
+	target: number,
+	speed: number,
+	deltaSeconds: number
+): number {
+	return normalizeAngle(
+		current + angleDelta(current, target) * (1 - Math.exp(-speed * deltaSeconds))
+	);
+}
+
+export function angleDelta(current: number, target: number): number {
+	return Math.atan2(Math.sin(target - current), Math.cos(target - current));
+}
+
+function normalizeAngle(value: number): number {
+	return Math.atan2(Math.sin(value), Math.cos(value));
 }

@@ -1,4 +1,5 @@
 import { MathUtils } from 'three';
+import { dampAngle, angleDelta } from './ThirdPersonCamera';
 import { SPRINT_SPEED, WALK_SPEED } from './PlayerPhysics';
 import {
 	createNeutralPose,
@@ -10,7 +11,9 @@ import {
 
 const MAX_HEAD_YAW = 0.78;
 const MAX_HEAD_PITCH = 0.35;
-const TURN_THRESHOLD = 0.35;
+const IDLE_ENTER_SPEED = 0.06;
+const IDLE_EXIT_SPEED = 0.13;
+const STRAFE_HOLD_SECONDS = 0.7;
 
 export class HumanoidAnimator {
 	readonly pose: HumanoidPose = createNeutralPose();
@@ -21,6 +24,8 @@ export class HumanoidAnimator {
 	private landingTimer = 0;
 	private wasGrounded = true;
 	private lastVerticalSpeed = 0;
+	private moving = false;
+	private strafeHoldTime = 0;
 	private updateMs = 0;
 	private snapshot: HumanoidAnimationSnapshot = {
 		locomotionState: 'idle',
@@ -33,25 +38,56 @@ export class HumanoidAnimator {
 		grounded: true,
 		headYaw: 0,
 		bodyYaw: Math.PI,
+		cameraYaw: Math.PI,
+		desiredMovementYaw: Math.PI,
+		localForwardSpeed: 0,
+		localSideSpeed: 0,
+		verticalSpeed: 0,
+		stepActive: false,
+		stepHeight: 0,
+		leadingFoot: null,
+		stepStartedAt: -1,
+		mouseLookActive: false,
+		cameraRecentering: false,
 		updateMs: 0
 	};
 
 	update(input: HumanoidAnimationInput): HumanoidPose {
 		const startedAt = performance.now();
 		const delta = Math.min(input.deltaSeconds, 0.05);
+		const cameraYaw = input.cameraYaw ?? input.yaw ?? this.visualYaw;
+		const desiredInputYaw = input.desiredMovementYaw ?? input.yaw ?? this.visualYaw;
 		const speed = Math.hypot(input.velocityX, input.velocityZ);
+		this.moving = this.moving ? speed > IDLE_ENTER_SPEED : speed > IDLE_EXIT_SPEED;
+		const desiredMovementYaw = this.moving
+			? Math.atan2(input.velocityX, input.velocityZ)
+			: desiredInputYaw;
+		const preTurnLocalForward =
+			Math.sin(this.visualYaw) * input.velocityX + Math.cos(this.visualYaw) * input.velocityZ;
+		const preTurnLocalSide =
+			-Math.cos(this.visualYaw) * input.velocityX + Math.sin(this.visualYaw) * input.velocityZ;
+		const sideDominant = Math.abs(preTurnLocalSide) > Math.abs(preTurnLocalForward) * 1.15;
+		this.strafeHoldTime =
+			this.moving && sideDominant && !input.grounded
+				? 0
+				: this.moving && sideDominant
+					? this.strafeHoldTime + delta
+					: 0;
+		const running = speed > (WALK_SPEED + SPRINT_SPEED) * 0.5;
+		const turnSpeed = this.resolveBodyTurnSpeed({
+			moving: this.moving,
+			running,
+			grounded: input.grounded,
+			sideDominant
+		});
+		this.visualYaw = this.moving
+			? dampAngle(this.visualYaw, desiredMovementYaw, turnSpeed, delta)
+			: normalizeAngle(this.visualYaw);
 		const localForward =
 			Math.sin(this.visualYaw) * input.velocityX + Math.cos(this.visualYaw) * input.velocityZ;
 		const localSide =
 			-Math.cos(this.visualYaw) * input.velocityX + Math.sin(this.visualYaw) * input.velocityZ;
-		const moving = speed > 0.08;
-		const running = speed > (WALK_SPEED + SPRINT_SPEED) * 0.5;
-		const desiredYaw = moving ? Math.atan2(input.velocityX, input.velocityZ) : input.yaw;
-		const yawDelta = angleDelta(this.visualYaw, desiredYaw);
-		const turnSpeed = moving ? 10 : 5;
-		const maxTurn = (moving ? 7 : 3.8) * delta;
-		this.visualYaw += MathUtils.clamp(yawDelta * dampAlpha(turnSpeed, delta), -maxTurn, maxTurn);
-		this.visualYaw = normalizeAngle(this.visualYaw);
+		const yawDelta = angleDelta(this.visualYaw, desiredMovementYaw);
 
 		if (input.grounded && !this.wasGrounded) {
 			this.landingTimer = MathUtils.clamp(Math.abs(this.lastVerticalSpeed) / 12, 0.12, 0.28);
@@ -60,7 +96,7 @@ export class HumanoidAnimator {
 		this.wasGrounded = input.grounded;
 		this.lastVerticalSpeed = input.velocityY;
 
-		const cadence = running ? 12.5 : moving ? 8.2 : 1.1;
+		const cadence = running ? 12.5 : this.moving ? 8.2 : 1.1;
 		this.gaitPhase += cadence * delta * MathUtils.clamp(speed / WALK_SPEED, 0.25, 1.45);
 		this.blinkTimer -= delta;
 
@@ -89,7 +125,7 @@ export class HumanoidAnimator {
 			localSide,
 			running,
 			grounded: input.grounded,
-			cameraYaw: input.yaw,
+			cameraYaw,
 			verticalSpeed: input.velocityY,
 			delta
 		});
@@ -105,6 +141,17 @@ export class HumanoidAnimator {
 			grounded: input.grounded,
 			headYaw: this.pose.headYaw + this.pose.neckYaw,
 			bodyYaw: this.visualYaw,
+			cameraYaw,
+			desiredMovementYaw,
+			localForwardSpeed: localForward,
+			localSideSpeed: localSide,
+			verticalSpeed: input.velocityY,
+			stepActive: input.stepEvent !== null,
+			stepHeight: input.stepEvent?.height ?? 0,
+			leadingFoot: input.stepEvent?.leadingFoot ?? null,
+			stepStartedAt: input.stepEvent?.startedAt ?? -1,
+			mouseLookActive: false,
+			cameraRecentering: false,
 			updateMs: this.updateMs
 		};
 
@@ -140,15 +187,7 @@ export class HumanoidAnimator {
 			return 'landing';
 		}
 
-		if (input.speed < 0.08) {
-			if (input.yawDelta > TURN_THRESHOLD) {
-				return 'turn_right';
-			}
-
-			if (input.yawDelta < -TURN_THRESHOLD) {
-				return 'turn_left';
-			}
-
+		if (!this.moving) {
 			return 'idle';
 		}
 
@@ -165,6 +204,27 @@ export class HumanoidAnimator {
 		}
 
 		return 'walk_forward';
+	}
+
+	private resolveBodyTurnSpeed(input: {
+		moving: boolean;
+		running: boolean;
+		grounded: boolean;
+		sideDominant: boolean;
+	}): number {
+		if (!input.grounded) {
+			return 1.2;
+		}
+
+		if (!input.moving) {
+			return 0.6;
+		}
+
+		if (input.sideDominant) {
+			return this.strafeHoldTime < STRAFE_HOLD_SECONDS ? 0.35 : 1.8;
+		}
+
+		return input.running ? 8.5 : 5.8;
 	}
 
 	private applyPose(input: {
@@ -276,14 +336,6 @@ export class HumanoidAnimator {
 			this.pose.rightKneePitch += sign > 0 ? 0.2 : 0.08;
 		}
 	}
-}
-
-function dampAlpha(speed: number, delta: number): number {
-	return 1 - Math.exp(-speed * delta);
-}
-
-function angleDelta(current: number, target: number): number {
-	return Math.atan2(Math.sin(target - current), Math.cos(target - current));
 }
 
 function normalizeAngle(value: number): number {

@@ -894,7 +894,7 @@ async function waitForWorldReady(page: Page): Promise<void> {
 
 		return (
 			state?.dataset.avatarReady === 'true' &&
-			state?.dataset.modelSource === 'fbx' &&
+			state?.dataset.modelSource === 'reallusion-neutral-m' &&
 			Number(state?.dataset.activeLoops ?? 0) === 1
 		);
 	});
@@ -951,9 +951,11 @@ test.describe('world flow', () => {
 		expect(await numericAttribute(state, 'data-avatar-objects')).toBeLessThan(180);
 		expect(await numericAttribute(state, 'data-skinned-mesh-count')).toBeGreaterThan(0);
 		expect(await numericAttribute(state, 'data-avatar-update-ms')).toBeLessThan(1);
-		await expect(state).toHaveAttribute('data-avatar-model-source', 'fbx');
-		await expect(state).toHaveAttribute('data-model-source', 'fbx');
+		await expect(state).toHaveAttribute('data-avatar-model-source', 'reallusion-neutral-m');
+		await expect(state).toHaveAttribute('data-model-source', 'reallusion-neutral-m');
 		expect(await numericAttribute(state, 'data-avatar-animation-clips')).toBeGreaterThanOrEqual(9);
+		expect(await numericAttribute(state, 'data-retargeted-clip-count')).toBeGreaterThanOrEqual(9);
+		expect(await numericAttribute(state, 'data-target-skeleton-bone-count')).toBeGreaterThan(40);
 		expect(await numericAttribute(state, 'data-total-track-count')).toBeGreaterThan(0);
 		expect(await numericAttribute(state, 'data-matched-track-count')).toBeGreaterThan(0);
 		await expect(state).toHaveAttribute('data-hips-bone-name', /Hips/);

@@ -36,6 +36,8 @@ export interface PlayerAvatarMetrics {
 	ready: boolean;
 	error: string | null;
 	animationBlend: HumanoidAnimationBlendSnapshot;
+	retargetedClipCount: number;
+	targetSkeletonBoneCount: number;
 	debug: PlayerAvatarDebugSnapshot;
 	animation: HumanoidAnimationSnapshot;
 }
@@ -49,6 +51,19 @@ export interface PlayerAvatarDebugSnapshot {
 	actionTime: number;
 	actionWeight: number;
 	activeActionCount: number;
+	cameraYaw: number;
+	bodyYaw: number;
+	desiredMovementYaw: number;
+	headYaw: number;
+	localForwardSpeed: number;
+	localSideSpeed: number;
+	verticalSpeed: number;
+	grounded: boolean;
+	stepActive: boolean;
+	stepHeight: number;
+	leadingFoot: 'left' | 'right' | null;
+	mouseLookActive: boolean;
+	cameraRecentering: boolean;
 	totalTrackCount: number;
 	matchedTrackCount: number;
 	unmatchedTrackCount: number;
@@ -111,6 +126,8 @@ export class PlayerAvatar {
 			ready: this.status === 'ready',
 			error: this.error,
 			animationBlend: this.animationController?.snapshot ?? emptyBlendSnapshot(),
+			retargetedClipCount: this.model?.retarget.retargetedClipCount ?? 0,
+			targetSkeletonBoneCount: this.model?.retarget.targetSkeletonBoneCount ?? 0,
 			debug: this.debugSnapshot(),
 			animation: this.animator.diagnostics
 		};
@@ -140,16 +157,28 @@ export class PlayerAvatar {
 	update(player: PlayerState, _moving: boolean, deltaSeconds: number): void {
 		const startedAt = performance.now();
 		const pose = this.animator.update({
-			yaw: player.yaw,
+			cameraYaw: player.cameraYaw,
+			bodyYaw: player.bodyYaw,
+			desiredMovementYaw: player.desiredMovementYaw,
 			velocityX: player.velocity.x,
 			velocityY: player.velocity.y,
 			velocityZ: player.velocity.z,
 			grounded: player.onGround,
-			deltaSeconds
+			deltaSeconds,
+			stepEvent: player.stepEvent
 		});
 		const snapshot = this.animator.diagnostics;
 
-		this.animationController?.update(snapshot.locomotionState, snapshot.speed, deltaSeconds);
+		player.bodyYaw = this.animator.bodyYaw;
+		player.yaw = player.bodyYaw;
+		player.headYaw = snapshot.headYaw;
+		player.localForwardSpeed = snapshot.localForwardSpeed;
+		player.localSideSpeed = snapshot.localSideSpeed;
+		player.verticalSpeed = snapshot.verticalSpeed;
+		this.animationController?.update(snapshot, deltaSeconds, {
+			mouseLookActive: player.mouseLookActive,
+			cameraRecentering: player.cameraRecentering
+		});
 
 		if (player.onGround) {
 			this.applyFootGrounding(player, pose);
@@ -161,7 +190,7 @@ export class PlayerAvatar {
 			player.position.y + (this.model?.modelOffsetY ?? 0),
 			player.position.z
 		);
-		this.object.rotation.y = this.animator.bodyYaw;
+		this.object.rotation.y = player.bodyYaw;
 		this.updateMs = performance.now() - startedAt;
 	}
 
@@ -242,6 +271,19 @@ export class PlayerAvatar {
 			actionTime: blend.actionTime,
 			actionWeight: blend.actionWeight,
 			activeActionCount: blend.activeActionCount,
+			cameraYaw: blend.cameraYaw,
+			bodyYaw: blend.bodyYaw,
+			desiredMovementYaw: blend.desiredMovementYaw,
+			headYaw: blend.headYaw,
+			localForwardSpeed: blend.localForwardSpeed,
+			localSideSpeed: blend.localSideSpeed,
+			verticalSpeed: blend.verticalSpeed,
+			grounded: blend.grounded,
+			stepActive: blend.stepActive,
+			stepHeight: blend.stepHeight,
+			leadingFoot: blend.leadingFoot,
+			mouseLookActive: blend.mouseLookActive,
+			cameraRecentering: blend.cameraRecentering,
 			totalTrackCount: trackStats.totalTrackCount,
 			matchedTrackCount: trackStats.matchedTrackCount,
 			unmatchedTrackCount: trackStats.unmatchedTrackCount,
@@ -298,7 +340,20 @@ function emptyBlendSnapshot(): HumanoidAnimationBlendSnapshot {
 		transitionCount: 0,
 		actionTime: 0,
 		actionWeight: 0,
-		activeActionCount: 0
+		activeActionCount: 0,
+		cameraYaw: 0,
+		bodyYaw: 0,
+		desiredMovementYaw: 0,
+		headYaw: 0,
+		localForwardSpeed: 0,
+		localSideSpeed: 0,
+		verticalSpeed: 0,
+		grounded: false,
+		stepActive: false,
+		stepHeight: 0,
+		leadingFoot: null,
+		mouseLookActive: false,
+		cameraRecentering: false
 	};
 }
 
