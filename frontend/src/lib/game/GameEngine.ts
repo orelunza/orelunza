@@ -65,6 +65,7 @@ export class GameEngine {
 	private lastAutoSaveAttempt = 0;
 	private lastSnapshotAt = 0;
 	private lastSnapshotKey = '';
+	private lastAvatarMetricsAt = Number.NEGATIVE_INFINITY;
 	private lastChunk: { x: number; z: number } | null = null;
 	private startPromise: Promise<void> | null = null;
 	private destroyed = false;
@@ -442,7 +443,7 @@ export class GameEngine {
 			Math.hypot(this.player.state.velocity.x, this.player.state.velocity.z) > 0.1,
 			deltaSeconds
 		);
-		this.recordAvatarMetrics();
+		this.recordAvatarMetricsThrottled(frameStartedAt);
 
 		const canTargetBlock = this.status === 'playing' && this.buildMode;
 		this.target = canTargetBlock
@@ -468,6 +469,15 @@ export class GameEngine {
 		const renderStartedAt = performance.now();
 		this.renderer.render(this.player.camera.camera);
 		this.diagnostics.renderMs = performance.now() - renderStartedAt;
+	}
+
+	private recordAvatarMetricsThrottled(now: number): void {
+		if (now - this.lastAvatarMetricsAt < SNAPSHOT_INTERVAL_MS) {
+			return;
+		}
+
+		this.lastAvatarMetricsAt = now;
+		this.recordAvatarMetrics();
 	}
 
 	private recordAvatarMetrics(): void {

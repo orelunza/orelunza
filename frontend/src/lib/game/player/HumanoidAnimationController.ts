@@ -69,6 +69,27 @@ export interface HumanoidAnimationControllerOptions {
 	fadeSeconds?: number;
 }
 
+interface HumanoidBoneSet {
+	hips: Object3D | null;
+	chest: Object3D | null;
+	neck: Object3D | null;
+	head: Object3D | null;
+	leftClavicle: Object3D | null;
+	leftUpperArm: Object3D | null;
+	leftLowerArm: Object3D | null;
+	leftHand: Object3D | null;
+	rightClavicle: Object3D | null;
+	rightUpperArm: Object3D | null;
+	rightLowerArm: Object3D | null;
+	rightHand: Object3D | null;
+	leftUpperLeg: Object3D | null;
+	rightUpperLeg: Object3D | null;
+	leftLeg: Object3D | null;
+	rightLeg: Object3D | null;
+	leftFoot: Object3D | null;
+	rightFoot: Object3D | null;
+}
+
 const FALLBACK_TURN_CLIPS = new Set<HumanoidAnimationState>(['turn_left', 'turn_right']);
 const STEP_DURATION_SECONDS = 0.48;
 const X_AXIS = new Vector3(1, 0, 0);
@@ -85,22 +106,14 @@ export class HumanoidAnimationController {
 	private readonly fadeSeconds: number;
 	private readonly fadingOut: Array<{ action: AnimationAction; endTime: number }> = [];
 	private readonly lookOffset = new Quaternion();
-	private readonly chestOffset = new Quaternion();
+	private readonly rootWorldQuaternion = new Quaternion();
+	private readonly parentWorldQuaternion = new Quaternion();
+	private readonly avatarUpWorld = new Vector3();
+	private readonly parentSpaceAxis = new Vector3();
 	private readonly stepHipOffset = new Quaternion();
 	private readonly stepKneeOffset = new Quaternion();
 	private readonly stepFootOffset = new Quaternion();
-	private readonly bones: {
-		hips: Object3D | null;
-		chest: Object3D | null;
-		neck: Object3D | null;
-		head: Object3D | null;
-		leftUpperLeg: Object3D | null;
-		rightUpperLeg: Object3D | null;
-		leftLeg: Object3D | null;
-		rightLeg: Object3D | null;
-		leftFoot: Object3D | null;
-		rightFoot: Object3D | null;
-	};
+	private readonly bones: HumanoidBoneSet;
 	private activeState: HumanoidAnimationState = 'idle';
 	private currentActionName = 'idle';
 	private previousActionName: string | null = null;
@@ -123,6 +136,7 @@ export class HumanoidAnimationController {
 	) {
 		this.mixer = new AnimationMixer(root);
 		this.bones = collectHumanoidBones(root);
+		validateCollectedBones(this.bones, options.strict === true);
 		this.fadeSeconds = options.fadeSeconds ?? 0.18;
 		const clipByName = new Map(clips.map((clip) => [clip.name, clip]));
 		const missing = REQUIRED_HUMANOID_CLIPS.filter((name) => !clipByName.has(name));
@@ -287,13 +301,45 @@ export class HumanoidAnimationController {
 
 	private applyLookOverlay(locomotion: HumanoidAnimationSnapshot): void {
 		const headYaw = MathUtils.clamp(locomotion.headYaw, -0.7, 0.7);
-		const chestYaw = MathUtils.clamp(headYaw * 0.35, -0.3, 0.3);
-		this.chestOffset.setFromAxisAngle(Y_AXIS, chestYaw);
-		this.lookOffset.setFromAxisAngle(Y_AXIS, headYaw * 0.55);
-		this.bones.chest?.quaternion.multiply(this.chestOffset);
-		this.bones.neck?.quaternion.multiply(this.lookOffset);
-		this.lookOffset.setFromAxisAngle(Y_AXIS, headYaw * 0.45);
-		this.bones.head?.quaternion.multiply(this.lookOffset);
+
+		if (Math.abs(headYaw) < 0.0001) {
+			return;
+		}
+
+		/*
+		 * Reallusion bones do not all use local Y as their twist axis. Rotate
+		 * around the avatar's vertical axis expressed in each bone parent's
+		 * coordinate system instead of assuming a Mixamo local axis.
+		 */
+		this.root.getWorldQuaternion(this.rootWorldQuaternion);
+		this.avatarUpWorld.copy(Y_AXIS).applyQuaternion(this.rootWorldQuaternion).normalize();
+
+		this.applyParentSpaceYaw(this.bones.chest, MathUtils.clamp(headYaw * 0.2, -0.18, 0.18));
+		this.applyParentSpaceYaw(this.bones.neck, headYaw * 0.45);
+		this.applyParentSpaceYaw(this.bones.head, headYaw * 0.35);
+	}
+
+	private applyParentSpaceYaw(bone: Object3D | null, angle: number): void {
+		if (!bone || Math.abs(angle) < 0.0001) {
+			return;
+		}
+
+		const parent = bone.parent;
+
+		if (!parent) {
+			this.lookOffset.setFromAxisAngle(Y_AXIS, angle);
+			bone.quaternion.premultiply(this.lookOffset);
+			return;
+		}
+
+		parent.getWorldQuaternion(this.parentWorldQuaternion);
+		this.parentWorldQuaternion.invert();
+		this.parentSpaceAxis
+			.copy(this.avatarUpWorld)
+			.applyQuaternion(this.parentWorldQuaternion)
+			.normalize();
+		this.lookOffset.setFromAxisAngle(this.parentSpaceAxis, angle);
+		bone.quaternion.premultiply(this.lookOffset);
 	}
 
 	private applyStepOverlay(locomotion: HumanoidAnimationSnapshot, deltaSeconds: number): void {
@@ -451,29 +497,26 @@ function smoothStep(value: number): number {
 	return value * value * (3 - 2 * value);
 }
 
-function collectHumanoidBones(root: Object3D): {
-	hips: Object3D | null;
-	chest: Object3D | null;
-	neck: Object3D | null;
-	head: Object3D | null;
-	leftUpperLeg: Object3D | null;
-	rightUpperLeg: Object3D | null;
-	leftLeg: Object3D | null;
-	rightLeg: Object3D | null;
-	leftFoot: Object3D | null;
-	rightFoot: Object3D | null;
-} {
-	const bones = {
-		hips: null as Object3D | null,
-		chest: null as Object3D | null,
-		neck: null as Object3D | null,
-		head: null as Object3D | null,
-		leftUpperLeg: null as Object3D | null,
-		rightUpperLeg: null as Object3D | null,
-		leftLeg: null as Object3D | null,
-		rightLeg: null as Object3D | null,
-		leftFoot: null as Object3D | null,
-		rightFoot: null as Object3D | null
+function collectHumanoidBones(root: Object3D): HumanoidBoneSet {
+	const bones: HumanoidBoneSet = {
+		hips: null,
+		chest: null,
+		neck: null,
+		head: null,
+		leftClavicle: null,
+		leftUpperArm: null,
+		leftLowerArm: null,
+		leftHand: null,
+		rightClavicle: null,
+		rightUpperArm: null,
+		rightLowerArm: null,
+		rightHand: null,
+		leftUpperLeg: null,
+		rightUpperLeg: null,
+		leftLeg: null,
+		rightLeg: null,
+		leftFoot: null,
+		rightFoot: null
 	};
 
 	root.traverse((child) => {
@@ -483,19 +526,41 @@ function collectHumanoidBones(root: Object3D): {
 
 		const name = normalizeBoneName(child.name);
 
-		if (name === 'hips') bones.hips = child;
-		else if (name === 'spine1' || name === 'spine2' || name === 'chest') bones.chest = child;
-		else if (name === 'neck') bones.neck = child;
+		if (name === 'hip' || name === 'hips') bones.hips = child;
+		else if (name === 'spine02' || name === 'spine2' || name === 'chest') bones.chest = child;
+		else if (name === 'neck' || name === 'necktwist01') bones.neck = child;
 		else if (name === 'head') bones.head = child;
-		else if (name === 'leftupleg') bones.leftUpperLeg = child;
-		else if (name === 'rightupleg') bones.rightUpperLeg = child;
-		else if (name === 'leftleg') bones.leftLeg = child;
-		else if (name === 'rightleg') bones.rightLeg = child;
-		else if (name === 'leftfoot') bones.leftFoot = child;
-		else if (name === 'rightfoot') bones.rightFoot = child;
+		else if (name === 'leftshoulder' || name === 'lclavicle') bones.leftClavicle = child;
+		else if (name === 'leftarm' || name === 'lupperarm') bones.leftUpperArm = child;
+		else if (name === 'leftforearm' || name === 'lforearm') bones.leftLowerArm = child;
+		else if (name === 'lefthand' || name === 'lhand') bones.leftHand = child;
+		else if (name === 'rightshoulder' || name === 'rclavicle') bones.rightClavicle = child;
+		else if (name === 'rightarm' || name === 'rupperarm') bones.rightUpperArm = child;
+		else if (name === 'rightforearm' || name === 'rforearm') bones.rightLowerArm = child;
+		else if (name === 'righthand' || name === 'rhand') bones.rightHand = child;
+		else if (name === 'leftupleg' || name === 'lthigh') bones.leftUpperLeg = child;
+		else if (name === 'rightupleg' || name === 'rthigh') bones.rightUpperLeg = child;
+		else if (name === 'leftleg' || name === 'lcalf') bones.leftLeg = child;
+		else if (name === 'rightleg' || name === 'rcalf') bones.rightLeg = child;
+		else if (name === 'leftfoot' || name === 'lfoot') bones.leftFoot = child;
+		else if (name === 'rightfoot' || name === 'rfoot') bones.rightFoot = child;
 	});
 
 	return bones;
+}
+
+function validateCollectedBones(bones: HumanoidBoneSet, strict: boolean): void {
+	if (!strict) {
+		return;
+	}
+
+	const missing = Object.entries(bones)
+		.filter(([, bone]) => bone === null)
+		.map(([name]) => name);
+
+	if (missing.length > 0) {
+		throw new Error(`Missing humanoid runtime bones: ${missing.join(', ')}`);
+	}
 }
 
 function normalizeBoneName(name: string): string {
@@ -506,6 +571,7 @@ function normalizeBoneName(name: string): string {
 		.replace(/^.*:/, '')
 		.replace(/^mixamorig/i, '')
 		.replace(/^beta[_-]?joints:?/i, '')
+		.replace(/^cc[_-]?base[_-]?/i, '')
 		.replace(/[^a-z0-9]/gi, '')
 		.toLowerCase();
 }

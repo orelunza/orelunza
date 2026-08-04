@@ -14,6 +14,7 @@ import {
 	HumanoidModel,
 	normalizeMixamoBoneName,
 	type HumanoidLoadStatus,
+	type HumanoidModelMetrics,
 	type HumanoidModelSource
 } from './HumanoidModel';
 import type { HumanoidAnimationSnapshot } from './HumanoidPose';
@@ -95,6 +96,21 @@ export class PlayerAvatar {
 	private error: string | null = null;
 	private disposed = false;
 	private lookTarget: Vector3 | null = null;
+	private modelMetrics: HumanoidModelMetrics = emptyModelMetrics();
+	private readonly clipTrackStats = new Map<string, ReturnType<typeof countClipTrackMatches>>();
+	private debugBones: {
+		hips: Object3D | null;
+		leftUpperLeg: Object3D | null;
+		rightUpperLeg: Object3D | null;
+		leftHand: Object3D | null;
+		rightHand: Object3D | null;
+	} = {
+		hips: null,
+		leftUpperLeg: null,
+		rightUpperLeg: null,
+		leftHand: null,
+		rightHand: null
+	};
 
 	constructor(
 		appearance: CharacterAppearanceV1 = DEFAULT_CHARACTER_APPEARANCE,
@@ -105,14 +121,7 @@ export class PlayerAvatar {
 	}
 
 	get diagnostics(): PlayerAvatarMetrics {
-		const metrics = this.model?.metrics ?? {
-			objectCount: 1,
-			meshCount: 0,
-			skinnedMeshCount: 0,
-			materialCount: 0,
-			boneCount: 0,
-			triangles: 0
-		};
+		const metrics = this.modelMetrics;
 
 		return {
 			updateMs: this.updateMs,
@@ -216,6 +225,7 @@ export class PlayerAvatar {
 			}
 
 			this.model = model;
+			this.cacheModelDiagnostics(model);
 			this.animationController = new HumanoidAnimationController(model.animationRoot, model.clips, {
 				strict: true
 			});
@@ -237,6 +247,7 @@ export class PlayerAvatar {
 			}
 
 			this.model = model;
+			this.cacheModelDiagnostics(model);
 			this.animationController = new HumanoidAnimationController(model.animationRoot, model.clips);
 			this.object.add(model.object);
 			this.status = 'ready';
@@ -247,20 +258,8 @@ export class PlayerAvatar {
 	private debugSnapshot(): PlayerAvatarDebugSnapshot {
 		const blend = this.animationController?.snapshot ?? emptyBlendSnapshot();
 		const model = this.model;
-		const clip = model?.clips.find((candidate) => candidate.name === blend.currentAction);
-		const trackStats =
-			model && clip
-				? countClipTrackMatches(clip, model.animationRoot)
-				: {
-						totalTrackCount: 0,
-						matchedTrackCount: 0,
-						unmatchedTrackCount: 0
-					};
-		const hips = model ? findBoneByCanonicalName(model.animationRoot, 'hips') : null;
-		const leftUpperLeg = model ? findBoneByCanonicalName(model.animationRoot, 'leftupleg') : null;
-		const rightUpperLeg = model ? findBoneByCanonicalName(model.animationRoot, 'rightupleg') : null;
-		const leftHand = model ? findBoneByCanonicalName(model.animationRoot, 'lefthand') : null;
-		const rightHand = model ? findBoneByCanonicalName(model.animationRoot, 'righthand') : null;
+		const trackStats = this.clipTrackStats.get(blend.currentAction) ?? EMPTY_TRACK_STATS;
+		const { hips, leftUpperLeg, rightUpperLeg, leftHand, rightHand } = this.debugBones;
 
 		return {
 			modelSource: String(model?.source ?? this.status),
@@ -300,6 +299,23 @@ export class PlayerAvatar {
 		};
 	}
 
+	private cacheModelDiagnostics(model: HumanoidModel): void {
+		this.modelMetrics = model.metrics;
+		this.clipTrackStats.clear();
+
+		for (const clip of model.clips) {
+			this.clipTrackStats.set(clip.name, countClipTrackMatches(clip, model.animationRoot));
+		}
+
+		this.debugBones = {
+			hips: findBoneByCanonicalName(model.animationRoot, 'hips'),
+			leftUpperLeg: findBoneByCanonicalName(model.animationRoot, 'leftupleg'),
+			rightUpperLeg: findBoneByCanonicalName(model.animationRoot, 'rightupleg'),
+			leftHand: findBoneByCanonicalName(model.animationRoot, 'lefthand'),
+			rightHand: findBoneByCanonicalName(model.animationRoot, 'righthand')
+		};
+	}
+
 	private applyFootGrounding(
 		player: PlayerState,
 		pose: { leftFootLift: number; rightFootLift: number }
@@ -327,6 +343,24 @@ export class PlayerAvatar {
 		pose.leftFootLift += Math.max(-0.03, Math.min(0.08, leftGround - player.position.y));
 		pose.rightFootLift += Math.max(-0.03, Math.min(0.08, rightGround - player.position.y));
 	}
+}
+
+const EMPTY_TRACK_STATS: ReturnType<typeof countClipTrackMatches> = {
+	totalTrackCount: 0,
+	matchedTrackCount: 0,
+	unmatchedTrackCount: 0,
+	matchedBoneNames: []
+};
+
+function emptyModelMetrics(): HumanoidModelMetrics {
+	return {
+		objectCount: 1,
+		meshCount: 0,
+		skinnedMeshCount: 0,
+		materialCount: 0,
+		boneCount: 0,
+		triangles: 0
+	};
 }
 
 function emptyBlendSnapshot(): HumanoidAnimationBlendSnapshot {

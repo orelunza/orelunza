@@ -5,6 +5,7 @@ import {
 	Mesh,
 	SkinnedMesh,
 	Vector3,
+	VectorKeyframeTrack,
 	type BufferGeometry,
 	type Material,
 	type Object3D
@@ -57,8 +58,7 @@ export interface HumanoidRetargetDiagnostics {
 	boneMapping: Record<string, string>;
 }
 
-export const ORELUNZA_CITIZEN_GLB_URL =
-	'/assets/characters/orelunza-citizen/orelunza-citizen.glb';
+export const ORELUNZA_CITIZEN_GLB_URL = '/assets/characters/orelunza-citizen/orelunza-citizen.glb';
 
 const MODEL_OFFSET_Y = 0;
 const MIN_MODEL_HEIGHT = 1.7;
@@ -223,6 +223,38 @@ export function canonicalClipNameFromAsset(assetName: string): string | null {
 	};
 
 	return aliases[leaf] ?? null;
+}
+
+/**
+ * Compatibility helper kept for the existing unit tests. The production GLB
+ * is already baked without horizontal root motion, so the runtime loader does
+ * not call this function.
+ */
+export function neutralizeRootMotionHorizontal(clip: AnimationClip): AnimationClip {
+	const tracks = clip.tracks.map((track) => {
+		const targetName = trackTargetName(track.name);
+		const propertyName = track.name.split('.').at(-1);
+		const canonicalBone = normalizeMixamoBoneName(targetName);
+
+		if ((canonicalBone !== 'hip' && canonicalBone !== 'hips') || propertyName !== 'position') {
+			return track.clone();
+		}
+
+		const values = Array.from(track.values);
+
+		if (values.length % 3 !== 0) {
+			return track.clone();
+		}
+
+		for (let index = 0; index < values.length; index += 3) {
+			values[index] = 0;
+			values[index + 2] = 0;
+		}
+
+		return new VectorKeyframeTrack(track.name, Array.from(track.times), values);
+	});
+
+	return new AnimationClip(clip.name, clip.duration, tracks);
 }
 
 /**
@@ -600,7 +632,9 @@ function setMaterialColor(material: Material, color: string): void {
 	}
 }
 
-function hasColor(material: Material): material is Material & { color: { set: (color: string) => void } } {
+function hasColor(
+	material: Material
+): material is Material & { color: { set: (color: string) => void } } {
 	return 'color' in material && typeof material.color === 'object' && material.color !== null;
 }
 
