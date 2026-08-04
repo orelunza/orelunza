@@ -1,27 +1,27 @@
 import {
 	AnimationClip,
-	Box3,
-	Group,
+	Bone,
 	Mesh,
 	SkinnedMesh,
-	Vector3,
+	VectorKeyframeTrack,
 	type BufferGeometry,
 	type Material,
 	type Object3D
 } from 'three';
 import {
+	DEFAULT_CHARACTER_APPEARANCE,
 	normalizeCharacterAppearance,
-	type CharacterAppearanceV1
+	type CharacterAppearanceV1,
+	type CharacterBodyType as AppearanceBodyType
 } from '../character/CharacterAppearance';
 import { HumanoidRig } from './HumanoidRig';
-import {
-	createFallbackHumanoidClips,
-	validateRequiredHumanoidClips
-} from './HumanoidAnimationController';
+import { createFallbackHumanoidClips } from './HumanoidAnimationController';
 import type { HumanoidPose } from './HumanoidPose';
 
-export type CharacterBodyType = 'neutral_m' | 'neutral_f';
-export type HumanoidModelSource = 'gltf' | 'procedural-fallback';
+/** Kept here as a public compatibility export for existing player code. */
+export type CharacterBodyType = AppearanceBodyType;
+
+export type HumanoidModelSource = 'procedural-fallback';
 export type HumanoidLoadStatus = 'loading' | 'ready' | 'failed';
 
 export interface HumanoidModelMetrics {
@@ -44,8 +44,10 @@ export interface HumanoidSourceAsset {
 }
 
 /**
- * Kept for compatibility with the existing diagnostics UI.
- * All retargeting values stay at zero because the GLB is baked in Blender.
+ * Compatibility diagnostics for the former imported-model pipeline.
+ *
+ * The procedural Orelunza citizen does not retarget external skeletons, so all
+ * counters remain zero. Keeping this shape avoids special cases in the debug UI.
  */
 export interface HumanoidRetargetDiagnostics {
 	retargetedClipCount: number;
@@ -57,128 +59,111 @@ export interface HumanoidRetargetDiagnostics {
 	boneMapping: Record<string, string>;
 }
 
-export const ORELUNZA_CITIZEN_GLB_URL =
-	'/assets/characters/orelunza-citizen/orelunza-citizen.glb';
+const MODEL_OFFSET_Y = 0.12;
+const SOURCE_DESCRIPTION =
+	'Lightweight procedural Orelunza citizen generated directly with Three.js';
 
-const MODEL_OFFSET_Y = 0;
-const MIN_MODEL_HEIGHT = 1.7;
-const MAX_MODEL_HEIGHT = 1.9;
-
-let sourceAssetPromise: Promise<HumanoidSourceAsset> | null = null;
-
+/**
+ * Runtime wrapper around the procedural voxel rig.
+ *
+ * The wrapper owns its rig, materials and animation clips. It intentionally
+ * preserves the former asynchronous `loadDefault()` surface so PlayerAvatar can
+ * later support streamed assets without another API migration.
+ */
 export class HumanoidModel {
-	readonly object = new Group();
+	readonly object: Object3D;
 	readonly isRiggedHumanoid = true;
 	readonly animationRoot: Object3D;
-	private readonly instanceMaterials: Material[];
+	readonly source: HumanoidModelSource = 'procedural-fallback';
+	readonly clips: AnimationClip[];
+	readonly modelOffsetY = MODEL_OFFSET_Y;
+	readonly retarget: HumanoidRetargetDiagnostics = emptyRetargetDiagnostics();
+	readonly rig: HumanoidRig;
 
-	private constructor(
-		readonly source: HumanoidModelSource,
-		readonly rig: HumanoidRig | null,
-		modelObject: Object3D,
-		readonly clips: AnimationClip[],
-		instanceMaterials: Material[] = [],
-		readonly modelOffsetY = MODEL_OFFSET_Y,
-		readonly retarget: HumanoidRetargetDiagnostics = emptyRetargetDiagnostics()
-	) {
-		this.object.name = 'avatarRoot';
-		this.object.userData.avatarPipeline =
-			source === 'gltf' ? 'gltf-prebaked' : 'procedural-fallback';
+	private disposed = false;
+
+	private constructor(appearance: CharacterAppearanceV1) {
+		const normalized = normalizeCharacterAppearance(appearance);
+
+		this.rig = new HumanoidRig(normalized);
+		this.object = this.rig.object;
+		this.animationRoot = this.object;
+		this.clips = createFallbackHumanoidClips();
+
+		this.object.userData.avatarPipeline = 'procedural-voxel';
+		this.object.userData.avatarStyle = 'orelunza-simple-voxel';
 		this.object.userData.avatarRole = 'peaceful-citizen-explorer';
 		this.object.userData.noMilitaryGear = true;
-		this.object.add(modelObject);
-		this.animationRoot = source === 'gltf' ? modelObject : this.object;
-		this.instanceMaterials = instanceMaterials;
+		this.object.userData.modelSource = this.source;
+		this.object.userData.sourceDescription = SOURCE_DESCRIPTION;
+		this.writeAppearanceMetadata(normalized);
 	}
 
 	static async loadDefault(appearance: CharacterAppearanceV1): Promise<HumanoidModel> {
-		const normalized = normalizeCharacterAppearance(appearance);
-		const asset = await loadHumanoidSourceAsset(normalized.bodyType);
-		const { clone } = await import('three/examples/jsm/utils/SkeletonUtils.js');
-		const instance = clone(asset.scene);
-		const instanceMaterials = cloneInstanceMaterials(instance);
-
-		prepareModelInstance(instance);
-
-		const model = new HumanoidModel(
-			'gltf',
-			null,
-			instance,
-			asset.clips,
-			instanceMaterials,
-			MODEL_OFFSET_Y,
-			asset.retarget
-		);
-
-		model.object.userData.requestedBodyType = normalized.bodyType;
-		model.withAppearance(normalized);
-
-		return model;
+		return new HumanoidModel(appearance);
 	}
 
-	/**
-	 * Explicit diagnostic fallback only. The normal avatar pipeline never calls
-	 * this method unless PlayerAvatar is created with allowFallback: true.
-	 */
 	static createFallback(appearance: CharacterAppearanceV1): HumanoidModel {
-		const normalized = normalizeCharacterAppearance(appearance);
-		const rig = new HumanoidRig(normalized);
-
-		return new HumanoidModel(
-			'procedural-fallback',
-			rig,
-			rig.object,
-			createFallbackHumanoidClips(),
-			[],
-			0.12
-		).withAppearance(normalized);
+		return new HumanoidModel(appearance);
 	}
 
 	get appearanceSnapshot(): CharacterAppearanceV1 {
-		return normalizeCharacterAppearance(this.object.userData.appearance as CharacterAppearanceV1);
+		return normalizeCharacterAppearance(this.object.userData.appearance);
 	}
 
 	get animationNames(): string[] {
 		return this.clips.map((clip) => clip.name);
 	}
 
+	/**
+	 * Measured on demand because changing a hairstyle can add or remove meshes.
+	 */
 	get metrics(): HumanoidModelMetrics {
 		return measureModel(this.object);
 	}
 
 	updateAppearance(appearance: CharacterAppearanceV1): void {
-		this.withAppearance(appearance);
+		if (this.disposed) {
+			return;
+		}
+
+		const normalized = normalizeCharacterAppearance(appearance);
+		this.rig.updateAppearance(normalized);
+		this.writeAppearanceMetadata(normalized);
 	}
 
 	applyPose(pose: HumanoidPose): void {
-		this.rig?.applyPose(pose);
+		if (!this.disposed) {
+			this.rig.applyPose(pose);
+		}
 	}
 
 	dispose(): void {
-		this.rig?.dispose();
-
-		for (const material of this.instanceMaterials) {
-			material.dispose();
+		if (this.disposed) {
+			return;
 		}
 
-		this.instanceMaterials.length = 0;
+		this.disposed = true;
+		this.rig.dispose();
+
+		for (const clip of this.clips) {
+			clip.resetDuration();
+		}
+
+		this.clips.length = 0;
 		this.object.clear();
+		this.object.userData.disposed = true;
 	}
 
-	private withAppearance(appearance: CharacterAppearanceV1): HumanoidModel {
-		const normalized = normalizeCharacterAppearance(appearance);
-
-		this.rig?.updateAppearance(normalized);
-		applyGltfAppearance(this.object, normalized);
-		this.object.userData.appearance = normalized;
-
-		return this;
+	private writeAppearanceMetadata(appearance: CharacterAppearanceV1): void {
+		this.object.userData.appearance = appearance;
+		this.object.userData.requestedBodyType = appearance.bodyType;
 	}
 }
 
 /**
- * Kept as a public helper because existing tests and diagnostics use it.
- * It now canonicalizes Blender/glTF action names as well as the old FBX names.
+ * Normalize common imported animation filenames to Orelunza's canonical action
+ * names. This remains useful for tools and for a possible future GLB pipeline.
  */
 export function canonicalClipNameFromAsset(assetName: string): string | null {
 	const leaf = assetName
@@ -189,21 +174,24 @@ export function canonicalClipNameFromAsset(assetName: string): string | null {
 		?.replace(/\.(fbx|glb|gltf)$/i, '')
 		.replace(/\.\d+$/, '')
 		.replace(/[\s-]+/g, '_')
-		.replace(/^.*action_/, '')
-		.replace(/^.*animation_/, '')
+		.replace(/^(?:action|animation)_/, '')
 		.trim();
 
 	if (!leaf) {
 		return null;
 	}
 
-	const aliases: Record<string, string> = {
+	const aliases: Readonly<Record<string, string>> = {
 		idle: 'idle',
 		base_idle: 'idle',
+		idle_loop: 'idle',
 		walk: 'walk',
 		walking: 'walk',
+		walk_forward: 'walk',
+		walking_forward: 'walk',
 		run: 'run',
 		running: 'run',
+		run_forward: 'run',
 		strafe_left: 'strafe_left',
 		left_strafe: 'strafe_left',
 		strafe_right: 'strafe_right',
@@ -211,10 +199,13 @@ export function canonicalClipNameFromAsset(assetName: string): string | null {
 		walk_backward: 'walk_backward',
 		walking_backward: 'walk_backward',
 		walking_backwards: 'walk_backward',
+		backward_walk: 'walk_backward',
 		jump: 'jump',
+		jump_start: 'jump',
 		fall: 'fall',
 		falling: 'fall',
 		falling_idle: 'fall',
+		airborne: 'fall',
 		land: 'land',
 		landing: 'land',
 		reaction_shoved: 'reaction_shoved',
@@ -226,9 +217,41 @@ export function canonicalClipNameFromAsset(assetName: string): string | null {
 }
 
 /**
- * Compatibility helper used by PlayerAvatar diagnostics. Despite its old name,
- * it simply creates a stable canonical bone name and performs no retargeting.
+ * Remove only horizontal translation from a hip root-motion track.
+ *
+ * Cloning and mutating the original track preserves its interpolation mode and
+ * any future metadata instead of rebuilding it as a new track from scratch.
  */
+export function neutralizeRootMotionHorizontal(clip: AnimationClip): AnimationClip {
+	const tracks = clip.tracks.map((sourceTrack) => {
+		const track = sourceTrack.clone();
+		const targetName = trackTargetName(track.name);
+		const propertyName = trackPropertyName(track.name);
+		const canonicalBone = normalizeMixamoBoneName(targetName);
+
+		if (
+			(canonicalBone !== 'hip' && canonicalBone !== 'hips') ||
+			propertyName !== 'position' ||
+			!(track instanceof VectorKeyframeTrack)
+		) {
+			return track;
+		}
+
+		if (track.values.length % 3 !== 0) {
+			return track;
+		}
+
+		for (let index = 0; index < track.values.length; index += 3) {
+			track.values[index] = 0;
+			track.values[index + 2] = 0;
+		}
+
+		return track;
+	});
+
+	return new AnimationClip(clip.name, clip.duration, tracks, clip.blendMode);
+}
+
 export function normalizeMixamoBoneName(name: string): string {
 	return name
 		.replace(/\\/g, '/')
@@ -255,24 +278,23 @@ export function countClipTrackMatches(
 	unmatchedTrackCount: number;
 	matchedBoneNames: string[];
 } {
-	const boneNames = new Set<string>();
+	const objectNames = new Set<string>();
 
 	root.traverse((child) => {
-		if (child.type === 'Bone') {
-			boneNames.add(normalizeMixamoBoneName(child.name));
+		if (child.name) {
+			objectNames.add(normalizeMixamoBoneName(child.name));
 		}
 	});
 
-	const matched = new Set<string>();
+	const matchedNames = new Set<string>();
 	let matchedTrackCount = 0;
 
 	for (const track of clip.tracks) {
-		const targetName = trackTargetName(track.name);
-		const canonical = normalizeMixamoBoneName(targetName);
+		const targetName = normalizeMixamoBoneName(trackTargetName(track.name));
 
-		if (boneNames.has(canonical)) {
+		if (targetName && objectNames.has(targetName)) {
 			matchedTrackCount += 1;
-			matched.add(canonical);
+			matchedNames.add(targetName);
 		}
 	}
 
@@ -280,268 +302,39 @@ export function countClipTrackMatches(
 		totalTrackCount: clip.tracks.length,
 		matchedTrackCount,
 		unmatchedTrackCount: clip.tracks.length - matchedTrackCount,
-		matchedBoneNames: [...matched].sort()
+		matchedBoneNames: [...matchedNames].sort()
 	};
 }
 
+/**
+ * Compatibility loader used by diagnostics and development tools.
+ *
+ * Each call returns an independently owned procedural scene. The caller owns
+ * the returned scene and should dispose its materials through the corresponding
+ * model/rig lifecycle when it is no longer needed.
+ */
 export async function loadHumanoidSourceAsset(
-	_bodyType: CharacterBodyType = 'neutral_m'
+	bodyType: CharacterBodyType = 'neutral_m'
 ): Promise<HumanoidSourceAsset> {
-	if (!sourceAssetPromise) {
-		const pending = loadHumanoidSourceAssetInternal();
-		sourceAssetPromise = pending;
-
-		void pending.catch(() => {
-			if (sourceAssetPromise === pending) {
-				sourceAssetPromise = null;
-			}
-		});
-	}
-
-	return sourceAssetPromise;
-}
-
-async function loadHumanoidSourceAssetInternal(): Promise<HumanoidSourceAsset> {
-	const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js');
-	const loader = new GLTFLoader();
-	const gltf = await loader.loadAsync(ORELUNZA_CITIZEN_GLB_URL);
-	const scene = gltf.scene;
-
-	scene.name = 'orelunzaCitizenGltfSource';
-	prepareModelInstance(scene);
-
-	const clips = canonicalizeClips(gltf.animations);
-	const missing = validateRequiredHumanoidClips(clips);
-
-	if (missing.length > 0) {
-		throw new Error(
-			`Orelunza citizen GLB is missing required animation clips: ${missing.join(', ')}`
-		);
-	}
-
-	validateLoadedAsset(scene, clips);
-
-	const metrics = measureModel(scene);
-	const trackStats = clips.reduce(
-		(result, clip) => {
-			const stats = countClipTrackMatches(clip, scene);
-			result.matched += stats.matchedTrackCount;
-			result.unmatched += stats.unmatchedTrackCount;
-			return result;
-		},
-		{ matched: 0, unmatched: 0 }
-	);
+	const appearance = normalizeCharacterAppearance({
+		...DEFAULT_CHARACTER_APPEARANCE,
+		bodyType
+	});
+	const model = HumanoidModel.createFallback(appearance);
 
 	return {
-		scene,
-		clips,
-		clipNames: clips.map((clip) => clip.name),
-		metrics,
-		sourceKind: 'gltf',
-		sourceDescription:
-			'Prebaked Reallusion Neutral_M citizen loaded from one GLB with Blender-baked animations',
-		retarget: {
-			retargetedClipCount: 0,
-			targetSkeletonBoneCount: metrics.boneCount,
-			sourceSkeletonBoneCount: 0,
-			matchedTrackCount: trackStats.matched,
-			ignoredTrackCount: trackStats.unmatched,
-			essentialBones: collectEssentialBones(scene),
-			boneMapping: {}
-		}
+		scene: model.object,
+		clips: model.clips,
+		clipNames: model.animationNames,
+		metrics: model.metrics,
+		sourceKind: model.source,
+		sourceDescription: SOURCE_DESCRIPTION,
+		retarget: model.retarget
 	};
 }
 
-function canonicalizeClips(sourceClips: AnimationClip[]): AnimationClip[] {
-	const byName = new Map<string, { clip: AnimationClip; exact: boolean }>();
-
-	for (const sourceClip of sourceClips) {
-		const canonicalName = canonicalClipNameFromAsset(sourceClip.name);
-
-		if (!canonicalName) {
-			continue;
-		}
-
-		const candidate = sourceClip.clone();
-		candidate.name = canonicalName;
-
-		const existing = byName.get(canonicalName);
-		const sourceWasExact = sourceClip.name.toLowerCase() === canonicalName;
-
-		if (!existing || (sourceWasExact && !existing.exact)) {
-			byName.set(canonicalName, { clip: candidate, exact: sourceWasExact });
-		}
-	}
-
-	return [...byName.values()].map((entry) => entry.clip);
-}
-
-function prepareModelInstance(root: Object3D): void {
-	root.visible = true;
-	root.updateMatrixWorld(true);
-
-	root.traverse((child) => {
-		child.visible = true;
-
-		if (!(child instanceof Mesh)) {
-			return;
-		}
-
-		child.frustumCulled = false;
-		child.castShadow = false;
-		child.receiveShadow = false;
-
-		for (const material of asMaterialArray(child.material)) {
-			material.visible = true;
-			material.needsUpdate = true;
-		}
-
-		if (child instanceof SkinnedMesh) {
-			child.normalizeSkinWeights();
-		}
-	});
-
-	root.updateMatrixWorld(true);
-}
-
-function validateLoadedAsset(root: Object3D, clips: AnimationClip[]): void {
-	const metrics = measureModel(root);
-
-	if (metrics.skinnedMeshCount < 1) {
-		throw new Error('Orelunza citizen GLB does not contain a SkinnedMesh.');
-	}
-
-	if (metrics.boneCount < 1) {
-		throw new Error('Orelunza citizen GLB does not contain a skeleton.');
-	}
-
-	for (const clip of clips) {
-		if (!Number.isFinite(clip.duration) || clip.duration <= 0) {
-			throw new Error(`Animation ${clip.name} has an invalid duration.`);
-		}
-
-		if (clip.tracks.length === 0) {
-			throw new Error(`Animation ${clip.name} contains no tracks.`);
-		}
-	}
-
-	const bounds = new Box3().setFromObject(root);
-	const size = bounds.getSize(new Vector3());
-
-	if (![size.x, size.y, size.z].every(Number.isFinite)) {
-		throw new Error('Orelunza citizen GLB has non-finite bounds.');
-	}
-
-	if (size.y < MIN_MODEL_HEIGHT || size.y > MAX_MODEL_HEIGHT) {
-		throw new Error(
-			`Orelunza citizen GLB height must be between ${MIN_MODEL_HEIGHT} and ` +
-				`${MAX_MODEL_HEIGHT} metres, received ${size.y.toFixed(4)}.`
-		);
-	}
-
-	if (size.x > 3 || size.z > 3) {
-		throw new Error(
-			`Orelunza citizen GLB bounds are incoherent: ` +
-				`${size.x.toFixed(3)} x ${size.y.toFixed(3)} x ${size.z.toFixed(3)}.`
-		);
-	}
-}
-
-function cloneInstanceMaterials(root: Object3D): Material[] {
-	const clones = new Map<Material, Material>();
-
-	root.traverse((child) => {
-		if (!(child instanceof Mesh)) {
-			return;
-		}
-
-		if (Array.isArray(child.material)) {
-			child.material = child.material.map((material) => cloneMaterial(material, clones));
-		} else {
-			child.material = cloneMaterial(child.material, clones);
-		}
-	});
-
-	return [...clones.values()];
-}
-
-function cloneMaterial(material: Material, clones: Map<Material, Material>): Material {
-	const existing = clones.get(material);
-
-	if (existing) {
-		return existing;
-	}
-
-	const cloned = material.clone();
-	clones.set(material, cloned);
-	return cloned;
-}
-
-function applyGltfAppearance(root: Object3D, appearance: CharacterAppearanceV1): void {
-	root.traverse((child) => {
-		if (!(child instanceof Mesh)) {
-			return;
-		}
-
-		for (const material of asMaterialArray(child.material)) {
-			const role = `${child.name} ${material.name}`.toLowerCase();
-
-			if (/hair|brow/.test(role)) {
-				setMaterialColor(material, appearance.hairColor);
-			} else if (/shirt|tunic|top|uppercloth|upper_cloth/.test(role)) {
-				setMaterialColor(material, appearance.shirtColor);
-			} else if (/pants|trouser|lowercloth|lower_cloth/.test(role)) {
-				setMaterialColor(material, appearance.pantsColor);
-			} else if (/shoe|boot/.test(role)) {
-				setMaterialColor(material, appearance.shoesColor);
-			} else if (/skin|nail/.test(role)) {
-				setMaterialColor(material, appearance.skinTone);
-			}
-		}
-	});
-}
-
-function collectEssentialBones(root: Object3D): Record<string, string> {
-	const wanted = new Map<string, string>([
-		['hip', 'hips'],
-		['spine01', 'spine'],
-		['spine02', 'chest'],
-		['necktwist01', 'neck'],
-		['head', 'head'],
-		['lhand', 'leftHand'],
-		['rhand', 'rightHand'],
-		['lthigh', 'leftUpperLeg'],
-		['rthigh', 'rightUpperLeg'],
-		['lfoot', 'leftFoot'],
-		['rfoot', 'rightFoot']
-	]);
-	const result: Record<string, string> = {};
-
-	root.traverse((child) => {
-		if (child.type !== 'Bone') {
-			return;
-		}
-
-		const canonical = normalizeReallusionBoneName(child.name);
-		const role = wanted.get(canonical);
-
-		if (role) {
-			result[role] = child.name;
-		}
-	});
-
-	return result;
-}
-
-function trackTargetName(trackName: string): string {
-	const bracket = trackName.match(/\.bones\[([^\]]+)\]/);
-
-	if (bracket) {
-		return bracket[1];
-	}
-
-	const propertySeparator = trackName.lastIndexOf('.');
-	return propertySeparator >= 0 ? trackName.slice(0, propertySeparator) : trackName;
+export function measureHumanoidModel(object: Object3D): HumanoidModelMetrics {
+	return measureModel(object);
 }
 
 function measureModel(object: Object3D): HumanoidModelMetrics {
@@ -555,7 +348,7 @@ function measureModel(object: Object3D): HumanoidModelMetrics {
 	object.traverse((child) => {
 		objectCount += 1;
 
-		if (child.type === 'Bone') {
+		if (child instanceof Bone) {
 			boneCount += 1;
 		}
 
@@ -573,10 +366,7 @@ function measureModel(object: Object3D): HumanoidModelMetrics {
 			materials.add(material);
 		}
 
-		const geometry = child.geometry as BufferGeometry;
-		const index = geometry.getIndex();
-		const position = geometry.getAttribute('position');
-		triangles += (index?.count ?? position?.count ?? 0) / 3;
+		triangles += geometryTriangleCount(child.geometry as BufferGeometry);
 	});
 
 	return {
@@ -589,19 +379,35 @@ function measureModel(object: Object3D): HumanoidModelMetrics {
 	};
 }
 
+function geometryTriangleCount(geometry: BufferGeometry): number {
+	const index = geometry.getIndex();
+	const position = geometry.getAttribute('position');
+	const availableCount = index?.count ?? position?.count ?? 0;
+	const drawCount = Number.isFinite(geometry.drawRange.count)
+		? Math.min(availableCount, Math.max(0, geometry.drawRange.count))
+		: availableCount;
+
+	return drawCount / 3;
+}
+
+function trackTargetName(trackName: string): string {
+	const bracket = trackName.match(/\.bones\[([^\]]+)\]/);
+
+	if (bracket) {
+		return bracket[1];
+	}
+
+	const propertySeparator = trackName.lastIndexOf('.');
+	return propertySeparator >= 0 ? trackName.slice(0, propertySeparator) : trackName;
+}
+
+function trackPropertyName(trackName: string): string {
+	const propertySeparator = trackName.lastIndexOf('.');
+	return propertySeparator >= 0 ? trackName.slice(propertySeparator + 1) : '';
+}
+
 function asMaterialArray(material: Material | Material[]): Material[] {
 	return Array.isArray(material) ? material : [material];
-}
-
-function setMaterialColor(material: Material, color: string): void {
-	if (hasColor(material)) {
-		material.color.set(color);
-		material.needsUpdate = true;
-	}
-}
-
-function hasColor(material: Material): material is Material & { color: { set: (color: string) => void } } {
-	return 'color' in material && typeof material.color === 'object' && material.color !== null;
 }
 
 function emptyRetargetDiagnostics(): HumanoidRetargetDiagnostics {

@@ -2,17 +2,16 @@ import {
 	AnimationClip,
 	AnimationMixer,
 	BooleanKeyframeTrack,
-	LoopRepeat,
 	LoopOnce,
-	MathUtils,
-	NumberKeyframeTrack,
-	Quaternion,
-	Vector3,
+	LoopRepeat,
 	type AnimationAction,
 	type Object3D
 } from 'three';
-import type { HumanoidAnimationSnapshot, HumanoidLocomotionState } from './HumanoidPose';
-import type { LeadingFoot } from './PlayerState';
+import type {
+	HumanoidAnimationSnapshot,
+	HumanoidLeadingFoot,
+	HumanoidLocomotionState
+} from './HumanoidPose';
 
 export const REQUIRED_HUMANOID_CLIPS = [
 	'idle',
@@ -37,12 +36,13 @@ export const HUMANOID_ANIMATION_STATES = [
 
 export type RequiredHumanoidClip = (typeof REQUIRED_HUMANOID_CLIPS)[number];
 export type HumanoidAnimationState = (typeof HUMANOID_ANIMATION_STATES)[number];
+export type HumanoidAnimationBackend = 'auto' | 'procedural' | 'mixer';
 
 export interface HumanoidAnimationBlendSnapshot {
 	activeState: HumanoidAnimationState;
 	currentAction: string;
 	previousAction: string | null;
-	weights: Record<string, number>;
+	weights: Record<HumanoidAnimationState, number>;
 	clipCount: number;
 	mixerTime: number;
 	transitionCount: number;
@@ -59,7 +59,7 @@ export interface HumanoidAnimationBlendSnapshot {
 	grounded: boolean;
 	stepActive: boolean;
 	stepHeight: number;
-	leadingFoot: LeadingFoot | null;
+	leadingFoot: HumanoidLeadingFoot | null;
 	mouseLookActive: boolean;
 	cameraRecentering: boolean;
 }
@@ -67,292 +67,435 @@ export interface HumanoidAnimationBlendSnapshot {
 export interface HumanoidAnimationControllerOptions {
 	strict?: boolean;
 	fadeSeconds?: number;
+	backend?: HumanoidAnimationBackend;
 }
-
-const FALLBACK_TURN_CLIPS = new Set<HumanoidAnimationState>(['turn_left', 'turn_right']);
-const STEP_DURATION_SECONDS = 0.48;
-const X_AXIS = new Vector3(1, 0, 0);
-const Y_AXIS = new Vector3(0, 1, 0);
 
 export interface HumanoidAnimationDebugFlags {
 	mouseLookActive: boolean;
 	cameraRecentering: boolean;
 }
 
+const MAX_DELTA_SECONDS = 0.05;
+const DEFAULT_FADE_SECONDS = 0.18;
+const MIN_FADE_SECONDS = 0.001;
+const FALLBACK_TURN_CLIPS = new Set<HumanoidAnimationState>(['turn_left', 'turn_right']);
+const ONE_SHOT_STATES = new Set<HumanoidAnimationState>(['jump', 'land', 'reaction_shoved']);
+
+/**
+ * Lightweight state and transition controller for Orelunza humanoids.
+ *
+ * The current procedural avatar is already posed directly by HumanoidAnimator,
+ * so creating and updating an AnimationMixer for placeholder clips would only
+ * duplicate work. In `auto` mode this controller therefore remains numeric and
+ * allocation-free while clips contain no real transform tracks.
+ *
+ * When a future GLB supplies actual position/quaternion/scale tracks, the same
+ * controller automatically enables its mixer backend without changing
+ * PlayerAvatar or the locomotion API.
+ */
 export class HumanoidAnimationController {
-	readonly mixer: AnimationMixer;
-	private readonly actions = new Map<string, AnimationAction>();
+	readonly backend: Exclude<HumanoidAnimationBackend, 'auto'>;
+
+	private readonly clipByName = new Map<string, AnimationClip>();
+	private readonly actions = new Map<HumanoidAnimationState, AnimationAction>();
 	private readonly fadeSeconds: number;
-	private readonly fadingOut: Array<{ action: AnimationAction; endTime: number }> = [];
-	private readonly lookOffset = new Quaternion();
-	private readonly chestOffset = new Quaternion();
-	private readonly stepHipOffset = new Quaternion();
-	private readonly stepKneeOffset = new Quaternion();
-	private readonly stepFootOffset = new Quaternion();
-	private readonly bones: {
-		hips: Object3D | null;
-		chest: Object3D | null;
-		neck: Object3D | null;
-		head: Object3D | null;
-		leftUpperLeg: Object3D | null;
-		rightUpperLeg: Object3D | null;
-		leftLeg: Object3D | null;
-		rightLeg: Object3D | null;
-		leftFoot: Object3D | null;
-		rightFoot: Object3D | null;
-	};
-	private activeState: HumanoidAnimationState = 'idle';
-	private currentActionName = 'idle';
-	private previousActionName: string | null = null;
-	private transitionCount = 0;
-	private activeActionStartedAt = 0;
-	private lastLocomotion: HumanoidAnimationSnapshot | null = null;
-	private lastDebugFlags: HumanoidAnimationDebugFlags = {
+	private readonly weights = createWeightRecord();
+	private readonly blendSnapshot: HumanoidAnimationBlendSnapshot;
+	private readonly legacySnapshot = createMutableLocomotionSnapshot();
+	private readonly debugFlags: HumanoidAnimationDebugFlags = {
 		mouseLookActive: false,
 		cameraRecentering: false
 	};
-	private stepStartedAt = -1;
-	private stepElapsed = 0;
-	private stepHeight = 0;
-	private stepLeadingFoot: LeadingFoot | null = null;
+
+	private mixerValue: AnimationMixer | null = null;
+	private activeState: HumanoidAnimationState = 'idle';
+	private currentActionName = 'idle';
+	private previousActionName: string | null = null;
+	private transitionFrom: HumanoidAnimationState | null = null;
+	private transitionElapsed = 0;
+	private transitionCount = 0;
+	private totalTime = 0;
+	private actionStartedAt = 0;
+	private disposed = false;
 
 	constructor(
 		readonly root: Object3D,
 		clips: AnimationClip[] = createFallbackHumanoidClips(),
 		options: HumanoidAnimationControllerOptions = {}
 	) {
-		this.mixer = new AnimationMixer(root);
-		this.bones = collectHumanoidBones(root);
-		this.fadeSeconds = options.fadeSeconds ?? 0.18;
-		const clipByName = new Map(clips.map((clip) => [clip.name, clip]));
-		const missing = REQUIRED_HUMANOID_CLIPS.filter((name) => !clipByName.has(name));
+		this.fadeSeconds = clampFinite(options.fadeSeconds, DEFAULT_FADE_SECONDS, 0, 2);
+
+		for (const clip of clips) {
+			if (clip?.name && !this.clipByName.has(clip.name)) {
+				this.clipByName.set(clip.name, clip);
+			}
+		}
+
+		const missing = validateRequiredHumanoidClips(clips);
 
 		if (options.strict && missing.length > 0) {
 			throw new Error(`Missing humanoid animation clips: ${missing.join(', ')}`);
 		}
 
-		for (const state of HUMANOID_ANIMATION_STATES) {
-			const clipName = FALLBACK_TURN_CLIPS.has(state) ? 'idle' : state;
-			const sourceClip = clipByName.get(clipName) ?? createEmptyClip(clipName);
-			const clip = FALLBACK_TURN_CLIPS.has(state) ? cloneClipAs(sourceClip, state) : sourceClip;
-			const action = this.mixer.clipAction(clip);
-			if (state === 'jump' || state === 'land' || state === 'reaction_shoved') {
-				action.setLoop(LoopOnce, 1);
-				action.clampWhenFinished = true;
-			} else {
-				action.setLoop(LoopRepeat, Number.POSITIVE_INFINITY);
-			}
+		this.backend = resolveBackend(options.backend ?? 'auto', clips);
+		this.weights.idle = 1;
+		this.blendSnapshot = {
+			activeState: 'idle',
+			currentAction: 'idle',
+			previousAction: null,
+			weights: this.weights,
+			clipCount: this.clipByName.size,
+			mixerTime: 0,
+			transitionCount: 0,
+			actionTime: 0,
+			actionWeight: 1,
+			activeActionCount: 1,
+			cameraYaw: 0,
+			bodyYaw: 0,
+			desiredMovementYaw: 0,
+			headYaw: 0,
+			localForwardSpeed: 0,
+			localSideSpeed: 0,
+			verticalSpeed: 0,
+			grounded: true,
+			stepActive: false,
+			stepHeight: 0,
+			leadingFoot: null,
+			mouseLookActive: false,
+			cameraRecentering: false
+		};
 
-			action.enabled = state === 'idle';
-			action.setEffectiveWeight(state === 'idle' ? 1 : 0);
-			if (state === 'idle') {
-				action.play();
-			}
-			this.actions.set(state, action);
+		if (this.backend === 'mixer') {
+			this.ensureMixer();
 		}
+	}
+
+	/**
+	 * Compatibility access for diagnostics and tests.
+	 *
+	 * Procedural runtime code never reads this property, so no mixer is created
+	 * for the lightweight avatar. Accessing it explicitly creates the mixer on
+	 * demand and keeps the previous public surface available.
+	 */
+	get mixer(): AnimationMixer {
+		return this.ensureMixer();
+	}
+
+	get snapshot(): HumanoidAnimationBlendSnapshot {
+		return this.blendSnapshot;
+	}
+
+	get usesMixerBackend(): boolean {
+		return this.backend === 'mixer';
 	}
 
 	update(
 		locomotion: HumanoidAnimationSnapshot | HumanoidLocomotionState,
 		speedOrDeltaSeconds: number,
 		deltaSecondsOrDebugFlags?: number | HumanoidAnimationDebugFlags,
-		debugFlags: HumanoidAnimationDebugFlags = this.lastDebugFlags
+		debugFlags: HumanoidAnimationDebugFlags = this.debugFlags
 	): void {
+		if (this.disposed) {
+			return;
+		}
+
 		const legacy = typeof locomotion === 'string';
-		const deltaSeconds =
-			typeof deltaSecondsOrDebugFlags === 'number' ? deltaSecondsOrDebugFlags : speedOrDeltaSeconds;
-		const locomotionSnapshot = legacy
-			? createLegacyLocomotionSnapshot(locomotion, speedOrDeltaSeconds)
+		const deltaSeconds = safeDelta(
+			typeof deltaSecondsOrDebugFlags === 'number' ? deltaSecondsOrDebugFlags : speedOrDeltaSeconds
+		);
+		const snapshot = legacy
+			? writeLegacyLocomotionSnapshot(this.legacySnapshot, locomotion, speedOrDeltaSeconds)
 			: locomotion;
 		const flags =
 			typeof deltaSecondsOrDebugFlags === 'object' ? deltaSecondsOrDebugFlags : debugFlags;
+		const targetState = mapLocomotionState(snapshot.locomotionState, snapshot.speed);
 
-		this.lastLocomotion = locomotionSnapshot;
-		this.lastDebugFlags = flags;
-		const targetState = mapLocomotionState(
-			locomotionSnapshot.locomotionState,
-			locomotionSnapshot.speed
-		);
+		this.debugFlags.mouseLookActive = Boolean(flags.mouseLookActive);
+		this.debugFlags.cameraRecentering = Boolean(flags.cameraRecentering);
+
 		this.setState(targetState);
-		this.applyPlaybackScale(targetState, locomotionSnapshot);
-		this.mixer.update(Math.min(deltaSeconds, 0.05));
-		this.applyLookOverlay(locomotionSnapshot);
-		this.applyStepOverlay(locomotionSnapshot, Math.min(deltaSeconds, 0.05));
-		this.cleanupFadedActions();
+		this.advance(deltaSeconds);
+		this.syncLocomotionSnapshot(snapshot);
 	}
 
 	playPreview(deltaSeconds: number): void {
+		if (this.disposed) {
+			return;
+		}
+
 		this.setState('idle');
-		this.mixer.update(Math.min(deltaSeconds, 0.05));
+		this.advance(safeDelta(deltaSeconds));
 	}
 
 	setState(state: HumanoidAnimationState): void {
-		if (state === this.activeState) {
+		if (this.disposed || state === this.activeState || !isHumanoidAnimationState(state)) {
 			return;
 		}
 
-		const previous = this.actions.get(this.activeState);
-		const next = this.actions.get(state);
-
-		if (!next) {
-			return;
-		}
-
+		const previous = this.activeState;
 		this.previousActionName = this.currentActionName;
 		this.currentActionName = state;
 		this.activeState = state;
-		this.activeActionStartedAt = this.mixer.time;
+		this.transitionFrom = previous;
+		this.transitionElapsed = 0;
+		this.actionStartedAt = this.totalTime;
 		this.transitionCount += 1;
-		next.enabled = true;
-		next.reset();
-		next.setEffectiveWeight(1);
-		next.play();
 
-		if (previous && previous !== next) {
-			previous.enabled = true;
-			previous.crossFadeTo(next, this.fadeSeconds, false);
-			this.fadingOut.push({ action: previous, endTime: this.mixer.time + this.fadeSeconds });
+		this.weights[state] = this.fadeSeconds <= MIN_FADE_SECONDS ? 1 : 0;
+
+		if (this.fadeSeconds <= MIN_FADE_SECONDS) {
+			this.weights[previous] = 0;
+			this.transitionFrom = null;
 		}
+
+		this.startMixerTransition(previous, state);
+		this.syncBlendSnapshot();
 	}
 
-	get snapshot(): HumanoidAnimationBlendSnapshot {
-		const weights: Record<string, number> = {};
-
-		for (const [name, action] of this.actions) {
-			weights[name] = MathUtils.clamp(action.getEffectiveWeight(), 0, 1);
+	reset(state: HumanoidAnimationState = 'idle'): void {
+		if (this.disposed) {
+			return;
 		}
-		const action = this.actions.get(this.activeState);
 
-		return {
-			activeState: this.activeState,
-			currentAction: this.currentActionName,
-			previousAction: this.previousActionName,
-			weights,
-			clipCount: new Set([...this.actions.values()].map((action) => action.getClip().name)).size,
-			mixerTime: this.mixer.time,
-			transitionCount: this.transitionCount,
-			actionTime: Math.max(0, this.mixer.time - this.activeActionStartedAt),
-			actionWeight: MathUtils.clamp(action?.getEffectiveWeight() ?? 0, 0, 1),
-			activeActionCount: [...this.actions.values()].filter(
-				(candidate) => candidate.enabled && candidate.getEffectiveWeight() > 0.01
-			).length,
-			cameraYaw: this.lastLocomotion?.cameraYaw ?? 0,
-			bodyYaw: this.lastLocomotion?.bodyYaw ?? 0,
-			desiredMovementYaw: this.lastLocomotion?.desiredMovementYaw ?? 0,
-			headYaw: this.lastLocomotion?.headYaw ?? 0,
-			localForwardSpeed: this.lastLocomotion?.localForwardSpeed ?? 0,
-			localSideSpeed: this.lastLocomotion?.localSideSpeed ?? 0,
-			verticalSpeed: this.lastLocomotion?.verticalSpeed ?? 0,
-			grounded: this.lastLocomotion?.grounded ?? false,
-			stepActive: this.stepLeadingFoot !== null,
-			stepHeight: this.stepLeadingFoot ? this.stepHeight : 0,
-			leadingFoot: this.stepLeadingFoot,
-			mouseLookActive: this.lastDebugFlags.mouseLookActive,
-			cameraRecentering: this.lastDebugFlags.cameraRecentering
-		};
+		zeroWeights(this.weights);
+		this.weights[state] = 1;
+		this.activeState = state;
+		this.currentActionName = state;
+		this.previousActionName = null;
+		this.transitionFrom = null;
+		this.transitionElapsed = 0;
+		this.transitionCount = 0;
+		this.totalTime = 0;
+		this.actionStartedAt = 0;
+		this.debugFlags.mouseLookActive = false;
+		this.debugFlags.cameraRecentering = false;
+
+		if (this.mixerValue) {
+			this.mixerValue.stopAllAction();
+			this.mixerValue.setTime(0);
+			this.activateMixerState(state, true);
+		}
+
+		resetBlendSnapshot(this.blendSnapshot, this.weights, state, this.clipByName.size);
 	}
 
 	dispose(): void {
-		this.mixer.stopAllAction();
-		this.mixer.uncacheRoot(this.root);
+		if (this.disposed) {
+			return;
+		}
+
+		this.disposed = true;
+
+		if (this.mixerValue) {
+			this.mixerValue.stopAllAction();
+			this.mixerValue.uncacheRoot(this.root);
+		}
+
 		this.actions.clear();
-		this.fadingOut.length = 0;
+		this.clipByName.clear();
+		this.mixerValue = null;
+		this.transitionFrom = null;
+		zeroWeights(this.weights);
 	}
 
-	private applyPlaybackScale(
-		state: HumanoidAnimationState,
-		locomotion: HumanoidAnimationSnapshot
-	): void {
+	private advance(deltaSeconds: number): void {
+		this.totalTime += deltaSeconds;
+
+		if (this.transitionFrom) {
+			this.transitionElapsed += deltaSeconds;
+			const alpha =
+				this.fadeSeconds <= MIN_FADE_SECONDS
+					? 1
+					: clamp01(this.transitionElapsed / this.fadeSeconds);
+
+			this.weights[this.activeState] = alpha;
+			this.weights[this.transitionFrom] = 1 - alpha;
+
+			if (alpha >= 1) {
+				this.finishTransition();
+			}
+		} else {
+			this.weights[this.activeState] = 1;
+		}
+
+		if (this.mixerValue) {
+			this.applyMixerPlaybackScale(this.activeState);
+			this.mixerValue.update(deltaSeconds);
+			this.cleanupMixerActions();
+		}
+
+		this.syncBlendSnapshot();
+	}
+
+	private finishTransition(): void {
+		const previous = this.transitionFrom;
+
+		if (previous) {
+			this.weights[previous] = 0;
+			const action = this.actions.get(previous);
+
+			if (action) {
+				action.stop();
+				action.enabled = false;
+				action.setEffectiveWeight(0);
+			}
+		}
+
+		this.weights[this.activeState] = 1;
+		this.transitionFrom = null;
+		this.transitionElapsed = 0;
+	}
+
+	private syncLocomotionSnapshot(source: HumanoidAnimationSnapshot): void {
+		const target = this.blendSnapshot;
+		target.cameraYaw = finiteOr(source.cameraYaw, 0);
+		target.bodyYaw = finiteOr(source.bodyYaw, 0);
+		target.desiredMovementYaw = finiteOr(source.desiredMovementYaw, 0);
+		target.headYaw = finiteOr(source.headYaw, 0);
+		target.localForwardSpeed = finiteOr(source.localForwardSpeed, 0);
+		target.localSideSpeed = finiteOr(source.localSideSpeed, 0);
+		target.verticalSpeed = finiteOr(source.verticalSpeed, 0);
+		target.grounded = Boolean(source.grounded);
+		target.stepActive = Boolean(source.stepActive);
+		target.stepHeight = clampFinite(source.stepHeight, 0, 0, 1);
+		target.leadingFoot = source.leadingFoot ?? null;
+		target.mouseLookActive = this.debugFlags.mouseLookActive;
+		target.cameraRecentering = this.debugFlags.cameraRecentering;
+	}
+
+	private syncBlendSnapshot(): void {
+		const snapshot = this.blendSnapshot;
+		snapshot.activeState = this.activeState;
+		snapshot.currentAction = this.currentActionName;
+		snapshot.previousAction = this.previousActionName;
+		snapshot.clipCount = this.clipByName.size;
+		snapshot.mixerTime = this.totalTime;
+		snapshot.transitionCount = this.transitionCount;
+		snapshot.actionTime = Math.max(0, this.totalTime - this.actionStartedAt);
+		snapshot.actionWeight = clamp01(this.weights[this.activeState]);
+		snapshot.activeActionCount = this.transitionFrom ? 2 : 1;
+		snapshot.mouseLookActive = this.debugFlags.mouseLookActive;
+		snapshot.cameraRecentering = this.debugFlags.cameraRecentering;
+	}
+
+	private ensureMixer(): AnimationMixer {
+		if (this.mixerValue) {
+			return this.mixerValue;
+		}
+
+		const mixer = new AnimationMixer(this.root);
+		this.mixerValue = mixer;
+
+		for (const state of HUMANOID_ANIMATION_STATES) {
+			const sourceName = FALLBACK_TURN_CLIPS.has(state) ? 'idle' : state;
+			const sourceClip = this.clipByName.get(sourceName) ?? createEmptyClip(sourceName);
+			const clip = FALLBACK_TURN_CLIPS.has(state) ? cloneClipAs(sourceClip, state) : sourceClip;
+			const action = mixer.clipAction(clip);
+
+			if (ONE_SHOT_STATES.has(state)) {
+				action.setLoop(LoopOnce, 1);
+				action.clampWhenFinished = true;
+			} else {
+				action.setLoop(LoopRepeat, Number.POSITIVE_INFINITY);
+			}
+
+			action.enabled = false;
+			action.setEffectiveWeight(0);
+			this.actions.set(state, action);
+		}
+
+		this.activateMixerState(this.activeState, true);
+		return mixer;
+	}
+
+	private activateMixerState(state: HumanoidAnimationState, reset: boolean): void {
 		const action = this.actions.get(state);
 
 		if (!action) {
 			return;
 		}
 
-		const forwardSpeed = Math.abs(locomotion.localForwardSpeed);
-		const sideSpeed = Math.abs(locomotion.localSideSpeed);
+		action.enabled = true;
 
-		if (state === 'walk') {
-			action.setEffectiveTimeScale(MathUtils.clamp(forwardSpeed / 5, 0.8, 1.3));
-		} else if (state === 'walk_backward') {
-			action.setEffectiveTimeScale(MathUtils.clamp(forwardSpeed / 4, 0.8, 1.25));
-		} else if (state === 'strafe_left' || state === 'strafe_right') {
-			action.setEffectiveTimeScale(MathUtils.clamp(sideSpeed / 4.5, 0.8, 1.25));
-		} else if (state === 'run') {
-			action.setEffectiveTimeScale(MathUtils.clamp(locomotion.speed / 8, 0.9, 1.4));
-		} else {
-			action.setEffectiveTimeScale(1);
-		}
-	}
-
-	private applyLookOverlay(locomotion: HumanoidAnimationSnapshot): void {
-		const headYaw = MathUtils.clamp(locomotion.headYaw, -0.7, 0.7);
-		const chestYaw = MathUtils.clamp(headYaw * 0.35, -0.3, 0.3);
-		this.chestOffset.setFromAxisAngle(Y_AXIS, chestYaw);
-		this.lookOffset.setFromAxisAngle(Y_AXIS, headYaw * 0.55);
-		this.bones.chest?.quaternion.multiply(this.chestOffset);
-		this.bones.neck?.quaternion.multiply(this.lookOffset);
-		this.lookOffset.setFromAxisAngle(Y_AXIS, headYaw * 0.45);
-		this.bones.head?.quaternion.multiply(this.lookOffset);
-	}
-
-	private applyStepOverlay(locomotion: HumanoidAnimationSnapshot, deltaSeconds: number): void {
-		if (locomotion.stepActive && locomotion.leadingFoot && locomotion.stepHeight > 0) {
-			if (locomotion.stepStartedAt !== this.stepStartedAt) {
-				this.stepStartedAt = locomotion.stepStartedAt;
-				this.stepElapsed = 0;
-				this.stepHeight = MathUtils.clamp(locomotion.stepHeight, 0, 1.1);
-				this.stepLeadingFoot = locomotion.leadingFoot;
-			}
+		if (reset) {
+			action.reset();
 		}
 
-		if (!this.stepLeadingFoot) {
+		action.setEffectiveWeight(1);
+		action.play();
+	}
+
+	private startMixerTransition(
+		previousState: HumanoidAnimationState,
+		nextState: HumanoidAnimationState
+	): void {
+		if (!this.mixerValue) {
 			return;
 		}
 
-		this.stepElapsed += deltaSeconds;
-		const progress = MathUtils.clamp(this.stepElapsed / STEP_DURATION_SECONDS, 0, 1);
-		const lift = Math.sin(progress * Math.PI);
-		const settle = 1 - progress;
-		const hipLift = this.stepHeight * (0.18 + 0.22 * smoothStep(progress));
-		const thighAngle = lift * 0.48 + settle * 0.12;
-		const kneeAngle = lift * 0.72;
-		const footAngle = lift * -0.32 + settle * -0.08;
-		const upperLeg =
-			this.stepLeadingFoot === 'left' ? this.bones.leftUpperLeg : this.bones.rightUpperLeg;
-		const lowerLeg = this.stepLeadingFoot === 'left' ? this.bones.leftLeg : this.bones.rightLeg;
-		const foot = this.stepLeadingFoot === 'left' ? this.bones.leftFoot : this.bones.rightFoot;
+		const previous = this.actions.get(previousState);
+		const next = this.actions.get(nextState);
 
-		if (this.bones.hips) {
-			this.bones.hips.position.y += hipLift;
+		if (!next) {
+			return;
 		}
-		this.stepHipOffset.setFromAxisAngle(X_AXIS, thighAngle);
-		this.stepKneeOffset.setFromAxisAngle(X_AXIS, kneeAngle);
-		this.stepFootOffset.setFromAxisAngle(X_AXIS, footAngle);
-		upperLeg?.quaternion.multiply(this.stepHipOffset);
-		lowerLeg?.quaternion.multiply(this.stepKneeOffset);
-		foot?.quaternion.multiply(this.stepFootOffset);
 
-		if (progress >= 1) {
-			this.stepStartedAt = -1;
-			this.stepElapsed = 0;
-			this.stepHeight = 0;
-			this.stepLeadingFoot = null;
+		next.enabled = true;
+		next.reset();
+		next.setEffectiveWeight(1);
+		next.play();
+
+		if (previous && previous !== next && this.fadeSeconds > MIN_FADE_SECONDS) {
+			previous.enabled = true;
+			previous.crossFadeTo(next, this.fadeSeconds, false);
+		} else if (previous && previous !== next) {
+			previous.stop();
+			previous.enabled = false;
+			previous.setEffectiveWeight(0);
 		}
 	}
 
-	private cleanupFadedActions(): void {
-		for (let index = this.fadingOut.length - 1; index >= 0; index -= 1) {
-			const entry = this.fadingOut[index];
+	private applyMixerPlaybackScale(state: HumanoidAnimationState): void {
+		const action = this.actions.get(state);
 
-			if (this.mixer.time < entry.endTime) {
+		if (!action) {
+			return;
+		}
+
+		const locomotion = this.blendSnapshot;
+		const forwardSpeed = Math.abs(locomotion.localForwardSpeed);
+		const sideSpeed = Math.abs(locomotion.localSideSpeed);
+		let scale = 1;
+
+		if (state === 'walk') {
+			scale = clamp(forwardSpeed / 5, 0.8, 1.3);
+		} else if (state === 'walk_backward') {
+			scale = clamp(forwardSpeed / 4, 0.8, 1.25);
+		} else if (state === 'strafe_left' || state === 'strafe_right') {
+			scale = clamp(sideSpeed / 4.5, 0.8, 1.25);
+		} else if (state === 'run') {
+			const planarSpeed = Math.hypot(forwardSpeed, sideSpeed);
+			scale = clamp(planarSpeed / 8, 0.9, 1.4);
+		}
+
+		action.setEffectiveTimeScale(scale);
+	}
+
+	private cleanupMixerActions(): void {
+		if (this.transitionFrom) {
+			return;
+		}
+
+		for (const [state, action] of this.actions) {
+			if (state === this.activeState) {
 				continue;
 			}
 
-			entry.action.stop();
-			entry.action.enabled = false;
-			entry.action.setEffectiveWeight(0);
-			this.fadingOut.splice(index, 1);
+			if (action.enabled || action.getEffectiveWeight() > 0) {
+				action.stop();
+				action.enabled = false;
+				action.setEffectiveWeight(0);
+			}
 		}
 	}
 }
@@ -362,7 +505,7 @@ export function mapLocomotionState(
 	speed: number
 ): HumanoidAnimationState {
 	if (state === 'idle') {
-		return speed > 0.05 ? 'walk' : 'idle';
+		return finiteOr(speed, 0) > 0.05 ? 'walk' : 'idle';
 	}
 
 	if (state === 'walk_forward') {
@@ -381,49 +524,94 @@ export function mapLocomotionState(
 		return 'land';
 	}
 
-	return state;
+	return isHumanoidAnimationState(state) ? state : 'idle';
 }
 
-export function validateRequiredHumanoidClips(clips: AnimationClip[]): string[] {
-	const names = new Set(clips.map((clip) => clip.name));
+export function validateRequiredHumanoidClips(clips: readonly AnimationClip[]): string[] {
+	const names = new Set<string>();
+
+	for (const clip of clips) {
+		if (clip?.name) {
+			names.add(clip.name);
+		}
+	}
 
 	return REQUIRED_HUMANOID_CLIPS.filter((name) => !names.has(name));
 }
 
 export function createFallbackHumanoidClips(): AnimationClip[] {
-	return REQUIRED_HUMANOID_CLIPS.map((state) => {
-		const tracks =
-			state === 'idle'
-				? [
-						new NumberKeyframeTrack('chest.scale[y]', [0, 1, 2], [1, 1.018, 1]),
-						new NumberKeyframeTrack('hips.position[y]', [0, 1, 2], [0.82, 0.826, 0.82])
-					]
-				: [new BooleanKeyframeTrack('avatarRoot.visible', [0, 1], [true, true])];
+	return REQUIRED_HUMANOID_CLIPS.map((state) => createEmptyClip(state));
+}
 
-		return new AnimationClip(state, state === 'idle' ? 2 : 1, tracks);
-	});
+function resolveBackend(
+	requested: HumanoidAnimationBackend,
+	clips: readonly AnimationClip[]
+): Exclude<HumanoidAnimationBackend, 'auto'> {
+	if (requested === 'procedural' || requested === 'mixer') {
+		return requested;
+	}
+
+	return clips.some(hasMeaningfulAnimationTracks) ? 'mixer' : 'procedural';
+}
+
+function hasMeaningfulAnimationTracks(clip: AnimationClip): boolean {
+	for (const track of clip.tracks) {
+		const property = track.name.slice(track.name.lastIndexOf('.') + 1).toLowerCase();
+
+		if (
+			property === 'position' ||
+			property === 'quaternion' ||
+			property === 'scale' ||
+			property === 'morphtargetinfluences'
+		) {
+			return true;
+		}
+	}
+
+	return false;
 }
 
 function createEmptyClip(name: string): AnimationClip {
-	return new AnimationClip(name, 1, [
-		new BooleanKeyframeTrack('avatarRoot.visible', [0, 1], [true, true])
+	const duration = name === 'idle' ? 2 : 1;
+
+	return new AnimationClip(name, duration, [
+		new BooleanKeyframeTrack('avatarRoot.visible', [0, duration], [true, true])
 	]);
 }
 
 function cloneClipAs(clip: AnimationClip, name: string): AnimationClip {
 	const clone = clip.clone();
 	clone.name = name;
-
 	return clone;
 }
 
-function createLegacyLocomotionSnapshot(
-	state: HumanoidLocomotionState,
-	speed: number
-): HumanoidAnimationSnapshot {
+function createWeightRecord(): Record<HumanoidAnimationState, number> {
 	return {
-		locomotionState: state,
-		speed,
+		idle: 0,
+		walk: 0,
+		run: 0,
+		strafe_left: 0,
+		strafe_right: 0,
+		walk_backward: 0,
+		jump: 0,
+		fall: 0,
+		land: 0,
+		reaction_shoved: 0,
+		turn_left: 0,
+		turn_right: 0
+	};
+}
+
+function zeroWeights(weights: Record<HumanoidAnimationState, number>): void {
+	for (const state of HUMANOID_ANIMATION_STATES) {
+		weights[state] = 0;
+	}
+}
+
+function createMutableLocomotionSnapshot(): HumanoidAnimationSnapshot {
+	return {
+		locomotionState: 'idle',
+		speed: 0,
 		gaitPhase: 0,
 		armLeftAngle: 0,
 		armRightAngle: 0,
@@ -434,8 +622,8 @@ function createLegacyLocomotionSnapshot(
 		bodyYaw: Math.PI,
 		cameraYaw: Math.PI,
 		desiredMovementYaw: Math.PI,
-		localForwardSpeed: speed,
-		localSideSpeed: state === 'strafe_left' || state === 'strafe_right' ? speed : 0,
+		localForwardSpeed: 0,
+		localSideSpeed: 0,
 		verticalSpeed: 0,
 		stepActive: false,
 		stepHeight: 0,
@@ -447,65 +635,96 @@ function createLegacyLocomotionSnapshot(
 	};
 }
 
-function smoothStep(value: number): number {
-	return value * value * (3 - 2 * value);
+function writeLegacyLocomotionSnapshot(
+	target: HumanoidAnimationSnapshot,
+	state: HumanoidLocomotionState,
+	speed: number
+): HumanoidAnimationSnapshot {
+	const normalizedSpeed = Math.max(0, finiteOr(speed, 0));
+	target.locomotionState = state;
+	target.speed = normalizedSpeed;
+	target.gaitPhase = 0;
+	target.armLeftAngle = 0;
+	target.armRightAngle = 0;
+	target.legLeftAngle = 0;
+	target.legRightAngle = 0;
+	target.grounded =
+		state !== 'jump_start' && state !== 'jump' && state !== 'airborne' && state !== 'fall';
+	target.headYaw = 0;
+	target.bodyYaw = Math.PI;
+	target.cameraYaw = Math.PI;
+	target.desiredMovementYaw = Math.PI;
+	target.localForwardSpeed =
+		state === 'strafe_left' || state === 'strafe_right' ? 0 : normalizedSpeed;
+	target.localSideSpeed =
+		state === 'strafe_left' ? -normalizedSpeed : state === 'strafe_right' ? normalizedSpeed : 0;
+	target.verticalSpeed = state === 'jump_start' || state === 'jump' ? normalizedSpeed : 0;
+	target.stepActive = false;
+	target.stepHeight = 0;
+	target.leadingFoot = null;
+	target.stepStartedAt = -1;
+	target.mouseLookActive = false;
+	target.cameraRecentering = false;
+	target.updateMs = 0;
+	return target;
 }
 
-function collectHumanoidBones(root: Object3D): {
-	hips: Object3D | null;
-	chest: Object3D | null;
-	neck: Object3D | null;
-	head: Object3D | null;
-	leftUpperLeg: Object3D | null;
-	rightUpperLeg: Object3D | null;
-	leftLeg: Object3D | null;
-	rightLeg: Object3D | null;
-	leftFoot: Object3D | null;
-	rightFoot: Object3D | null;
-} {
-	const bones = {
-		hips: null as Object3D | null,
-		chest: null as Object3D | null,
-		neck: null as Object3D | null,
-		head: null as Object3D | null,
-		leftUpperLeg: null as Object3D | null,
-		rightUpperLeg: null as Object3D | null,
-		leftLeg: null as Object3D | null,
-		rightLeg: null as Object3D | null,
-		leftFoot: null as Object3D | null,
-		rightFoot: null as Object3D | null
-	};
-
-	root.traverse((child) => {
-		if (child.type !== 'Bone') {
-			return;
-		}
-
-		const name = normalizeBoneName(child.name);
-
-		if (name === 'hips') bones.hips = child;
-		else if (name === 'spine1' || name === 'spine2' || name === 'chest') bones.chest = child;
-		else if (name === 'neck') bones.neck = child;
-		else if (name === 'head') bones.head = child;
-		else if (name === 'leftupleg') bones.leftUpperLeg = child;
-		else if (name === 'rightupleg') bones.rightUpperLeg = child;
-		else if (name === 'leftleg') bones.leftLeg = child;
-		else if (name === 'rightleg') bones.rightLeg = child;
-		else if (name === 'leftfoot') bones.leftFoot = child;
-		else if (name === 'rightfoot') bones.rightFoot = child;
-	});
-
-	return bones;
+function resetBlendSnapshot(
+	target: HumanoidAnimationBlendSnapshot,
+	weights: Record<HumanoidAnimationState, number>,
+	state: HumanoidAnimationState,
+	clipCount: number
+): void {
+	target.activeState = state;
+	target.currentAction = state;
+	target.previousAction = null;
+	target.weights = weights;
+	target.clipCount = clipCount;
+	target.mixerTime = 0;
+	target.transitionCount = 0;
+	target.actionTime = 0;
+	target.actionWeight = 1;
+	target.activeActionCount = 1;
+	target.cameraYaw = 0;
+	target.bodyYaw = 0;
+	target.desiredMovementYaw = 0;
+	target.headYaw = 0;
+	target.localForwardSpeed = 0;
+	target.localSideSpeed = 0;
+	target.verticalSpeed = 0;
+	target.grounded = true;
+	target.stepActive = false;
+	target.stepHeight = 0;
+	target.leadingFoot = null;
+	target.mouseLookActive = false;
+	target.cameraRecentering = false;
 }
 
-function normalizeBoneName(name: string): string {
-	return name
-		.replace(/\\/g, '/')
-		.split('/')
-		.at(-1)!
-		.replace(/^.*:/, '')
-		.replace(/^mixamorig/i, '')
-		.replace(/^beta[_-]?joints:?/i, '')
-		.replace(/[^a-z0-9]/gi, '')
-		.toLowerCase();
+function isHumanoidAnimationState(value: string): value is HumanoidAnimationState {
+	return (HUMANOID_ANIMATION_STATES as readonly string[]).includes(value);
+}
+
+function safeDelta(value: number): number {
+	return clampFinite(value, 0, 0, MAX_DELTA_SECONDS);
+}
+
+function clampFinite(
+	value: number | undefined,
+	fallback: number,
+	min: number,
+	max: number
+): number {
+	return clamp(finiteOr(value, fallback), min, max);
+}
+
+function finiteOr(value: number | undefined, fallback: number): number {
+	return Number.isFinite(value) ? (value as number) : fallback;
+}
+
+function clamp(value: number, min: number, max: number): number {
+	return Math.min(max, Math.max(min, value));
+}
+
+function clamp01(value: number): number {
+	return clamp(value, 0, 1);
 }

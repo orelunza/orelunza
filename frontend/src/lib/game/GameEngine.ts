@@ -21,18 +21,23 @@ import { WorldSyncService } from './persistence/WorldSyncService';
 import { PlayerAvatar } from './player/PlayerAvatar';
 import { PlayerController } from './player/PlayerController';
 import { GameRenderer } from './rendering/GameRenderer';
+import { Sky } from './rendering/Sky';
 import { BlockRegistry } from './world/BlockRegistry';
+import { ChunkStreamingSystem } from './world/ChunkStreamingSystem';
 import { createStarterWorld } from './world/WorldGenerator';
 import { STARTER_WORLD_SEED, type BlockType, worldToChunk } from './world/voxel-types';
 
-const CHUNK_RADIUS = 1;
+const CHUNK_RENDER_INTERVAL_MS = 120;
 const SNAPSHOT_INTERVAL_MS = 100;
+const AVATAR_METRICS_INTERVAL_MS = 250;
 const AUTO_SAVE_INTERVAL_MS = 1500;
 const BACKEND_SYNC_INTERVAL_MS = 5000;
 
 export class GameEngine {
 	private readonly renderer: GameRenderer;
+	private readonly sky: Sky;
 	private readonly world;
+	private readonly chunkStreaming: ChunkStreamingSystem;
 	private readonly player: PlayerController;
 	private readonly keyboard: KeyboardInput;
 	private readonly mouse: MouseInput;
@@ -65,7 +70,8 @@ export class GameEngine {
 	private lastAutoSaveAttempt = 0;
 	private lastSnapshotAt = 0;
 	private lastSnapshotKey = '';
-	private lastChunk: { x: number; z: number } | null = null;
+	private lastAvatarMetricsAt = Number.NEGATIVE_INFINITY;
+	private lastWorldRebuildAt = Number.NEGATIVE_INFINITY;
 	private startPromise: Promise<void> | null = null;
 	private destroyed = false;
 	private mobileLimited = false;
@@ -145,7 +151,17 @@ export class GameEngine {
 
 	constructor(private readonly options: GameEngineOptions) {
 		this.world = createStarterWorld(options.seed || STARTER_WORLD_SEED);
+		this.chunkStreaming = new ChunkStreamingSystem({
+			visibleRadius: 2,
+			retainRadius: 3,
+			maxLoadsPerUpdate: 1,
+			maxUnloadsPerUpdate: 2,
+			timeBudgetMs: 3,
+			loadChunk: (chunk) => this.world.loadChunk(chunk),
+			unloadChunk: (chunk) => this.world.unloadChunk(chunk)
+		});
 		this.renderer = new GameRenderer(options.canvas);
+		this.sky = new Sky(this.renderer.scene);
 		this.keyboard = new KeyboardInput(window);
 		this.mouse = new MouseInput(options.canvas);
 		this.pointerLock = new PointerLockController(options.canvas, () => this.emitSnapshot());
@@ -207,11 +223,14 @@ export class GameEngine {
 
 		try {
 			await this.persistence.load();
-			await this.avatar.ready;
 			this.recordAvatarMetrics();
-			this.refreshChunksForPlayer(true);
+
+			this.world.loadChunk(worldToChunk(this.player.state.position));
+			this.chunkStreaming.synchronizeLoaded(this.world.getLoadedChunks());
+
 			this.renderer.rebuildWorld(this.world);
 			this.diagnostics.worldRebuilds += 1;
+			this.lastWorldRebuildAt = performance.now();
 			this.needsWorldRebuild = false;
 			this.status = 'playing';
 			this.emitSnapshot();
@@ -299,13 +318,7 @@ export class GameEngine {
 
 		this.selectedBuildBlock = type;
 		this.buildMode = true;
-
-		if (this.status === 'build-catalog') {
-			this.status = 'playing';
-			this.pointerLock.request();
-		}
-
-		this.message = `Selected ${definition.label} — right click to place`;
+		this.message = `Selected ${definition.label}`;
 		this.emitSnapshot();
 
 		return true;
@@ -362,6 +375,8 @@ export class GameEngine {
 		this.mouse.destroy();
 		this.pointerLock.destroy();
 		this.avatar.dispose();
+		this.chunkStreaming.dispose();
+		this.sky.dispose();
 		this.renderer.dispose();
 		this.emitSnapshot();
 	}
@@ -427,13 +442,20 @@ export class GameEngine {
 			this.diagnostics.cameraMs = 0;
 		}
 
-		if (this.refreshChunksForPlayer(false)) {
+		if (this.chunkStreaming.update(this.player.state.position)) {
+			this.diagnostics.chunkRefreshes += 1;
 			this.needsWorldRebuild = true;
 		}
 
-		if (this.needsWorldRebuild) {
+		const streaming = this.chunkStreaming.snapshot;
+		const shouldRebuildWorld =
+			this.needsWorldRebuild &&
+			(streaming.ready || frameStartedAt - this.lastWorldRebuildAt >= CHUNK_RENDER_INTERVAL_MS);
+
+		if (shouldRebuildWorld) {
 			this.renderer.rebuildWorld(this.world);
 			this.diagnostics.worldRebuilds += 1;
+			this.lastWorldRebuildAt = frameStartedAt;
 			this.needsWorldRebuild = false;
 		}
 
@@ -442,7 +464,8 @@ export class GameEngine {
 			Math.hypot(this.player.state.velocity.x, this.player.state.velocity.z) > 0.1,
 			deltaSeconds
 		);
-		this.recordAvatarMetrics();
+		this.sky.update(this.player.camera.camera.position, deltaSeconds);
+		this.recordAvatarMetricsThrottled(frameStartedAt);
 
 		const canTargetBlock = this.status === 'playing' && this.buildMode;
 		this.target = canTargetBlock
@@ -468,6 +491,15 @@ export class GameEngine {
 		const renderStartedAt = performance.now();
 		this.renderer.render(this.player.camera.camera);
 		this.diagnostics.renderMs = performance.now() - renderStartedAt;
+	}
+
+	private recordAvatarMetricsThrottled(now: number): void {
+		if (now - this.lastAvatarMetricsAt < AVATAR_METRICS_INTERVAL_MS) {
+			return;
+		}
+
+		this.lastAvatarMetricsAt = now;
+		this.recordAvatarMetrics();
 	}
 
 	private recordAvatarMetrics(): void {
@@ -647,24 +679,6 @@ export class GameEngine {
 		this.player.camera.resize(box.width, box.height);
 	}
 
-	private refreshChunksForPlayer(force: boolean): boolean {
-		const chunk = worldToChunk(this.player.state.position);
-
-		if (
-			!force &&
-			this.lastChunk !== null &&
-			this.lastChunk.x === chunk.x &&
-			this.lastChunk.z === chunk.z
-		) {
-			return false;
-		}
-
-		this.lastChunk = { x: chunk.x, z: chunk.z };
-		this.diagnostics.chunkRefreshes += 1;
-
-		return this.world.ensureChunksAround(this.player.state.position, CHUNK_RADIUS);
-	}
-
 	private findSafeSpawn(): Vector3 {
 		const spawn = this.world.spawnPosition();
 
@@ -758,6 +772,8 @@ export class GameEngine {
 			this.status === 'build-catalog' ? 1 : 0,
 			this.selectedBuildBlock ?? '',
 			this.creativeBuild ? 1 : 0,
+			this.chunkStreaming.snapshot.loadedChunks,
+			this.chunkStreaming.snapshot.pendingLoads,
 			this.introVisible ? 1 : 0,
 			this.message ?? '',
 			this.error ?? ''

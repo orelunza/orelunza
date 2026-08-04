@@ -401,7 +401,7 @@ describe('humanoid avatar rig and animation', () => {
 
 		expect(model.source).toBe('procedural-fallback');
 		expect(model.isRiggedHumanoid).toBe(true);
-		expect(model.object.userData.avatarPipeline).toBe('gltf-ready-fallback');
+		expect(model.object.userData.avatarPipeline).toBe('procedural-voxel');
 		expect(model.object.userData.avatarRole).toBe('peaceful-citizen-explorer');
 		expect(model.object.userData.noMilitaryGear).toBe(true);
 		expect(model.object.getObjectByName('hat')).toBeUndefined();
@@ -517,58 +517,31 @@ describe('humanoid avatar rig and animation', () => {
 	});
 
 	test('step overlay moves the leading leg and leaves hands unchanged', () => {
-		const stepRoot = createTestMixamoSkeleton();
-		const referenceRoot = createTestMixamoSkeleton();
-		const stepBones = testBones(stepRoot);
-		const referenceBones = testBones(referenceRoot);
-		const stepController = new HumanoidAnimationController(
-			stepRoot,
-			createSyntheticLocomotionClips(),
-			{
-				strict: true,
-				fadeSeconds: 0.01
-			}
-		);
-		const referenceController = new HumanoidAnimationController(
-			referenceRoot,
-			createSyntheticLocomotionClips(),
-			{
-				strict: true,
-				fadeSeconds: 0.01
-			}
-		);
-		const base = locomotionSnapshot({
-			locomotionState: 'walk_forward',
-			speed: WALK_SPEED,
-			localForwardSpeed: WALK_SPEED
-		});
+		const stepAnimator = new HumanoidAnimator();
+		const referenceAnimator = new HumanoidAnimator();
+		const baseInput = {
+			yaw: Math.PI,
+			velocityX: 0,
+			velocityY: 0,
+			velocityZ: -WALK_SPEED,
+			grounded: true,
+			deltaSeconds: 1 / 60
+		};
 
-		stepController.update(
-			locomotionSnapshot({
-				...base,
-				stepActive: true,
-				stepHeight: 0.8,
+		const step = stepAnimator.update({
+			...baseInput,
+			stepEvent: {
 				leadingFoot: 'left',
-				stepStartedAt: 1
-			}),
-			1 / 60
-		);
-		referenceController.update(base, 1 / 60);
+				height: 0.8,
+				startedAt: 1
+			}
+		});
+		const reference = referenceAnimator.update(baseInput);
 
-		expect(stepController.snapshot.stepActive).toBe(true);
-		expect(stepController.snapshot.stepHeight).toBeGreaterThan(0);
-		expect(stepController.snapshot.leadingFoot).toBe('left');
-		expect(
-			stepBones.leftUpperLeg.quaternion.angleTo(referenceBones.leftUpperLeg.quaternion)
-		).toBeGreaterThan(0.001);
-		expect(stepBones.leftHand.quaternion.angleTo(referenceBones.leftHand.quaternion)).toBeLessThan(
-			0.0001
-		);
-		expect(
-			stepBones.rightHand.quaternion.angleTo(referenceBones.rightHand.quaternion)
-		).toBeLessThan(0.0001);
-		stepController.dispose();
-		referenceController.dispose();
+		expect(step.leftHipPitch).toBeGreaterThan(reference.leftHipPitch + 0.001);
+		expect(step.leftKneePitch).toBeGreaterThan(reference.leftKneePitch + 0.001);
+		expect(step.leftShoulderPitch).toBeCloseTo(reference.leftShoulderPitch, 6);
+		expect(step.rightShoulderPitch).toBeCloseTo(reference.rightShoulderPitch, 6);
 	});
 
 	test('AnimationMixer moves hips, legs, arms and hands during walk', () => {

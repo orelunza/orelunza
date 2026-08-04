@@ -1,11 +1,8 @@
 import {
 	BoxGeometry,
-	CapsuleGeometry,
-	CylinderGeometry,
 	Group,
 	Mesh,
 	MeshLambertMaterial,
-	SphereGeometry,
 	type BufferGeometry,
 	type Material
 } from 'three';
@@ -15,6 +12,13 @@ import {
 } from '../character/CharacterAppearance';
 import type { HumanoidPose } from './HumanoidPose';
 
+/**
+ * Orelunza procedural humanoid proportions.
+ *
+ * The joint layout intentionally remains compatible with the previous rig so
+ * PlayerAvatar, HumanoidAnimator and the debug tools can continue to use the
+ * same public joint names.
+ */
 export const HUMANOID_PROPORTIONS = {
 	height: 1.82,
 	hipsY: 0.82,
@@ -58,56 +62,63 @@ export interface HumanoidRigJointMap {
 	shoeRight: Group;
 }
 
-const HEAD_GEOMETRY = new SphereGeometry(0.5, 12, 8);
-const EAR_GEOMETRY = new SphereGeometry(0.5, 8, 6);
-const EYE_GEOMETRY = new SphereGeometry(0.5, 8, 6);
-const BODY_GEOMETRY = new CapsuleGeometry(0.5, 0.55, 4, 10);
-const LIMB_GEOMETRY = new CapsuleGeometry(0.5, 0.45, 4, 8);
-const HAND_GEOMETRY = new SphereGeometry(0.5, 8, 6);
-const FOOT_GEOMETRY = new BoxGeometry(1, 1, 1);
-const NOSE_GEOMETRY = new CylinderGeometry(0.04, 0.055, 0.12, 6);
-const MOUTH_GEOMETRY = new BoxGeometry(1, 1, 1);
-const HAIR_CAP_GEOMETRY = new SphereGeometry(0.52, 10, 6, 0, Math.PI * 2, 0, Math.PI * 0.52);
-const HAIR_LOCK_GEOMETRY = new CapsuleGeometry(0.5, 0.3, 3, 6);
-const BRAID_GEOMETRY = new CapsuleGeometry(0.5, 0.42, 3, 6);
+type HumanoidMaterialRole = 'skin' | 'hair' | 'shirt' | 'pants' | 'shoes' | 'face';
+
+/** One shared 12-triangle box for most body parts. */
+const BOX_GEOMETRY = new BoxGeometry(1, 1, 1);
+
+/** A slightly narrower top gives the head an Orelunza-specific silhouette. */
+const HEAD_GEOMETRY = createTaperedBoxGeometry({
+	bottomX: 1,
+	topX: 0.9,
+	bottomZ: 1,
+	topZ: 0.94
+});
+
+/** Wider shoulders and a smaller waist, without adding geometry. */
+const TORSO_GEOMETRY = createTaperedBoxGeometry({
+	bottomX: 0.78,
+	topX: 1,
+	bottomZ: 0.94,
+	topZ: 1
+});
+
+/** A subtly tapered pelvis avoids a perfectly rectangular silhouette. */
+const PELVIS_GEOMETRY = createTaperedBoxGeometry({
+	bottomX: 0.92,
+	topX: 1,
+	bottomZ: 0.96,
+	topZ: 1
+});
 
 export class HumanoidRig {
 	readonly object = new Group();
 	readonly joints: HumanoidRigJointMap;
+
 	private readonly materials: Material[] = [];
-	private readonly materialByRole = new Map<string, MeshLambertMaterial>();
+	private readonly materialByRole = new Map<HumanoidMaterialRole, MeshLambertMaterial>();
 	private readonly meshes: Mesh[] = [];
+	private readonly eyeLeft: Mesh;
+	private readonly eyeRight: Mesh;
 	private readonly eyelidLeft: Mesh;
 	private readonly eyelidRight: Mesh;
 	private appearance: CharacterAppearanceV1 = DEFAULT_CHARACTER_APPEARANCE;
 
 	constructor(appearance: CharacterAppearanceV1 = DEFAULT_CHARACTER_APPEARANCE) {
 		this.object.name = 'avatarRoot';
+		this.object.userData.avatarStyle = 'orelunza-simple-voxel';
+		this.object.userData.rigKind = 'procedural-joint-groups';
+
 		this.joints = this.createJoints();
 		this.object.add(this.joints.hips);
 		this.buildSkeleton();
-		this.eyelidLeft = this.addPart(
-			this.joints.face,
-			MOUTH_GEOMETRY,
-			'face',
-			0.115,
-			0.006,
-			0.052,
-			-0.11,
-			0.04,
-			-0.244
-		);
-		this.eyelidRight = this.addPart(
-			this.joints.face,
-			MOUTH_GEOMETRY,
-			'face',
-			0.115,
-			0.006,
-			0.052,
-			0.11,
-			0.04,
-			-0.244
-		);
+
+		const face = this.buildFace();
+		this.eyeLeft = face.eyeLeft;
+		this.eyeRight = face.eyeRight;
+		this.eyelidLeft = face.eyelidLeft;
+		this.eyelidRight = face.eyelidRight;
+
 		this.updateAppearance(appearance);
 		this.applyPose({
 			state: 'idle',
@@ -151,12 +162,10 @@ export class HumanoidRig {
 			const geometry = mesh.geometry;
 			const index = geometry.getIndex();
 			const position = geometry.getAttribute('position');
-			const scale = Math.max(1, mesh.scale.x * mesh.scale.y * mesh.scale.z);
-
-			triangles += Math.round(((index?.count ?? position.count) / 3) * Math.max(1, scale * 0 + 1));
+			triangles += (index?.count ?? position?.count ?? 0) / 3;
 		}
 
-		return triangles;
+		return Math.round(triangles);
 	}
 
 	get meshCount(): number {
@@ -174,6 +183,7 @@ export class HumanoidRig {
 		this.material('shirt').color.set(appearance.shirtColor);
 		this.material('pants').color.set(appearance.pantsColor);
 		this.material('shoes').color.set(appearance.shoesColor);
+
 		this.clearHair();
 		this.buildHair(appearance.hairStyle);
 	}
@@ -196,8 +206,12 @@ export class HumanoidRig {
 		this.joints.footRight.rotation.x = pose.rightAnklePitch;
 		this.joints.footLeft.position.y = -HUMANOID_PROPORTIONS.shin + pose.leftFootLift;
 		this.joints.footRight.position.y = -HUMANOID_PROPORTIONS.shin + pose.rightFootLift;
-		this.eyelidLeft.visible = pose.blink > 0.45;
-		this.eyelidRight.visible = pose.blink > 0.45;
+
+		const blinking = pose.blink > 0.45;
+		this.eyeLeft.visible = !blinking;
+		this.eyeRight.visible = !blinking;
+		this.eyelidLeft.visible = blinking;
+		this.eyelidRight.visible = blinking;
 	}
 
 	dispose(): void {
@@ -207,6 +221,7 @@ export class HumanoidRig {
 
 		this.materials.length = 0;
 		this.materialByRole.clear();
+		this.meshes.length = 0;
 	}
 
 	private createJoints(): HumanoidRigJointMap {
@@ -250,6 +265,7 @@ export class HumanoidRig {
 
 	private buildSkeleton(): void {
 		const j = this.joints;
+
 		j.hips.add(j.spine, j.thighLeft, j.thighRight);
 		j.spine.add(j.chest);
 		j.chest.add(j.neck, j.shoulderLeft, j.shoulderRight);
@@ -268,116 +284,184 @@ export class HumanoidRig {
 		j.shinRight.add(j.footRight);
 		j.footRight.add(j.shoeRight);
 
-		this.addPart(j.hips, BODY_GEOMETRY, 'pants', 0.34, 0.2, 0.24, 0, 0.04, 0);
-		this.addPart(j.spine, BODY_GEOMETRY, 'shirt', 0.38, 0.36, 0.25, 0, 0.16, 0);
-		this.addPart(j.chest, BODY_GEOMETRY, 'shirt', 0.52, 0.34, 0.28, 0, 0.04, 0);
-		this.addPart(j.neck, LIMB_GEOMETRY, 'skin', 0.08, 0.11, 0.08, 0, 0.03, 0);
-		this.addPart(j.head, HEAD_GEOMETRY, 'skin', 0.28, 0.31, 0.27, 0, 0.02, -0.01);
-		this.addPart(j.face, EYE_GEOMETRY, 'face', 0.028, 0.02, 0.012, -0.095, 0.045, -0.255);
-		this.addPart(j.face, EYE_GEOMETRY, 'face', 0.028, 0.02, 0.012, 0.095, 0.045, -0.255);
-		this.addPart(j.face, MOUTH_GEOMETRY, 'face', 0.08, 0.01, 0.012, 0, -0.09, -0.265);
-		this.addPart(j.face, NOSE_GEOMETRY, 'skin', 0.5, 0.5, 0.5, 0, -0.015, -0.27).rotation.x =
-			Math.PI / 2;
-		this.addPart(j.head, EAR_GEOMETRY, 'skin', 0.035, 0.06, 0.025, -0.285, 0.01, -0.005);
-		this.addPart(j.head, EAR_GEOMETRY, 'skin', 0.035, 0.06, 0.025, 0.285, 0.01, -0.005);
+		// One pelvis and one torso replace the previous rounded multi-piece body.
+		this.addPart(j.hips, PELVIS_GEOMETRY, 'pants', 0.43, 0.23, 0.28, 0, 0.04, 0);
+		this.addPart(j.chest, TORSO_GEOMETRY, 'shirt', 0.58, 0.6, 0.3, 0, -0.16, 0);
+		this.addPart(j.neck, BOX_GEOMETRY, 'skin', 0.11, 0.13, 0.11, 0, 0.03, 0);
+		this.addPart(j.head, HEAD_GEOMETRY, 'skin', 0.48, 0.46, 0.42, 0, 0.02, -0.01);
 
 		this.buildArm(j.upperArmLeft, j.forearmLeft, j.handLeft, -1);
 		this.buildArm(j.upperArmRight, j.forearmRight, j.handRight, 1);
-		this.buildLeg(j.thighLeft, j.shinLeft, j.footLeft, j.shoeLeft);
-		this.buildLeg(j.thighRight, j.shinRight, j.footRight, j.shoeRight);
+		this.buildLeg(j.thighLeft, j.shinLeft, j.shoeLeft);
+		this.buildLeg(j.thighRight, j.shinRight, j.shoeRight);
+	}
+
+	private buildFace(): {
+		eyeLeft: Mesh;
+		eyeRight: Mesh;
+		eyelidLeft: Mesh;
+		eyelidRight: Mesh;
+	} {
+		const face = this.joints.face;
+		const frontZ = -0.225;
+
+		const eyeLeft = this.addPart(
+			face,
+			BOX_GEOMETRY,
+			'face',
+			0.052,
+			0.07,
+			0.014,
+			-0.105,
+			0.055,
+			frontZ
+		);
+		const eyeRight = this.addPart(
+			face,
+			BOX_GEOMETRY,
+			'face',
+			0.052,
+			0.07,
+			0.014,
+			0.105,
+			0.055,
+			frontZ
+		);
+		const eyelidLeft = this.addPart(
+			face,
+			BOX_GEOMETRY,
+			'face',
+			0.064,
+			0.012,
+			0.014,
+			-0.105,
+			0.055,
+			frontZ - 0.001
+		);
+		const eyelidRight = this.addPart(
+			face,
+			BOX_GEOMETRY,
+			'face',
+			0.064,
+			0.012,
+			0.014,
+			0.105,
+			0.055,
+			frontZ - 0.001
+		);
+
+		eyelidLeft.visible = false;
+		eyelidRight.visible = false;
+
+		// The face stays intentionally minimal: two eyes and one small mouth.
+		this.addPart(face, BOX_GEOMETRY, 'face', 0.082, 0.014, 0.014, 0, -0.085, frontZ);
+
+		return {
+			eyeLeft,
+			eyeRight,
+			eyelidLeft,
+			eyelidRight
+		};
 	}
 
 	private buildArm(upperArm: Group, forearm: Group, hand: Group, side: -1 | 1): void {
 		this.addPart(
 			upperArm,
-			LIMB_GEOMETRY,
+			BOX_GEOMETRY,
 			'shirt',
-			0.085,
-			0.22,
-			0.085,
-			side * 0.015,
+			0.16,
+			HUMANOID_PROPORTIONS.upperArm,
+			0.16,
+			side * 0.012,
 			-HUMANOID_PROPORTIONS.upperArm * 0.5,
 			0
 		);
 		this.addPart(
 			forearm,
-			LIMB_GEOMETRY,
+			BOX_GEOMETRY,
 			'skin',
-			0.075,
-			0.2,
-			0.075,
+			0.145,
+			HUMANOID_PROPORTIONS.forearm,
+			0.145,
 			0,
 			-HUMANOID_PROPORTIONS.forearm * 0.5,
 			0
 		);
-		this.addPart(hand, HAND_GEOMETRY, 'skin', 0.08, 0.095, 0.065, 0, -0.04, 0);
-		this.addPart(hand, HAND_GEOMETRY, 'skin', 0.025, 0.045, 0.025, side * 0.062, -0.02, -0.025);
+		this.addPart(hand, BOX_GEOMETRY, 'skin', 0.16, 0.11, 0.15, 0, -0.055, -0.005);
 	}
 
-	private buildLeg(thigh: Group, shin: Group, foot: Group, shoe: Group): void {
+	private buildLeg(thigh: Group, shin: Group, shoe: Group): void {
 		this.addPart(
 			thigh,
-			LIMB_GEOMETRY,
+			BOX_GEOMETRY,
 			'pants',
-			0.11,
-			0.27,
-			0.1,
+			0.2,
+			HUMANOID_PROPORTIONS.thigh,
+			0.21,
 			0,
 			-HUMANOID_PROPORTIONS.thigh * 0.5,
 			0
 		);
 		this.addPart(
 			shin,
-			LIMB_GEOMETRY,
+			BOX_GEOMETRY,
 			'pants',
-			0.095,
-			0.26,
-			0.09,
+			0.18,
+			HUMANOID_PROPORTIONS.shin,
+			0.19,
 			0,
 			-HUMANOID_PROPORTIONS.shin * 0.5,
 			0
 		);
-		this.addPart(foot, FOOT_GEOMETRY, 'shoes', 0.18, 0.08, 0.34, 0, -0.035, -0.12);
-		this.addPart(shoe, FOOT_GEOMETRY, 'shoes', 0.19, 0.07, 0.22, 0, -0.015, -0.08);
+		this.addPart(shoe, BOX_GEOMETRY, 'shoes', 0.22, 0.11, 0.36, 0, -0.045, -0.085);
 	}
 
 	private buildHair(style: CharacterAppearanceV1['hairStyle']): void {
-		const j = this.joints.hair;
+		const hair = this.joints.hair;
 
-		if (style === 'none' || style === 'shaved') {
-			this.addPart(j, HAIR_CAP_GEOMETRY, 'hair', 0.285, 0.09, 0.27, 0, 0.13, -0.005);
+		if (style === 'none') {
 			return;
 		}
 
-		this.addPart(j, HAIR_CAP_GEOMETRY, 'hair', 0.305, 0.18, 0.29, 0, 0.15, -0.005);
+		if (style === 'shaved') {
+			this.addPart(hair, BOX_GEOMETRY, 'hair', 0.455, 0.075, 0.395, 0, 0.22, -0.008);
+			return;
+		}
+
+		// A shared block cap is used by every non-shaved style.
+		this.addPart(hair, BOX_GEOMETRY, 'hair', 0.5, 0.13, 0.44, 0, 0.205, -0.002);
 
 		if (style === 'short') {
-			this.addPart(j, HAIR_LOCK_GEOMETRY, 'hair', 0.055, 0.09, 0.045, -0.12, 0.08, -0.2);
-			this.addPart(j, HAIR_LOCK_GEOMETRY, 'hair', 0.055, 0.08, 0.045, 0.08, 0.07, -0.21);
-		} else if (style === 'curly' || style === 'afro') {
-			const scale = style === 'afro' ? 0.11 : 0.075;
+			this.addPart(hair, BOX_GEOMETRY, 'hair', 0.18, 0.075, 0.05, -0.115, 0.125, -0.218);
+			this.addPart(hair, BOX_GEOMETRY, 'hair', 0.16, 0.06, 0.05, 0.105, 0.135, -0.218);
+			return;
+		}
 
-			for (let index = 0; index < 7; index += 1) {
-				const angle = (index / 7) * Math.PI * 2;
-				this.addPart(
-					j,
-					HAND_GEOMETRY,
-					'hair',
-					scale,
-					scale,
-					scale,
-					Math.cos(angle) * 0.17,
-					0.15 + (index % 2) * 0.03,
-					Math.sin(angle) * 0.13 - 0.03
-				);
-			}
-		} else if (style === 'long') {
-			this.addPart(j, HAIR_LOCK_GEOMETRY, 'hair', 0.08, 0.24, 0.06, -0.18, -0.05, 0.08);
-			this.addPart(j, HAIR_LOCK_GEOMETRY, 'hair', 0.08, 0.24, 0.06, 0.18, -0.05, 0.08);
-			this.addPart(j, HAIR_LOCK_GEOMETRY, 'hair', 0.12, 0.26, 0.055, 0, -0.07, 0.16);
-		} else if (style === 'braids_simple') {
-			this.addPart(j, BRAID_GEOMETRY, 'hair', 0.055, 0.25, 0.055, -0.17, -0.08, 0.1);
-			this.addPart(j, BRAID_GEOMETRY, 'hair', 0.055, 0.25, 0.055, 0.17, -0.08, 0.1);
+		if (style === 'curly') {
+			this.addPart(hair, BOX_GEOMETRY, 'hair', 0.18, 0.15, 0.16, -0.145, 0.205, -0.03);
+			this.addPart(hair, BOX_GEOMETRY, 'hair', 0.18, 0.17, 0.16, 0.145, 0.215, -0.03);
+			this.addPart(hair, BOX_GEOMETRY, 'hair', 0.18, 0.15, 0.15, 0, 0.255, -0.02);
+			return;
+		}
+
+		if (style === 'afro') {
+			this.addPart(hair, BOX_GEOMETRY, 'hair', 0.24, 0.22, 0.23, -0.16, 0.235, -0.01);
+			this.addPart(hair, BOX_GEOMETRY, 'hair', 0.24, 0.22, 0.23, 0.16, 0.235, -0.01);
+			this.addPart(hair, BOX_GEOMETRY, 'hair', 0.25, 0.22, 0.22, 0, 0.31, 0);
+			this.addPart(hair, BOX_GEOMETRY, 'hair', 0.42, 0.17, 0.16, 0, 0.22, 0.14);
+			return;
+		}
+
+		if (style === 'long') {
+			this.addPart(hair, BOX_GEOMETRY, 'hair', 0.13, 0.4, 0.11, -0.215, -0.015, 0.035);
+			this.addPart(hair, BOX_GEOMETRY, 'hair', 0.13, 0.4, 0.11, 0.215, -0.015, 0.035);
+			this.addPart(hair, BOX_GEOMETRY, 'hair', 0.42, 0.42, 0.1, 0, -0.02, 0.185);
+			return;
+		}
+
+		if (style === 'braids_simple') {
+			this.addPart(hair, BOX_GEOMETRY, 'hair', 0.075, 0.4, 0.075, -0.17, -0.045, 0.11);
+			this.addPart(hair, BOX_GEOMETRY, 'hair', 0.075, 0.4, 0.075, 0.17, -0.045, 0.11);
 		}
 	}
 
@@ -388,12 +472,14 @@ export class HumanoidRig {
 			const child = hair.children[index];
 			hair.remove(child);
 
-			if (child instanceof Mesh) {
-				const meshIndex = this.meshes.indexOf(child);
+			if (!(child instanceof Mesh)) {
+				continue;
+			}
 
-				if (meshIndex >= 0) {
-					this.meshes.splice(meshIndex, 1);
-				}
+			const meshIndex = this.meshes.indexOf(child);
+
+			if (meshIndex >= 0) {
+				this.meshes.splice(meshIndex, 1);
 			}
 		}
 	}
@@ -401,7 +487,7 @@ export class HumanoidRig {
 	private addPart(
 		parent: Group,
 		geometry: BufferGeometry,
-		role: 'skin' | 'hair' | 'shirt' | 'pants' | 'shoes' | 'face',
+		role: HumanoidMaterialRole,
 		width: number,
 		height: number,
 		depth: number,
@@ -415,13 +501,14 @@ export class HumanoidRig {
 		mesh.position.set(x, y, z);
 		mesh.castShadow = false;
 		mesh.receiveShadow = false;
+		mesh.userData.avatarPart = role;
 		parent.add(mesh);
 		this.meshes.push(mesh);
 
 		return mesh;
 	}
 
-	private material(role: string): MeshLambertMaterial {
+	private material(role: HumanoidMaterialRole): MeshLambertMaterial {
 		const cached = this.materialByRole.get(role);
 
 		if (cached) {
@@ -429,13 +516,43 @@ export class HumanoidRig {
 		}
 
 		const material = new MeshLambertMaterial({
-			color: role === 'face' ? 0x1d1716 : 0xffffff
+			color: role === 'face' ? 0x1d1716 : 0xffffff,
+			flatShading: true
 		});
+		material.name = `avatar-${role}`;
+
 		this.materialByRole.set(role, material);
 		this.materials.push(material);
 
 		return material;
 	}
+}
+
+interface TaperedBoxOptions {
+	bottomX: number;
+	topX: number;
+	bottomZ: number;
+	topZ: number;
+}
+
+function createTaperedBoxGeometry(options: TaperedBoxOptions): BoxGeometry {
+	const geometry = new BoxGeometry(1, 1, 1);
+	const position = geometry.getAttribute('position');
+
+	for (let index = 0; index < position.count; index += 1) {
+		const y = position.getY(index);
+		const heightRatio = y + 0.5;
+		const xScale = options.bottomX + (options.topX - options.bottomX) * heightRatio;
+		const zScale = options.bottomZ + (options.topZ - options.bottomZ) * heightRatio;
+
+		position.setX(index, position.getX(index) * xScale);
+		position.setZ(index, position.getZ(index) * zScale);
+	}
+
+	position.needsUpdate = true;
+	geometry.computeVertexNormals();
+
+	return geometry;
 }
 
 function joint(name: string, x: number, y: number, z: number): Group {

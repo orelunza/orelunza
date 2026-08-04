@@ -1,7 +1,6 @@
 import { Scene, WebGLRenderer, type Camera } from 'three';
 import { addWorldLighting } from './Lighting';
 import { SelectionOutline } from './SelectionOutline';
-import { configureSky } from './Sky';
 import { BlockMeshFactory, type BlockInstanceLookup } from '../world/BlockMeshFactory';
 import type { VoxelWorld } from '../world/VoxelWorld';
 import { type BlockCoordinate } from '../world/voxel-types';
@@ -24,7 +23,6 @@ export class GameRenderer {
 		this.renderer.setPixelRatio(1);
 		this.renderer.shadowMap.enabled = false;
 
-		configureSky(this.scene);
 		addWorldLighting(this.scene);
 
 		this.scene.add(this.selection.object);

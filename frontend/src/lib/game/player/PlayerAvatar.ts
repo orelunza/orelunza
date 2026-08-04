@@ -1,4 +1,4 @@
-import { Group, Object3D, Quaternion, Vector3 } from 'three';
+import { Group, MathUtils, Quaternion, Vector3, type Object3D } from 'three';
 import {
 	DEFAULT_CHARACTER_APPEARANCE,
 	normalizeCharacterAppearance,
@@ -12,15 +12,26 @@ import { HumanoidAnimator } from './HumanoidAnimator';
 import {
 	countClipTrackMatches,
 	HumanoidModel,
-	normalizeMixamoBoneName,
 	type HumanoidLoadStatus,
 	type HumanoidModelSource
 } from './HumanoidModel';
-import type { HumanoidAnimationSnapshot } from './HumanoidPose';
+import {
+	copyHumanoidPose,
+	createNeutralPose,
+	type HumanoidAnimationSnapshot,
+	type HumanoidPose
+} from './HumanoidPose';
 import type { PlayerState } from './PlayerState';
+import { angleDelta } from './ThirdPersonCamera';
 
 export interface PlayerAvatarOptions {
 	groundHeightAt?: (x: number, z: number) => number;
+
+	/**
+	 * Retained for compatibility with the previous imported-model pipeline.
+	 * The current Orelunza citizen is always procedural and therefore already
+	 * represents the lightweight fallback.
+	 */
 	allowFallback?: boolean;
 }
 
@@ -79,40 +90,85 @@ export interface PlayerAvatarDebugSnapshot {
 	rightHandQuaternion: number[];
 }
 
+const EMPTY_TRACK_STATS: ReturnType<typeof countClipTrackMatches> = {
+	totalTrackCount: 0,
+	matchedTrackCount: 0,
+	unmatchedTrackCount: 0,
+	matchedBoneNames: []
+};
+
+const MAX_DELTA_SECONDS = 0.05;
+const MAX_LOOK_YAW = 0.78;
+const MAX_LOOK_PITCH = 0.35;
+const LOOK_RESPONSE = 12;
+const HAND_RESPONSE = 15;
+const HEAD_ORIGIN_HEIGHT = 1.72;
+const DEFAULT_HAND_TARGET_DISTANCE = 0.72;
+const DEFAULT_HAND_TARGET_HEIGHT = 1.12;
+
+/**
+ * High-level runtime owner for one Orelunza humanoid.
+ *
+ * HumanoidAnimator writes the reusable locomotion pose. PlayerAvatar copies it
+ * into a separate render pose and applies transient overlays such as terrain
+ * grounding, world-space looking and the lightweight two-hand build stance.
+ * This prevents those overlays from feeding back into locomotion smoothing.
+ */
 export class PlayerAvatar {
 	readonly object = new Group();
 	readonly animator = new HumanoidAnimator();
 	readonly ready: Promise<void>;
-	private model: HumanoidModel | null = null;
-	private animationController: HumanoidAnimationController | null = null;
+
+	private readonly model: HumanoidModel;
+	private readonly animationController: HumanoidAnimationController;
+	private readonly trackStats = new Map<string, ReturnType<typeof countClipTrackMatches>>();
+	private readonly renderPose: HumanoidPose = createNeutralPose();
+
 	private readonly tempLeftFoot = new Vector3();
 	private readonly tempRightFoot = new Vector3();
 	private readonly tempForward = new Vector3();
 	private readonly tempRight = new Vector3();
-	private readonly emptyQuaternion = new Quaternion();
+	private readonly lookTarget = new Vector3();
+	private readonly handTarget = new Vector3();
+
 	private updateMs = 0;
-	private status: HumanoidLoadStatus = 'loading';
+	private status: HumanoidLoadStatus = 'ready';
 	private error: string | null = null;
 	private disposed = false;
-	private lookTarget: Vector3 | null = null;
+
+	private lookTargetActive = false;
+	private handTargetActive = false;
+	private handTargetHasWorldPosition = false;
+	private lookYawOffset = 0;
+	private lookPitchOffset = 0;
+	private handInfluence = 0;
 
 	constructor(
 		appearance: CharacterAppearanceV1 = DEFAULT_CHARACTER_APPEARANCE,
 		private readonly options: PlayerAvatarOptions = {}
 	) {
 		this.object.name = 'playerAvatar';
-		this.ready = this.load(normalizeCharacterAppearance(appearance));
+		this.object.userData.avatarKind = 'orelunza-citizen';
+		this.object.userData.avatarPipeline = 'procedural-voxel';
+
+		const normalized = normalizeCharacterAppearance(appearance);
+		this.model = HumanoidModel.createFallback(normalized);
+		this.animationController = new HumanoidAnimationController(
+			this.model.animationRoot,
+			this.model.clips,
+			{ backend: 'procedural' }
+		);
+
+		for (const clip of this.model.clips) {
+			this.trackStats.set(clip.name, countClipTrackMatches(clip, this.model.animationRoot));
+		}
+
+		this.object.add(this.model.object);
+		this.ready = Promise.resolve();
 	}
 
 	get diagnostics(): PlayerAvatarMetrics {
-		const metrics = this.model?.metrics ?? {
-			objectCount: 1,
-			meshCount: 0,
-			skinnedMeshCount: 0,
-			materialCount: 0,
-			boneCount: 0,
-			triangles: 0
-		};
+		const metrics = this.model.metrics;
 
 		return {
 			updateMs: this.updateMs,
@@ -122,148 +178,203 @@ export class PlayerAvatar {
 			materialCount: metrics.materialCount,
 			boneCount: metrics.boneCount,
 			triangles: metrics.triangles,
-			modelSource: this.model?.source ?? this.status,
+			modelSource: this.status === 'ready' ? this.model.source : this.status,
 			ready: this.status === 'ready',
 			error: this.error,
-			animationBlend: this.animationController?.snapshot ?? emptyBlendSnapshot(),
-			retargetedClipCount: this.model?.retarget.retargetedClipCount ?? 0,
-			targetSkeletonBoneCount: this.model?.retarget.targetSkeletonBoneCount ?? 0,
+			animationBlend: this.animationController.snapshot,
+			retargetedClipCount: this.model.retarget.retargetedClipCount,
+			targetSkeletonBoneCount: this.model.retarget.targetSkeletonBoneCount,
 			debug: this.debugSnapshot(),
 			animation: this.animator.diagnostics
 		};
 	}
 
-	async updateAppearance(appearance: CharacterAppearanceV1): Promise<void> {
-		await this.ready;
-		this.model?.updateAppearance(normalizeCharacterAppearance(appearance));
+	get appearanceSnapshot(): CharacterAppearanceV1 {
+		return this.model.appearanceSnapshot;
 	}
 
-	setHandTarget(): void {
-		// Hook reserved for future build/interact poses.
+	async updateAppearance(appearance: CharacterAppearanceV1): Promise<void> {
+		await this.ready;
+
+		if (this.disposed) {
+			return;
+		}
+
+		this.model.updateAppearance(normalizeCharacterAppearance(appearance));
+	}
+
+	/**
+	 * Enable the lightweight build/reach stance.
+	 *
+	 * Calling without an argument keeps compatibility with the old API and aims
+	 * both hands at a stable point in front of the chest. Supplying a world-space
+	 * position lets interactions point the stance toward a selected block.
+	 */
+	setHandTarget(position?: Vector3): void {
+		if (this.disposed) {
+			return;
+		}
+
+		this.handTargetActive = true;
+		this.handTargetHasWorldPosition = isFiniteVector(position);
+
+		if (this.handTargetHasWorldPosition && position) {
+			this.handTarget.copy(position);
+		}
 	}
 
 	clearHandTarget(): void {
-		// Hook reserved for future build/interact poses.
+		this.handTargetActive = false;
+		this.handTargetHasWorldPosition = false;
 	}
 
 	lookAtWorldPosition(position: Vector3): void {
-		this.lookTarget = position;
+		if (this.disposed || !isFiniteVector(position)) {
+			return;
+		}
+
+		this.lookTarget.copy(position);
+		this.lookTargetActive = true;
 	}
 
 	clearLookTarget(): void {
-		this.lookTarget = null;
+		this.lookTargetActive = false;
+	}
+
+	/** Reset temporal animation state after respawn, teleport or world changes. */
+	reset(bodyYaw = Math.PI): void {
+		if (this.disposed) {
+			return;
+		}
+
+		const yaw = finiteOr(bodyYaw, Math.PI);
+		this.animator.reset(yaw);
+		this.animationController.reset('idle');
+		copyHumanoidPose(this.renderPose, this.animator.pose);
+		this.model.applyPose(this.renderPose);
+		this.object.rotation.y = yaw;
+		this.lookTargetActive = false;
+		this.handTargetActive = false;
+		this.handTargetHasWorldPosition = false;
+		this.lookYawOffset = 0;
+		this.lookPitchOffset = 0;
+		this.handInfluence = 0;
+		this.updateMs = 0;
+		this.error = null;
+		this.status = 'ready';
 	}
 
 	update(player: PlayerState, _moving: boolean, deltaSeconds: number): void {
-		const startedAt = performance.now();
-		const pose = this.animator.update({
-			cameraYaw: player.cameraYaw,
-			bodyYaw: player.bodyYaw,
-			desiredMovementYaw: player.desiredMovementYaw,
-			velocityX: player.velocity.x,
-			velocityY: player.velocity.y,
-			velocityZ: player.velocity.z,
-			grounded: player.onGround,
-			deltaSeconds,
-			stepEvent: player.stepEvent
-		});
-		const snapshot = this.animator.diagnostics;
-
-		player.bodyYaw = this.animator.bodyYaw;
-		player.yaw = player.bodyYaw;
-		player.headYaw = snapshot.headYaw;
-		player.localForwardSpeed = snapshot.localForwardSpeed;
-		player.localSideSpeed = snapshot.localSideSpeed;
-		player.verticalSpeed = snapshot.verticalSpeed;
-		this.animationController?.update(snapshot, deltaSeconds, {
-			mouseLookActive: player.mouseLookActive,
-			cameraRecentering: player.cameraRecentering
-		});
-
-		if (player.onGround) {
-			this.applyFootGrounding(player, pose);
+		if (this.disposed) {
+			return;
 		}
 
-		this.model?.applyPose(pose);
-		this.object.position.set(
-			player.position.x,
-			player.position.y + (this.model?.modelOffsetY ?? 0),
-			player.position.z
-		);
-		this.object.rotation.y = player.bodyYaw;
-		this.updateMs = performance.now() - startedAt;
+		const startedAt = nowMilliseconds();
+		const delta = safeDelta(deltaSeconds);
+
+		try {
+			const locomotionPose = this.animator.update({
+				cameraYaw: player.cameraYaw,
+				bodyYaw: player.bodyYaw,
+				desiredMovementYaw: player.desiredMovementYaw,
+				velocityX: player.velocity.x,
+				velocityY: player.velocity.y,
+				velocityZ: player.velocity.z,
+				grounded: player.onGround,
+				deltaSeconds: delta,
+				stepEvent: player.stepEvent,
+				mouseLookActive: player.mouseLookActive,
+				cameraRecentering: player.cameraRecentering
+			});
+			const snapshot = this.animator.diagnostics;
+
+			player.bodyYaw = this.animator.bodyYaw;
+			player.yaw = player.bodyYaw;
+			player.headYaw = snapshot.headYaw;
+			player.localForwardSpeed = snapshot.localForwardSpeed;
+			player.localSideSpeed = snapshot.localSideSpeed;
+			player.verticalSpeed = snapshot.verticalSpeed;
+
+			this.animationController.update(snapshot, delta, {
+				mouseLookActive: player.mouseLookActive,
+				cameraRecentering: player.cameraRecentering
+			});
+
+			copyHumanoidPose(this.renderPose, locomotionPose);
+			this.applyLookOverlay(player, this.renderPose, delta);
+			this.applyHandOverlay(player, this.renderPose, delta);
+
+			if (player.onGround) {
+				this.applyFootGrounding(player, this.renderPose);
+			}
+
+			this.model.applyPose(this.renderPose);
+			this.object.position.set(
+				finiteOr(player.position.x, 0),
+				finiteOr(player.position.y, 0) + this.model.modelOffsetY,
+				finiteOr(player.position.z, 0)
+			);
+			this.object.rotation.y = finiteOr(player.bodyYaw, 0);
+			this.status = 'ready';
+			this.error = null;
+		} catch (cause) {
+			this.status = 'failed';
+			this.error = errorMessage(cause);
+		}
+
+		this.updateMs = nowMilliseconds() - startedAt;
 	}
 
 	updatePreview(deltaSeconds: number): void {
-		this.animationController?.playPreview(deltaSeconds);
+		if (this.disposed) {
+			return;
+		}
+
+		const delta = safeDelta(deltaSeconds);
+		const locomotionPose = this.animator.update({
+			yaw: Math.PI,
+			bodyYaw: Math.PI,
+			velocityX: 0,
+			velocityY: 0,
+			velocityZ: 0,
+			grounded: true,
+			deltaSeconds: delta
+		});
+
+		copyHumanoidPose(this.renderPose, locomotionPose);
+		this.handInfluence = dampScalar(
+			this.handInfluence,
+			this.handTargetActive ? 1 : 0,
+			HAND_RESPONSE,
+			delta
+		);
+		this.applyPreviewHandOverlay(this.renderPose);
+		this.model.applyPose(this.renderPose);
+		this.animationController.playPreview(delta);
 	}
 
 	dispose(): void {
-		this.disposed = true;
-		this.animationController?.dispose();
-		this.model?.dispose();
-		this.object.clear();
-	}
-
-	private async load(appearance: CharacterAppearanceV1): Promise<void> {
-		try {
-			const model = await HumanoidModel.loadDefault(appearance);
-
-			if (this.disposed) {
-				model.dispose();
-
-				return;
-			}
-
-			this.model = model;
-			this.animationController = new HumanoidAnimationController(model.animationRoot, model.clips, {
-				strict: true
-			});
-			this.object.add(model.object);
-			this.status = 'ready';
-		} catch (error) {
-			if (!this.options.allowFallback) {
-				this.status = 'failed';
-				this.error = error instanceof Error ? error.message : String(error);
-				throw error;
-			}
-
-			const model = HumanoidModel.createFallback(appearance);
-
-			if (this.disposed) {
-				model.dispose();
-
-				return;
-			}
-
-			this.model = model;
-			this.animationController = new HumanoidAnimationController(model.animationRoot, model.clips);
-			this.object.add(model.object);
-			this.status = 'ready';
-			this.error = error instanceof Error ? error.message : String(error);
+		if (this.disposed) {
+			return;
 		}
+
+		this.disposed = true;
+		this.status = 'failed';
+		this.error = null;
+		this.animationController.dispose();
+		this.model.dispose();
+		this.trackStats.clear();
+		this.object.clear();
+		this.object.userData.disposed = true;
 	}
 
 	private debugSnapshot(): PlayerAvatarDebugSnapshot {
-		const blend = this.animationController?.snapshot ?? emptyBlendSnapshot();
-		const model = this.model;
-		const clip = model?.clips.find((candidate) => candidate.name === blend.currentAction);
-		const trackStats =
-			model && clip
-				? countClipTrackMatches(clip, model.animationRoot)
-				: {
-						totalTrackCount: 0,
-						matchedTrackCount: 0,
-						unmatchedTrackCount: 0
-					};
-		const hips = model ? findBoneByCanonicalName(model.animationRoot, 'hips') : null;
-		const leftUpperLeg = model ? findBoneByCanonicalName(model.animationRoot, 'leftupleg') : null;
-		const rightUpperLeg = model ? findBoneByCanonicalName(model.animationRoot, 'rightupleg') : null;
-		const leftHand = model ? findBoneByCanonicalName(model.animationRoot, 'lefthand') : null;
-		const rightHand = model ? findBoneByCanonicalName(model.animationRoot, 'righthand') : null;
+		const blend = this.animationController.snapshot;
+		const trackStats = this.trackStats.get(blend.currentAction) ?? EMPTY_TRACK_STATS;
+		const joints = this.model.rig.joints;
 
 		return {
-			modelSource: String(model?.source ?? this.status),
+			modelSource: this.model.source,
 			ready: this.status === 'ready',
 			currentAction: blend.currentAction,
 			previousAction: blend.previousAction,
@@ -287,90 +398,165 @@ export class PlayerAvatar {
 			totalTrackCount: trackStats.totalTrackCount,
 			matchedTrackCount: trackStats.matchedTrackCount,
 			unmatchedTrackCount: trackStats.unmatchedTrackCount,
-			hipsBoneName: hips?.name ?? '',
-			leftUpperLegBoneName: leftUpperLeg?.name ?? '',
-			rightUpperLegBoneName: rightUpperLeg?.name ?? '',
-			leftHandBoneName: leftHand?.name ?? '',
-			rightHandBoneName: rightHand?.name ?? '',
-			hipsQuaternion: quaternionArray(hips ?? this.emptyQuaternion),
-			leftUpperLegQuaternion: quaternionArray(leftUpperLeg ?? this.emptyQuaternion),
-			rightUpperLegQuaternion: quaternionArray(rightUpperLeg ?? this.emptyQuaternion),
-			leftHandQuaternion: quaternionArray(leftHand ?? this.emptyQuaternion),
-			rightHandQuaternion: quaternionArray(rightHand ?? this.emptyQuaternion)
+			hipsBoneName: joints.hips.name,
+			leftUpperLegBoneName: joints.thighLeft.name,
+			rightUpperLegBoneName: joints.thighRight.name,
+			leftHandBoneName: joints.handLeft.name,
+			rightHandBoneName: joints.handRight.name,
+			hipsQuaternion: quaternionArray(joints.hips),
+			leftUpperLegQuaternion: quaternionArray(joints.thighLeft),
+			rightUpperLegQuaternion: quaternionArray(joints.thighRight),
+			leftHandQuaternion: quaternionArray(joints.handLeft),
+			rightHandQuaternion: quaternionArray(joints.handRight)
 		};
 	}
 
-	private applyFootGrounding(
-		player: PlayerState,
-		pose: { leftFootLift: number; rightFootLift: number }
-	): void {
+	private applyLookOverlay(player: PlayerState, pose: HumanoidPose, delta: number): void {
+		let targetYaw = 0;
+		let targetPitch = 0;
+
+		if (this.lookTargetActive) {
+			const originX = finiteOr(player.position.x, 0);
+			const originY = finiteOr(player.position.y, 0) + HEAD_ORIGIN_HEIGHT;
+			const originZ = finiteOr(player.position.z, 0);
+			const dx = this.lookTarget.x - originX;
+			const dy = this.lookTarget.y - originY;
+			const dz = this.lookTarget.z - originZ;
+			const horizontal = Math.hypot(dx, dz);
+
+			if (horizontal > 0.0001) {
+				const worldYaw = Math.atan2(dx, dz);
+				targetYaw = MathUtils.clamp(
+					angleDelta(player.bodyYaw, worldYaw),
+					-MAX_LOOK_YAW,
+					MAX_LOOK_YAW
+				);
+				targetPitch = MathUtils.clamp(Math.atan2(dy, horizontal), -MAX_LOOK_PITCH, MAX_LOOK_PITCH);
+			}
+		}
+
+		this.lookYawOffset = dampScalar(this.lookYawOffset, targetYaw, LOOK_RESPONSE, delta);
+		this.lookPitchOffset = dampScalar(this.lookPitchOffset, targetPitch, LOOK_RESPONSE, delta);
+
+		pose.neckYaw = MathUtils.clamp(
+			pose.neckYaw + this.lookYawOffset * 0.42,
+			-MAX_LOOK_YAW,
+			MAX_LOOK_YAW
+		);
+		pose.headYaw = MathUtils.clamp(
+			pose.headYaw + this.lookYawOffset * 0.58,
+			-MAX_LOOK_YAW,
+			MAX_LOOK_YAW
+		);
+		pose.headPitch = MathUtils.clamp(
+			pose.headPitch + this.lookPitchOffset,
+			-MAX_LOOK_PITCH,
+			MAX_LOOK_PITCH
+		);
+	}
+
+	private applyHandOverlay(player: PlayerState, pose: HumanoidPose, delta: number): void {
+		this.handInfluence = dampScalar(
+			this.handInfluence,
+			this.handTargetActive ? 1 : 0,
+			HAND_RESPONSE,
+			delta
+		);
+
+		if (this.handInfluence <= 0.0001) {
+			return;
+		}
+
+		let reachYaw = 0;
+		let reachPitch = -0.72;
+
+		if (this.handTargetActive && this.handTargetHasWorldPosition) {
+			const originX = finiteOr(player.position.x, 0);
+			const originY = finiteOr(player.position.y, 0) + DEFAULT_HAND_TARGET_HEIGHT;
+			const originZ = finiteOr(player.position.z, 0);
+			const dx = this.handTarget.x - originX;
+			const dy = this.handTarget.y - originY;
+			const dz = this.handTarget.z - originZ;
+			const horizontal = Math.max(0.0001, Math.hypot(dx, dz));
+			const worldYaw = Math.atan2(dx, dz);
+
+			reachYaw = MathUtils.clamp(angleDelta(player.bodyYaw, worldYaw), -0.55, 0.55);
+			reachPitch = MathUtils.clamp(-0.58 - Math.atan2(dy, horizontal) * 0.35, -1, -0.35);
+		} else {
+			this.writeDefaultHandTarget(player);
+		}
+
+		const influence = this.handInfluence;
+		pose.chestYaw = lerp(pose.chestYaw, reachYaw * 0.28, influence);
+		pose.leftShoulderPitch = lerp(pose.leftShoulderPitch, reachPitch, influence);
+		pose.rightShoulderPitch = lerp(pose.rightShoulderPitch, reachPitch + 0.05, influence);
+		pose.leftShoulderRoll = lerp(pose.leftShoulderRoll, 0.18 + reachYaw * 0.12, influence);
+		pose.rightShoulderRoll = lerp(pose.rightShoulderRoll, -0.18 + reachYaw * 0.12, influence);
+		pose.leftElbowPitch = lerp(pose.leftElbowPitch, -0.94, influence);
+		pose.rightElbowPitch = lerp(pose.rightElbowPitch, -0.88, influence);
+	}
+
+	private applyPreviewHandOverlay(pose: HumanoidPose): void {
+		const influence = this.handInfluence;
+
+		if (influence <= 0.0001) {
+			return;
+		}
+
+		pose.leftShoulderPitch = lerp(pose.leftShoulderPitch, -0.72, influence);
+		pose.rightShoulderPitch = lerp(pose.rightShoulderPitch, -0.67, influence);
+		pose.leftShoulderRoll = lerp(pose.leftShoulderRoll, 0.18, influence);
+		pose.rightShoulderRoll = lerp(pose.rightShoulderRoll, -0.18, influence);
+		pose.leftElbowPitch = lerp(pose.leftElbowPitch, -0.94, influence);
+		pose.rightElbowPitch = lerp(pose.rightElbowPitch, -0.88, influence);
+	}
+
+	private writeDefaultHandTarget(player: PlayerState): void {
+		const yaw = finiteOr(player.bodyYaw, 0);
+		this.handTarget.set(
+			finiteOr(player.position.x, 0) + Math.sin(yaw) * DEFAULT_HAND_TARGET_DISTANCE,
+			finiteOr(player.position.y, 0) + DEFAULT_HAND_TARGET_HEIGHT,
+			finiteOr(player.position.z, 0) + Math.cos(yaw) * DEFAULT_HAND_TARGET_DISTANCE
+		);
+	}
+
+	private applyFootGrounding(player: PlayerState, pose: HumanoidPose): void {
 		const groundHeightAt = this.options.groundHeightAt;
 
-		if (!groundHeightAt || this.model?.source !== 'procedural-fallback') {
+		if (!groundHeightAt) {
 			return;
 		}
 
 		const yaw = this.animator.bodyYaw;
 		this.tempForward.set(Math.sin(yaw), 0, Math.cos(yaw));
 		this.tempRight.set(-this.tempForward.z, 0, this.tempForward.x);
+
 		this.tempLeftFoot
 			.set(player.position.x, player.position.y, player.position.z)
 			.addScaledVector(this.tempRight, -0.18)
 			.addScaledVector(this.tempForward, -0.12);
+
 		this.tempRightFoot
 			.set(player.position.x, player.position.y, player.position.z)
 			.addScaledVector(this.tempRight, 0.18)
 			.addScaledVector(this.tempForward, -0.12);
 
-		const leftGround = groundHeightAt(this.tempLeftFoot.x, this.tempLeftFoot.z) + 1.02;
-		const rightGround = groundHeightAt(this.tempRightFoot.x, this.tempRightFoot.z) + 1.02;
-		pose.leftFootLift += Math.max(-0.03, Math.min(0.08, leftGround - player.position.y));
-		pose.rightFootLift += Math.max(-0.03, Math.min(0.08, rightGround - player.position.y));
+		const sampledLeft = groundHeightAt(this.tempLeftFoot.x, this.tempLeftFoot.z);
+		const sampledRight = groundHeightAt(this.tempRightFoot.x, this.tempRightFoot.z);
+
+		if (Number.isFinite(sampledLeft)) {
+			const leftGround = sampledLeft + 1.02;
+			pose.leftFootLift += MathUtils.clamp(leftGround - player.position.y, -0.03, 0.08);
+		}
+
+		if (Number.isFinite(sampledRight)) {
+			const rightGround = sampledRight + 1.02;
+			pose.rightFootLift += MathUtils.clamp(rightGround - player.position.y, -0.03, 0.08);
+		}
+
+		pose.leftFootLift = MathUtils.clamp(pose.leftFootLift, 0, 0.16);
+		pose.rightFootLift = MathUtils.clamp(pose.rightFootLift, 0, 0.16);
 	}
-}
-
-function emptyBlendSnapshot(): HumanoidAnimationBlendSnapshot {
-	return {
-		activeState: 'idle',
-		currentAction: 'idle',
-		previousAction: null,
-		weights: {},
-		clipCount: 0,
-		mixerTime: 0,
-		transitionCount: 0,
-		actionTime: 0,
-		actionWeight: 0,
-		activeActionCount: 0,
-		cameraYaw: 0,
-		bodyYaw: 0,
-		desiredMovementYaw: 0,
-		headYaw: 0,
-		localForwardSpeed: 0,
-		localSideSpeed: 0,
-		verticalSpeed: 0,
-		grounded: false,
-		stepActive: false,
-		stepHeight: 0,
-		leadingFoot: null,
-		mouseLookActive: false,
-		cameraRecentering: false
-	};
-}
-
-function findBoneByCanonicalName(root: Object3D, canonicalName: string): Object3D | null {
-	let found: Object3D | null = null;
-
-	root.traverse((child) => {
-		if (found || child.type !== 'Bone') {
-			return;
-		}
-
-		if (normalizeMixamoBoneName(child.name) === canonicalName) {
-			found = child;
-		}
-	});
-
-	return found;
 }
 
 function quaternionArray(source: Object3D | Quaternion): number[] {
@@ -382,4 +568,38 @@ function quaternionArray(source: Object3D | Quaternion): number[] {
 		Number(quaternion.z.toFixed(6)),
 		Number(quaternion.w.toFixed(6))
 	];
+}
+
+function isFiniteVector(value: Vector3 | undefined): value is Vector3 {
+	return Boolean(
+		value && Number.isFinite(value.x) && Number.isFinite(value.y) && Number.isFinite(value.z)
+	);
+}
+
+function safeDelta(value: number): number {
+	return MathUtils.clamp(finiteOr(value, 0), 0, MAX_DELTA_SECONDS);
+}
+
+function finiteOr(value: number | undefined, fallback: number): number {
+	return Number.isFinite(value) ? (value as number) : fallback;
+}
+
+function dampScalar(current: number, target: number, response: number, delta: number): number {
+	return lerp(current, target, 1 - Math.exp(-response * delta));
+}
+
+function lerp(start: number, end: number, amount: number): number {
+	return start + (end - start) * MathUtils.clamp(amount, 0, 1);
+}
+
+function errorMessage(cause: unknown): string {
+	if (cause instanceof Error && cause.message.trim()) {
+		return cause.message;
+	}
+
+	return 'Unknown player avatar update error';
+}
+
+function nowMilliseconds(): number {
+	return typeof performance !== 'undefined' ? performance.now() : Date.now();
 }

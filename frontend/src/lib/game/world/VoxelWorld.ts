@@ -23,6 +23,7 @@ export interface WorldModificationSnapshot {
 export class VoxelWorld {
 	private readonly generator: TerrainGenerator;
 	private readonly generatedBlocks = new Map<string, BlockType>();
+	private readonly generatedChunkBlocks = new Map<string, Set<string>>();
 	private readonly loadedChunks = new Set<string>();
 	private readonly placedBlocks = new Map<string, BlockType>();
 	private readonly removedBlocks = new Set<string>();
@@ -47,6 +48,36 @@ export class VoxelWorld {
 		});
 	}
 
+	hasChunk(chunk: ChunkCoordinate): boolean {
+		return this.loadedChunks.has(chunkKey(normalizeChunk(chunk)));
+	}
+
+	loadChunk(chunk: ChunkCoordinate): boolean {
+		const normalized = normalizeChunk(chunk);
+		const key = chunkKey(normalized);
+
+		if (this.loadedChunks.has(key)) {
+			return false;
+		}
+
+		this.generateChunk(normalized);
+
+		return true;
+	}
+
+	unloadChunk(chunk: ChunkCoordinate): boolean {
+		const normalized = normalizeChunk(chunk);
+		const key = chunkKey(normalized);
+
+		if (!this.loadedChunks.delete(key)) {
+			return false;
+		}
+
+		this.deleteGeneratedChunk(key);
+
+		return true;
+	}
+
 	ensureChunksAround(position: { x: number; z: number }, radius: number): boolean {
 		const center = worldToChunk(position);
 		const wanted = new Set<string>();
@@ -58,20 +89,21 @@ export class VoxelWorld {
 				const key = chunkKey(coordinate);
 
 				wanted.add(key);
-
-				if (!this.loadedChunks.has(key)) {
-					this.generateChunk(coordinate);
-					changed = true;
-				}
+				changed = this.loadChunk(coordinate) || changed;
 			}
 		}
 
-		for (const key of this.loadedChunks) {
-			if (!wanted.has(key)) {
-				this.loadedChunks.delete(key);
-				this.deleteGeneratedChunk(key);
-				changed = true;
+		for (const key of [...this.loadedChunks]) {
+			if (wanted.has(key)) {
+				continue;
 			}
+
+			const [x = '0', z = '0'] = key.split(',');
+			changed =
+				this.unloadChunk({
+					x: Number.parseInt(x, 10),
+					z: Number.parseInt(z, 10)
+				}) || changed;
 		}
 
 		return changed;
@@ -359,32 +391,43 @@ export class VoxelWorld {
 	}
 
 	private generateChunk(chunk: ChunkCoordinate): void {
-		this.loadedChunks.add(chunkKey(chunk));
+		const normalized = normalizeChunk(chunk);
+		const key = chunkKey(normalized);
 
-		for (const block of this.generator.generateChunk(chunk.x, chunk.z).blocks) {
-			this.generatedBlocks.set(blockKey(block.position), block.type);
+		if (this.loadedChunks.has(key)) {
+			return;
 		}
+
+		const blockKeys = new Set<string>();
+
+		for (const block of this.generator.generateChunk(normalized.x, normalized.z).blocks) {
+			const blockPositionKey = blockKey(block.position);
+
+			this.generatedBlocks.set(blockPositionKey, block.type);
+			blockKeys.add(blockPositionKey);
+		}
+
+		this.generatedChunkBlocks.set(key, blockKeys);
+		this.loadedChunks.add(key);
 	}
 
 	private deleteGeneratedChunk(key: string): void {
-		const [x = '0', z = '0'] = key.split(',');
-		const chunk = {
-			x: Number.parseInt(x, 10),
-			z: Number.parseInt(z, 10)
-		};
+		const blockKeys = this.generatedChunkBlocks.get(key);
 
-		for (const block of this.generatedBlocks.keys()) {
-			const position = parseKey(block);
-
-			if (worldToChunk(position).x === chunk.x && worldToChunk(position).z === chunk.z) {
-				this.generatedBlocks.delete(block);
-			}
+		if (!blockKeys) {
+			return;
 		}
+
+		for (const blockPositionKey of blockKeys) {
+			this.generatedBlocks.delete(blockPositionKey);
+		}
+
+		this.generatedChunkBlocks.delete(key);
 	}
 
 	private generateBlock(position: BlockCoordinate): BlockType {
 		const chunk = worldToChunk(position);
-		this.generateChunk(chunk);
+		this.loadChunk(chunk);
 
 		return this.generatedBlocks.get(blockKey(position)) ?? 'air';
 	}
@@ -453,6 +496,17 @@ export class VoxelWorld {
 
 		return BlockRegistry.create(generated ?? 'air', normalized);
 	}
+}
+
+function normalizeChunk(chunk: ChunkCoordinate): ChunkCoordinate {
+	if (!Number.isFinite(chunk.x) || !Number.isFinite(chunk.z)) {
+		throw new Error('Chunk coordinates must be finite.');
+	}
+
+	return {
+		x: Math.trunc(chunk.x),
+		z: Math.trunc(chunk.z)
+	};
 }
 
 function normalizeBlock(position: BlockCoordinate): BlockCoordinate {
