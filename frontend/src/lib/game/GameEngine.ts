@@ -8,6 +8,19 @@ import type {
 	SaveStatus,
 	TargetedBlock
 } from './game-types';
+import {
+	createBuildWorkspaceState,
+	cycleBuildPaletteSlot,
+	loadBuildWorkspaceState,
+	persistBuildWorkspaceState,
+	recordRecentBuildBlock,
+	resolveSelectedBuildBlock,
+	serializeBuildWorkspaceState,
+	selectBuildPaletteSlot,
+	selectBuildWorkspaceBlock,
+	subscribeBuildWorkspaceState,
+	type BuildWorkspaceState
+} from './build/build-workspace';
 import { BlockBreakingSystem } from './interaction/BlockBreakingSystem';
 import { BlockPlacementSystem } from './interaction/BlockPlacementSystem';
 import { BlockRaycaster } from './interaction/BlockRaycaster';
@@ -87,6 +100,13 @@ export class GameEngine {
 	private mobileLimited = false;
 	private buildMode = false;
 	private selectedBuildBlock: BlockType | null = null;
+	private buildWorkspace: BuildWorkspaceState = createBuildWorkspaceState();
+	private buildWorkspaceUnsubscribe: (() => void) | null = null;
+	private readonly validBuildTypes = new Set<BlockType>(
+		BlockRegistry.all()
+			.filter((definition) => definition.placeable && definition.type !== 'air')
+			.map((definition) => definition.type)
+	);
 	private readonly creativeBuild = true;
 	private introVisible = true;
 	private readonly interactionPoint = new Vector3();
@@ -250,6 +270,7 @@ export class GameEngine {
 
 		try {
 			await this.persistence.load();
+			this.restoreBuildWorkspace();
 			this.recordAvatarMetrics();
 
 			this.world.loadChunk(worldToChunk(this.player.state.position));
@@ -321,7 +342,7 @@ export class GameEngine {
 		this.buildCursor.reset();
 		this.avatar.setBuildMode(true);
 		this.player.camera.setShoulderFraming('build');
-		this.selectBuildBlockFromHotbar();
+		this.restoreBuildSelection();
 		this.message = this.selectedBuildBlock
 			? 'Build Mode — C: blocks · R: center cursor · B: exit'
 			: 'Build Mode — C: choose a block · R: center cursor · B: exit';
@@ -369,7 +390,9 @@ export class GameEngine {
 			return false;
 		}
 
-		this.selectedBuildBlock = type;
+		this.setBuildWorkspace(
+			recordRecentBuildBlock(selectBuildWorkspaceBlock(this.buildWorkspace, type), type)
+		);
 		this.buildMode = true;
 		this.avatar.setBuildMode(true);
 		this.target = null;
@@ -396,7 +419,6 @@ export class GameEngine {
 
 		this.buildMode = false;
 		this.avatar.setBuildMode(false);
-		this.selectedBuildBlock = null;
 		this.target = null;
 		this.player.camera.setShoulderFraming('explore');
 		this.renderer.setSelection(null);
@@ -413,10 +435,10 @@ export class GameEngine {
 	}
 
 	selectHotbar(index: number): void {
-		this.hotbar.select(index);
-
 		if (this.buildMode) {
-			this.selectBuildBlockFromHotbar();
+			this.selectBuildPaletteIndex(index);
+		} else {
+			this.hotbar.select(index);
 		}
 
 		this.emitSnapshot();
@@ -440,6 +462,8 @@ export class GameEngine {
 		this.resizeObserver.disconnect();
 		document.removeEventListener('visibilitychange', this.handleVisibility);
 		window.removeEventListener('beforeunload', this.handleBeforeUnload);
+		this.buildWorkspaceUnsubscribe?.();
+		this.buildWorkspaceUnsubscribe = null;
 		this.keyboard.destroy();
 		this.mouse.destroy();
 		this.pointerLock.destroy();
@@ -495,10 +519,10 @@ export class GameEngine {
 		}
 
 		if (commands.hotbarIndex !== null) {
-			this.hotbar.select(commands.hotbarIndex);
-
 			if (this.buildMode) {
-				this.selectBuildBlockFromHotbar();
+				this.selectBuildPaletteIndex(commands.hotbarIndex);
+			} else {
+				this.hotbar.select(commands.hotbarIndex);
 			}
 		}
 
@@ -506,8 +530,7 @@ export class GameEngine {
 
 		if (wheel !== 0) {
 			if (this.status === 'playing' && this.buildMode) {
-				this.hotbar.next(wheel);
-				this.selectBuildBlockFromHotbar();
+				this.setBuildWorkspace(cycleBuildPaletteSlot(this.buildWorkspace, wheel));
 			} else if (this.status === 'playing') {
 				this.player.camera.applyZoom(wheel);
 			}
@@ -772,8 +795,11 @@ export class GameEngine {
 	}
 
 	private currentSelectedBlock(): BlockType | null {
-		const stack = this.inventory.getSelectedStack(this.hotbar.selectedIndex);
-		return this.selectedBuildBlock ?? stack?.type ?? null;
+		if (this.buildMode) {
+			return this.selectedBuildBlock;
+		}
+
+		return this.inventory.getSelectedStack(this.hotbar.selectedIndex)?.type ?? null;
 	}
 
 	private updateBuildCursorElement(visible: boolean, placementAllowed: boolean | null): void {
@@ -820,18 +846,42 @@ export class GameEngine {
 		this.avatar.setHandTarget(this.interactionPoint);
 	}
 
-	private selectBuildBlockFromHotbar(): void {
-		const stack = this.inventory.getSelectedStack(this.hotbar.selectedIndex);
+	private restoreBuildWorkspace(): void {
+		const fallback = this.inventory.snapshot().hotbar.map((slot) => slot.stack?.type ?? null);
+		this.applyBuildWorkspace(loadBuildWorkspaceState(this.validBuildTypes, fallback));
+		this.buildWorkspaceUnsubscribe?.();
+		this.buildWorkspaceUnsubscribe = subscribeBuildWorkspaceState(
+			this.validBuildTypes,
+			fallback,
+			(state) => {
+				if (
+					serializeBuildWorkspaceState(state) === serializeBuildWorkspaceState(this.buildWorkspace)
+				) {
+					return;
+				}
 
-		if (!stack) {
-			return;
-		}
+				this.applyBuildWorkspace(state);
+				this.emitSnapshot();
+			}
+		);
+	}
 
-		const definition = BlockRegistry.get(stack.type);
+	private restoreBuildSelection(): void {
+		this.selectedBuildBlock = resolveSelectedBuildBlock(this.buildWorkspace);
+	}
 
-		if (definition.placeable) {
-			this.selectedBuildBlock = stack.type;
-		}
+	private selectBuildPaletteIndex(index: number): void {
+		this.setBuildWorkspace(selectBuildPaletteSlot(this.buildWorkspace, index));
+	}
+
+	private setBuildWorkspace(state: BuildWorkspaceState): void {
+		this.applyBuildWorkspace(state);
+		persistBuildWorkspaceState(state);
+	}
+
+	private applyBuildWorkspace(state: BuildWorkspaceState): void {
+		this.buildWorkspace = state;
+		this.selectedBuildBlock = resolveSelectedBuildBlock(state);
 	}
 
 	private markBlockChanged(position: BlockCoordinate): void {
@@ -929,6 +979,8 @@ export class GameEngine {
 			chunk.x,
 			chunk.z,
 			this.hotbar.selectedIndex,
+			this.buildWorkspace.activeSlotIndex,
+			this.buildWorkspace.palette.join(','),
 			this.pointerLock.isLocked ? 1 : 0,
 			this.saveStatus,
 			this.world.terrainGenerator.zoneAt(position.x, position.z),
@@ -962,6 +1014,8 @@ export class GameEngine {
 			chunk: worldToChunk(this.player.state.position),
 			inventory: this.inventory.snapshot(),
 			selectedHotbarIndex: this.hotbar.selectedIndex,
+			buildPalette: [...this.buildWorkspace.palette],
+			selectedBuildPaletteIndex: this.buildWorkspace.activeSlotIndex,
 			pointerLocked: this.pointerLock.isLocked,
 			saveStatus: this.saveStatus,
 			regionName: this.options.regionName,

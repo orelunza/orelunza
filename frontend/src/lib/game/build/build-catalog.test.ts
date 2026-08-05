@@ -92,6 +92,46 @@ describe('build catalog helper', () => {
 		}
 	});
 
+	test('searches descriptions and human synonyms', () => {
+		const entries = buildCatalogEntries();
+
+		expect(filterCatalogEntries(entries, 'all', 'window').map((entry) => entry.type)).toContain(
+			'glass'
+		);
+		expect(filterCatalogEntries(entries, 'all', 'lawn').map((entry) => entry.type)).toContain(
+			'grass'
+		);
+	});
+
+	test('filters owned, favorite and recent collections', () => {
+		const entries = buildCatalogEntries();
+		const context = {
+			owned: ['stone', 'brick'] as const,
+			favorites: ['flower'] as const,
+			recent: ['wood', 'stone'] as const
+		};
+
+		expect(filterCatalogEntries(entries, 'owned', '', context).map((entry) => entry.type)).toEqual(
+			expect.arrayContaining(['stone', 'brick'])
+		);
+		expect(
+			filterCatalogEntries(entries, 'favorites', '', context).map((entry) => entry.type)
+		).toEqual(['flower']);
+		expect(filterCatalogEntries(entries, 'recent', '', context).map((entry) => entry.type)).toEqual(
+			['wood', 'stone']
+		);
+	});
+
+	test('exposes creation metadata for future non-block catalog entries', () => {
+		const entry = buildCatalogEntries().find((candidate) => candidate.type === 'brick');
+
+		expect(entry).toMatchObject({
+			kind: 'material',
+			placementMode: 'voxel'
+		});
+		expect(entry?.tags.length).toBeGreaterThan(0);
+	});
+
 	test('list is deterministic across calls', () => {
 		const first = buildCatalogEntries().map((entry) => entry.type);
 		const second = buildCatalogEntries().map((entry) => entry.type);

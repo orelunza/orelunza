@@ -2,7 +2,6 @@
 	import type { InventorySnapshot } from '$lib/game/inventory/Inventory';
 	import type { BlockType } from '$lib/game/world/voxel-types';
 	import BuildCatalog from './BuildCatalog.svelte';
-	import OwnedBlocksPanel from './OwnedBlocksPanel.svelte';
 
 	interface Props {
 		inventory: InventorySnapshot;
@@ -12,28 +11,11 @@
 	}
 
 	let { inventory, selectedBlock, onSelect, onClose }: Props = $props();
-
-	function handleKeydown(event: KeyboardEvent): void {
-		if (event.key === 'Escape') {
-			event.preventDefault();
-			onClose();
-		}
-	}
 </script>
 
-<div
-	class="overlay"
-	role="dialog"
-	aria-modal="false"
-	aria-label="Build workspace"
-	data-testid="build-catalog-overlay"
-	tabindex="-1"
-	onkeydown={handleKeydown}
->
-	<div class="workspace">
-		<OwnedBlocksPanel {inventory} {selectedBlock} {onSelect} />
-		<BuildCatalog {selectedBlock} {onSelect} {onClose} />
-	</div>
+<!-- The catalog is a non-modal creation dock: the world stays visible on the left. -->
+<div class="overlay" data-testid="build-catalog-overlay">
+	<BuildCatalog {inventory} {selectedBlock} {onSelect} {onClose} />
 </div>
 
 <style>
@@ -41,34 +23,19 @@
 		position: absolute;
 		inset: 0;
 		z-index: 30;
-		display: grid;
-		place-items: center;
+		display: flex;
+		align-items: center;
+		justify-content: flex-end;
 		box-sizing: border-box;
 		padding: 1rem;
-		background: rgba(0, 0, 0, 0.16);
-		pointer-events: auto;
+		pointer-events: none;
 	}
 
-	.workspace {
-		display: grid;
-		grid-template-columns: minmax(330px, 390px) minmax(430px, 540px);
-		align-items: stretch;
-		gap: 0.8rem;
-		width: min(960px, calc(100vw - 2rem));
-		max-height: 66vh;
-	}
-
-	@media (max-width: 900px) {
+	@media (max-width: 620px) {
 		.overlay {
-			place-items: end center;
-			padding: 0.65rem;
-		}
-
-		.workspace {
-			grid-template-columns: 1fr;
-			width: min(560px, 100%);
-			max-height: calc(100vh - 1.3rem);
-			overflow-y: auto;
+			align-items: flex-end;
+			justify-content: stretch;
+			padding: 0.6rem;
 		}
 	}
 </style>

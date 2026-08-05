@@ -42,6 +42,8 @@ export interface GameSnapshot {
 	chunk: ChunkCoordinate;
 	inventory: InventorySnapshot;
 	selectedHotbarIndex: number;
+	buildPalette: Array<BlockType | null>;
+	selectedBuildPaletteIndex: number;
 	pointerLocked: boolean;
 	saveStatus: SaveStatus;
 	regionName: string;
