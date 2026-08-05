@@ -1383,6 +1383,56 @@ describe('player physics', () => {
 		expect(Math.abs(aimingUpHeight - aimingDownHeight)).toBeLessThan(0.05);
 	});
 
+	test('preserves real altitude perspective and moves closer again while descending', () => {
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		const base = world.findSafeSpawnPosition();
+		const player = testPlayer(world, {
+			position: { ...base, y: base.y + 48 }
+		});
+		const camera = new ThirdPersonCamera(16 / 9, world);
+		camera.setShoulderFraming('build');
+		camera.setOrientation(Math.PI, MAX_CAMERA_PITCH);
+
+		for (let index = 0; index < 180; index += 1) {
+			camera.update(player, 1 / 60);
+		}
+
+		const highAltitudeDistance = camera.currentDistance;
+
+		expect(camera.altitudeFramingFactor).toBeGreaterThan(0.95);
+		expect(highAltitudeDistance).toBeGreaterThan(MAX_CAMERA_DISTANCE);
+		// The camera must not auto-fit the complete 48-block tower. Keeping this
+		// distance sub-linear preserves the feeling that the ground is far away.
+		expect(highAltitudeDistance).toBeLessThan(32);
+
+		player.position.y = base.y + 8;
+
+		for (let index = 0; index < 240; index += 1) {
+			camera.update(player, 1 / 60);
+		}
+
+		expect(camera.currentDistance).toBeLessThan(highAltitudeDistance);
+		expect(camera.currentDistance).toBeLessThan(12);
+	});
+
+	test('keeps normal close framing at altitude until the player looks downward', () => {
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		const base = world.findSafeSpawnPosition();
+		const player = testPlayer(world, {
+			position: { ...base, y: base.y + 48 }
+		});
+		const camera = new ThirdPersonCamera(16 / 9, world);
+		camera.setShoulderFraming('build');
+		camera.setOrientation(Math.PI, 0.2);
+
+		for (let index = 0; index < 180; index += 1) {
+			camera.update(player, 1 / 60);
+		}
+
+		expect(camera.altitudeFramingFactor).toBeLessThan(0.01);
+		expect(camera.currentDistance).toBeLessThanOrEqual(MAX_CAMERA_DISTANCE);
+	});
+
 	test('camera shortens before an obstacle behind the player', () => {
 		const world = new VoxelWorld(STARTER_WORLD_SEED);
 		const player = testPlayer(world);

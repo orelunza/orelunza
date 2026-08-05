@@ -43,6 +43,22 @@ const SHOULDER_SWEEP_STEP = 0.08;
 
 const EASE_OUT_RESPONSE = 7;
 
+// Altitude framing is activated only while building, only when the player is
+// meaningfully above the terrain, and only while looking downward. It preserves
+// real perspective instead of auto-fitting the complete tower: the ground must
+// look farther and smaller at high altitude, then become larger as the player
+// descends, like an aircraft approaching the ground.
+const ALTITUDE_FRAME_START = 5;
+const ALTITUDE_FRAME_FULL = 24;
+const ALTITUDE_PITCH_START = 0.58;
+const ALTITUDE_PITCH_FULL = 1.24;
+const ALTITUDE_FRAME_RESPONSE = 6;
+const ALTITUDE_DISTANCE_SQRT_SCALE = 1.9;
+const ALTITUDE_DISTANCE_MAX_EXTRA = 34;
+const ALTITUDE_FOCUS_RATIO = 0.28;
+const ALTITUDE_FOCUS_MAX_DROP = 22;
+const ALTITUDE_BOOM_PITCH = 1.18;
+
 export class ThirdPersonCamera {
 	readonly camera: PerspectiveCamera;
 
@@ -53,12 +69,16 @@ export class ThirdPersonCamera {
 
 	private shoulderTarget = SHOULDER_OFFSET_EXPLORE;
 	private shoulderCurrent = SHOULDER_OFFSET_EXPLORE;
+	private framingMode: 'explore' | 'build' = 'explore';
+	private altitudeFrameCurrent = 0;
+	private framedDistance = DEFAULT_CAMERA_DISTANCE;
 
 	private mouseActiveTimer = 0;
 	private updateMs = 0;
 
 	private readonly baseTarget = new Vector3();
 	private readonly target = new Vector3();
+	private readonly focus = new Vector3();
 	private readonly direction = new Vector3();
 	private readonly desired = new Vector3();
 	private readonly orientation = new Euler(0, 0, 0, 'YXZ');
@@ -104,6 +124,10 @@ export class ThirdPersonCamera {
 		return this.shoulderCurrent;
 	}
 
+	get altitudeFramingFactor(): number {
+		return this.altitudeFrameCurrent;
+	}
+
 	setOrientation(yaw: number, pitch = DEFAULT_PITCH): void {
 		this.yaw = normalizeAngle(yaw);
 		this.pitch = clamp(pitch, MIN_CAMERA_PITCH, MAX_CAMERA_PITCH);
@@ -111,6 +135,7 @@ export class ThirdPersonCamera {
 	}
 
 	setShoulderFraming(mode: 'explore' | 'build'): void {
+		this.framingMode = mode;
 		this.shoulderTarget = mode === 'build' ? SHOULDER_OFFSET_BUILD : SHOULDER_OFFSET_EXPLORE;
 	}
 
@@ -155,6 +180,22 @@ export class ThirdPersonCamera {
 
 		this.baseTarget.set(player.position.x, player.position.y + TARGET_HEIGHT, player.position.z);
 
+		const terrainHeight = this.world.terrainGenerator.heightAt(
+			player.position.x,
+			player.position.z
+		);
+		const altitude = Math.max(0, player.position.y - (terrainHeight + 1.04));
+		const altitudeFactor = smoothstep(ALTITUDE_FRAME_START, ALTITUDE_FRAME_FULL, altitude);
+		const pitchFactor = smoothstep(ALTITUDE_PITCH_START, ALTITUDE_PITCH_FULL, this.pitch);
+		const desiredAltitudeFrame = this.framingMode === 'build' ? altitudeFactor * pitchFactor : 0;
+
+		this.altitudeFrameCurrent = damp(
+			this.altitudeFrameCurrent,
+			desiredAltitudeFrame,
+			ALTITUDE_FRAME_RESPONSE,
+			delta
+		);
+
 		// The shoulder offset is swept before use. Standing next to a wall can
 		// therefore collapse the framing toward the player's centre instead of
 		// moving both the target and camera axis into that wall.
@@ -165,20 +206,41 @@ export class ThirdPersonCamera {
 		const shoulderScale = this.safeShoulderScale(this.baseTarget, this.shoulder);
 		this.target.copy(this.baseTarget).addScaledVector(this.shoulder, shoulderScale);
 
-		// The camera boom keeps a stable elevation around the player. Full pitch
-		// is applied only to the view orientation below. Looking up can therefore
-		// aim at upper floors without dragging the camera down into water, while
-		// wall collision still follows one deterministic boom path.
-		const boomHorizontal = Math.cos(CAMERA_BOOM_PITCH);
+		// On the ground the boom keeps a stable elevation, which prevents looking
+		// upward from dragging the eye into water. While building high above the
+		// terrain and looking down, the boom progressively becomes a drone-like
+		// orbit so both the avatar and the construction origin remain frameable.
+		const altitudeFrame = this.altitudeFrameCurrent;
+		const boomPitch = lerp(CAMERA_BOOM_PITCH, ALTITUDE_BOOM_PITCH, altitudeFrame);
+		const boomHorizontal = Math.cos(boomPitch);
 		this.direction
 			.set(
 				-Math.sin(this.yaw) * boomHorizontal,
-				Math.sin(CAMERA_BOOM_PITCH),
+				Math.sin(boomPitch),
 				-Math.cos(this.yaw) * boomHorizontal
 			)
 			.normalize();
 
-		const safeDistance = this.safeDistance(this.target, this.direction, this.distance);
+		// Do not compute a zoom-to-fit distance from the complete tower height.
+		// That would keep the ground at nearly the same apparent size regardless
+		// of altitude. A square-root response gives a modest drone pull-back while
+		// preserving depth: high altitude still feels high, and descending makes
+		// the ground naturally grow in the frame.
+		const altitudeDistance =
+			this.distance +
+			Math.min(
+				ALTITUDE_DISTANCE_MAX_EXTRA,
+				Math.sqrt(Math.max(0, altitude)) * ALTITUDE_DISTANCE_SQRT_SCALE
+			);
+		const requestedDistance = lerp(this.distance, altitudeDistance, altitudeFrame);
+		this.framedDistance = damp(
+			this.framedDistance,
+			requestedDistance,
+			ALTITUDE_FRAME_RESPONSE,
+			delta
+		);
+
+		const safeDistance = this.safeDistance(this.target, this.direction, this.framedDistance);
 
 		// Pull in immediately so the camera never interpolates through a wall.
 		// Only recovery back to the requested zoom distance is eased.
@@ -188,7 +250,11 @@ export class ThirdPersonCamera {
 			this.correctedDistance = damp(this.correctedDistance, safeDistance, EASE_OUT_RESPONSE, delta);
 		}
 
-		this.correctedDistance = clamp(this.correctedDistance, MIN_COLLISION_DISTANCE, this.distance);
+		this.correctedDistance = clamp(
+			this.correctedDistance,
+			MIN_COLLISION_DISTANCE,
+			this.framedDistance
+		);
 
 		this.desired.copy(this.direction).multiplyScalar(this.correctedDistance).add(this.target);
 
@@ -197,7 +263,24 @@ export class ThirdPersonCamera {
 		// should move around the player immediately, like a voxel-game camera.
 		this.camera.position.copy(this.desired);
 
-		this.orientation.set(-this.pitch, normalizeAngle(this.yaw + Math.PI), 0, 'YXZ');
+		// The focus moves downward only by a bounded amount. It helps the player
+		// inspect the construction below without forcing both the summit and the
+		// terrain origin into the frame at every height. This keeps the visual
+		// scale tied to real altitude.
+		this.focus.copy(this.target);
+		const altitudeFocusDrop = Math.min(ALTITUDE_FOCUS_MAX_DROP, altitude * ALTITUDE_FOCUS_RATIO);
+		this.focus.y -= altitudeFocusDrop * altitudeFrame;
+		const horizontalFocusDistance = Math.hypot(
+			this.camera.position.x - this.focus.x,
+			this.camera.position.z - this.focus.z
+		);
+		const focusPitch = Math.atan2(
+			this.camera.position.y - this.focus.y,
+			Math.max(1e-5, horizontalFocusDistance)
+		);
+		const viewPitch = lerp(this.pitch, focusPitch, altitudeFrame);
+
+		this.orientation.set(-viewPitch, normalizeAngle(this.yaw + Math.PI), 0, 'YXZ');
 		this.camera.quaternion.setFromEuler(this.orientation).normalize();
 		this.updateMs = now() - startedAt;
 	}
@@ -338,6 +421,19 @@ export function dampAngle(
 
 export function angleDelta(current: number, target: number): number {
 	return Math.atan2(Math.sin(target - current), Math.cos(target - current));
+}
+
+function lerp(start: number, end: number, amount: number): number {
+	return start + (end - start) * clamp(amount, 0, 1);
+}
+
+function smoothstep(edge0: number, edge1: number, value: number): number {
+	if (edge0 === edge1) {
+		return value < edge0 ? 0 : 1;
+	}
+
+	const normalized = clamp((value - edge0) / (edge1 - edge0), 0, 1);
+	return normalized * normalized * (3 - 2 * normalized);
 }
 
 function normalizeAngle(value: number): number {
