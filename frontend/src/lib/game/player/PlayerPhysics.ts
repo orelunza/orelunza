@@ -4,6 +4,16 @@ import type { WorldCoordinate } from '../world/voxel-types';
 import { PlayerCollider } from './PlayerCollider';
 import type { LeadingFoot, PlayerState } from './PlayerState';
 
+/**
+ * Player physics — rewritten.
+ *
+ * Owns velocity, acceleration/deceleration, gravity, jump, collisions and the
+ * one-block step-up. It never touches the camera and never sets a visual
+ * rotation. Horizontal motion is camera-relative and normalized so diagonals do
+ * not move faster. All motion is integrated per-axis with swept collision, so a
+ * held key can never wedge or busy-loop the browser.
+ */
+
 export const WALK_SPEED = 5;
 export const SPRINT_SPEED = 8;
 export const ACCELERATION = 18;
@@ -11,14 +21,23 @@ export const DECELERATION = 22;
 export const JUMP_SPEED = 7;
 export const GRAVITY_ACCELERATION = -20;
 export const STEP_HEIGHT = 1.05;
+
 const MAX_DELTA = 0.05;
 const GROUND_SNAP = 0.32;
+const SLIDE_STEP = 0.02;
+const VOID_FLOOR_Y = 1;
 
 export interface HorizontalMovement {
 	x: number;
 	z: number;
 }
 
+/**
+ * Camera-relative, normalized horizontal movement direction.
+ *
+ * yaw 0 faces +Z; at yaw PI, forward is -Z and right is +X. Returns the zero
+ * vector when there is no input so a stationary player never drifts.
+ */
 export function cameraRelativeMovement(yaw: number, input: MovementInput): HorizontalMovement {
 	const forwardX = Math.sin(yaw);
 	const forwardZ = Math.cos(yaw);
@@ -32,15 +51,13 @@ export function cameraRelativeMovement(yaw: number, input: MovementInput): Horiz
 		return { x: 0, z: 0 };
 	}
 
-	return {
-		x: x / length,
-		z: z / length
-	};
+	return { x: x / length, z: z / length };
 }
 
 export class PlayerPhysics {
 	readonly collider: PlayerCollider;
-	private readonly candidate = { x: 0, y: 0, z: 0 };
+
+	private readonly probe: WorldCoordinate = { x: 0, y: 0, z: 0 };
 	private stepSequence = 0;
 
 	constructor(private readonly world: VoxelWorld) {
@@ -49,47 +66,74 @@ export class PlayerPhysics {
 
 	step(player: PlayerState, input: MovementInput, deltaSeconds: number): void {
 		this.collider.resetFrameStats();
-		const delta = Math.min(deltaSeconds, MAX_DELTA);
-		const speed = input.sprint ? SPRINT_SPEED : WALK_SPEED;
-		const movement = cameraRelativeMovement(player.cameraYaw ?? player.yaw, input);
-		const targetX = movement.x * speed;
-		const targetZ = movement.z * speed;
-		const horizontalInput = Math.hypot(input.forward, input.right) > 0.001;
-		const rate = horizontalInput ? ACCELERATION : DECELERATION;
+		const delta = clampDelta(deltaSeconds);
+
 		player.stepEvent = null;
 
-		if (Math.hypot(movement.x, movement.z) > 0.001) {
+		this.integrateHorizontalVelocity(player, input, delta);
+		this.integrateVerticalVelocity(player, input, delta);
+
+		// Move each axis independently with swept collision so walls slide and a
+		// single step is climbed rather than blocking motion.
+		this.sweep(player, 'x', player.velocity.x * delta);
+		this.sweep(player, 'z', player.velocity.z * delta);
+		this.sweep(player, 'y', player.velocity.y * delta);
+
+		this.settleGround(player, input);
+		this.recoverFromVoid(player);
+
+		player.verticalSpeed = player.velocity.y;
+	}
+
+	private integrateHorizontalVelocity(
+		player: PlayerState,
+		input: MovementInput,
+		delta: number
+	): void {
+		const speed = input.sprint ? SPRINT_SPEED : WALK_SPEED;
+		const movement = cameraRelativeMovement(player.cameraYaw ?? player.yaw, input);
+		const moving = Math.hypot(input.forward, input.right) > 0.001;
+		const rate = moving ? ACCELERATION : DECELERATION;
+
+		// Physics records the desired movement direction for telemetry only; the
+		// controller owns bodyYaw. This never rotates anything visual.
+		if (movement.x !== 0 || movement.z !== 0) {
 			player.desiredMovementYaw = Math.atan2(movement.x, movement.z);
 		}
 
-		player.velocity.x = approach(player.velocity.x, targetX, rate * delta);
-		player.velocity.z = approach(player.velocity.z, targetZ, rate * delta);
+		player.velocity.x = approach(player.velocity.x, movement.x * speed, rate * delta);
+		player.velocity.z = approach(player.velocity.z, movement.z * speed, rate * delta);
+	}
 
+	private integrateVerticalVelocity(
+		player: PlayerState,
+		input: MovementInput,
+		delta: number
+	): void {
 		if (input.jump && player.onGround) {
 			player.velocity.y = JUMP_SPEED;
 			player.onGround = false;
 		}
 
 		player.velocity.y += GRAVITY_ACCELERATION * delta;
-		player.verticalSpeed = player.velocity.y;
+	}
 
-		this.moveAxis(player, 'x', player.velocity.x * delta);
-		this.moveAxis(player, 'z', player.velocity.z * delta);
-		this.moveAxis(player, 'y', player.velocity.y * delta);
-
+	private settleGround(player: PlayerState, input: MovementInput): void {
 		if (!input.jump && player.velocity.y <= 0 && this.snapToGround(player)) {
 			player.onGround = true;
 			player.velocity.y = 0;
 		}
+	}
 
-		if (player.position.y < 1) {
+	private recoverFromVoid(player: PlayerState): void {
+		if (player.position.y < VOID_FLOOR_Y) {
 			player.position = this.world.findSafeSpawnPosition(player.radius, player.height);
 			player.velocity.y = 0;
 			player.onGround = false;
 		}
 	}
 
-	private moveAxis(player: PlayerState, axis: keyof WorldCoordinate, amount: number): void {
+	private sweep(player: PlayerState, axis: keyof WorldCoordinate, amount: number): void {
 		if (amount === 0) {
 			if (axis === 'y') {
 				player.onGround = this.collider.isGrounded(player);
@@ -98,14 +142,7 @@ export class PlayerPhysics {
 			return;
 		}
 
-		this.candidate.x = player.position.x;
-		this.candidate.y = player.position.y;
-		this.candidate.z = player.position.z;
-		this.candidate[axis] = player.position[axis] + amount;
-
-		if (!this.collider.wouldCollide(player, this.candidate)) {
-			player.position[axis] = this.candidate[axis];
-
+		if (this.tryMove(player, axis, amount)) {
 			if (axis === 'y') {
 				player.onGround = false;
 			}
@@ -117,23 +154,7 @@ export class PlayerPhysics {
 			return;
 		}
 
-		const direction = Math.sign(amount);
-		const step = 0.02 * direction;
-		let remaining = amount;
-
-		while (Math.abs(remaining) > Math.abs(step)) {
-			this.candidate.x = player.position.x;
-			this.candidate.y = player.position.y;
-			this.candidate.z = player.position.z;
-			this.candidate[axis] = player.position[axis] + step;
-
-			if (this.collider.wouldCollide(player, this.candidate)) {
-				break;
-			}
-
-			player.position[axis] = this.candidate[axis];
-			remaining -= step;
-		}
+		this.slidePartial(player, axis, amount);
 
 		if (axis === 'y') {
 			player.onGround = amount < 0;
@@ -143,29 +164,60 @@ export class PlayerPhysics {
 		}
 	}
 
+	private tryMove(player: PlayerState, axis: keyof WorldCoordinate, amount: number): boolean {
+		this.setProbe(player.position);
+		this.probe[axis] = player.position[axis] + amount;
+
+		if (this.collider.wouldCollide(player, this.probe)) {
+			return false;
+		}
+
+		player.position[axis] = this.probe[axis];
+
+		return true;
+	}
+
+	private slidePartial(player: PlayerState, axis: keyof WorldCoordinate, amount: number): void {
+		const direction = Math.sign(amount);
+		const step = SLIDE_STEP * direction;
+		let remaining = amount;
+
+		while (Math.abs(remaining) > Math.abs(step)) {
+			this.setProbe(player.position);
+			this.probe[axis] = player.position[axis] + step;
+
+			if (this.collider.wouldCollide(player, this.probe)) {
+				break;
+			}
+
+			player.position[axis] = this.probe[axis];
+			remaining -= step;
+		}
+	}
+
 	private tryStepUp(player: PlayerState, axis: 'x' | 'z', amount: number): boolean {
 		if (!player.onGround || Math.abs(amount) < 0.0001) {
 			return false;
 		}
 
 		const startY = player.position.y;
-		this.candidate.x = player.position.x;
-		this.candidate.y = player.position.y + STEP_HEIGHT;
-		this.candidate.z = player.position.z;
 
-		if (this.collider.wouldCollide(player, this.candidate)) {
+		this.setProbe(player.position);
+		this.probe.y = player.position.y + STEP_HEIGHT;
+
+		if (this.collider.wouldCollide(player, this.probe)) {
 			return false;
 		}
 
-		this.candidate[axis] = player.position[axis] + amount;
+		this.probe[axis] = player.position[axis] + amount;
 
-		if (this.collider.wouldCollide(player, this.candidate)) {
+		if (this.collider.wouldCollide(player, this.probe)) {
 			return false;
 		}
 
-		player.position.x = this.candidate.x;
-		player.position.y = this.candidate.y;
-		player.position.z = this.candidate.z;
+		player.position.x = this.probe.x;
+		player.position.y = this.probe.y;
+		player.position.z = this.probe.z;
 		player.velocity.y = 0;
 		player.onGround = false;
 		player.verticalSpeed = 0;
@@ -185,24 +237,23 @@ export class PlayerPhysics {
 			return true;
 		}
 
-		this.candidate.x = player.position.x;
-		this.candidate.y = player.position.y - GROUND_SNAP;
-		this.candidate.z = player.position.z;
+		this.setProbe(player.position);
+		this.probe.y = player.position.y - GROUND_SNAP;
 
-		if (!this.collider.wouldCollide(player, this.candidate)) {
+		if (!this.collider.wouldCollide(player, this.probe)) {
 			return false;
 		}
 
-		let low = this.candidate.y;
+		// Binary search the exact resting height within the snap window.
+		let low = this.probe.y;
 		let high = player.position.y;
 
 		for (let index = 0; index < 8; index += 1) {
 			const mid = (low + high) / 2;
-			this.candidate.x = player.position.x;
-			this.candidate.y = mid;
-			this.candidate.z = player.position.z;
+			this.setProbe(player.position);
+			this.probe.y = mid;
 
-			if (this.collider.wouldCollide(player, this.candidate)) {
+			if (this.collider.wouldCollide(player, this.probe)) {
 				low = mid;
 			} else {
 				high = mid;
@@ -212,6 +263,12 @@ export class PlayerPhysics {
 		player.position.y = high;
 
 		return true;
+	}
+
+	private setProbe(position: WorldCoordinate): void {
+		this.probe.x = position.x;
+		this.probe.y = position.y;
+		this.probe.z = position.z;
 	}
 }
 
@@ -236,4 +293,12 @@ function approach(current: number, target: number, amount: number): number {
 	}
 
 	return current;
+}
+
+function clampDelta(value: number): number {
+	if (!Number.isFinite(value) || value <= 0) {
+		return 0;
+	}
+
+	return Math.min(value, MAX_DELTA);
 }

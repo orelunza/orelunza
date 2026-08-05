@@ -24,14 +24,25 @@ import {
 import type { PlayerState } from './PlayerState';
 import { angleDelta } from './ThirdPersonCamera';
 
+/**
+ * Runtime owner of one rendered Orelunza humanoid — rewritten.
+ *
+ * PlayerAvatar is a strictly read-only consumer of PlayerState. Each frame it:
+ *   1. asks HumanoidAnimator for a locomotion pose from a read-only view of the
+ *      player (it passes velocities/flags, never mutates them);
+ *   2. copies that pose into a private render pose;
+ *   3. layers transient visual overlays (world look, build reach, terrain foot
+ *      grounding) onto the render pose only;
+ *   4. applies the render pose to the rig and syncs the group transform.
+ *
+ * It never writes bodyYaw, yaw, desiredMovementYaw or any telemetry back onto
+ * PlayerState — those are owned by PlayerController. The object's visual
+ * rotation simply mirrors `player.bodyYaw`.
+ */
+
 export interface PlayerAvatarOptions {
 	groundHeightAt?: (x: number, z: number) => number;
-
-	/**
-	 * Retained for compatibility with the previous imported-model pipeline.
-	 * The current Orelunza citizen is always procedural and therefore already
-	 * represents the lightweight fallback.
-	 */
+	/** Compatibility flag from the former imported-model pipeline (always procedural). */
 	allowFallback?: boolean;
 }
 
@@ -106,14 +117,6 @@ const HEAD_ORIGIN_HEIGHT = 1.72;
 const DEFAULT_HAND_TARGET_DISTANCE = 0.72;
 const DEFAULT_HAND_TARGET_HEIGHT = 1.12;
 
-/**
- * High-level runtime owner for one Orelunza humanoid.
- *
- * HumanoidAnimator writes the reusable locomotion pose. PlayerAvatar copies it
- * into a separate render pose and applies transient overlays such as terrain
- * grounding, world-space looking and the lightweight two-hand build stance.
- * This prevents those overlays from feeding back into locomotion smoothing.
- */
 export class PlayerAvatar {
 	readonly object = new Group();
 	readonly animator = new HumanoidAnimator();
@@ -203,13 +206,6 @@ export class PlayerAvatar {
 		this.model.updateAppearance(normalizeCharacterAppearance(appearance));
 	}
 
-	/**
-	 * Enable the lightweight build/reach stance.
-	 *
-	 * Calling without an argument keeps compatibility with the old API and aims
-	 * both hands at a stable point in front of the chest. Supplying a world-space
-	 * position lets interactions point the stance toward a selected block.
-	 */
 	setHandTarget(position?: Vector3): void {
 		if (this.disposed) {
 			return;
@@ -241,7 +237,6 @@ export class PlayerAvatar {
 		this.lookTargetActive = false;
 	}
 
-	/** Reset temporal animation state after respawn, teleport or world changes. */
 	reset(bodyYaw = Math.PI): void {
 		if (this.disposed) {
 			return;
@@ -264,7 +259,7 @@ export class PlayerAvatar {
 		this.status = 'ready';
 	}
 
-	update(player: PlayerState, _moving: boolean, deltaSeconds: number): void {
+	update(player: Readonly<PlayerState>, _moving: boolean, deltaSeconds: number): void {
 		if (this.disposed) {
 			return;
 		}
@@ -273,6 +268,8 @@ export class PlayerAvatar {
 		const delta = safeDelta(deltaSeconds);
 
 		try {
+			// The animator receives a read-only view. It returns a pose and never
+			// writes PlayerState. PlayerController already owns the telemetry.
 			const locomotionPose = this.animator.update({
 				cameraYaw: player.cameraYaw,
 				bodyYaw: player.bodyYaw,
@@ -286,16 +283,8 @@ export class PlayerAvatar {
 				mouseLookActive: player.mouseLookActive,
 				cameraRecentering: player.cameraRecentering
 			});
-			const snapshot = this.animator.diagnostics;
 
-			player.bodyYaw = this.animator.bodyYaw;
-			player.yaw = player.bodyYaw;
-			player.headYaw = snapshot.headYaw;
-			player.localForwardSpeed = snapshot.localForwardSpeed;
-			player.localSideSpeed = snapshot.localSideSpeed;
-			player.verticalSpeed = snapshot.verticalSpeed;
-
-			this.animationController.update(snapshot, delta, {
+			this.animationController.update(this.animator.diagnostics, delta, {
 				mouseLookActive: player.mouseLookActive,
 				cameraRecentering: player.cameraRecentering
 			});
@@ -314,6 +303,7 @@ export class PlayerAvatar {
 				finiteOr(player.position.y, 0) + this.model.modelOffsetY,
 				finiteOr(player.position.z, 0)
 			);
+			// Visual rotation mirrors the body yaw; it never writes it back.
 			this.object.rotation.y = finiteOr(player.bodyYaw, 0);
 			this.status = 'ready';
 			this.error = null;
@@ -411,7 +401,7 @@ export class PlayerAvatar {
 		};
 	}
 
-	private applyLookOverlay(player: PlayerState, pose: HumanoidPose, delta: number): void {
+	private applyLookOverlay(player: Readonly<PlayerState>, pose: HumanoidPose, delta: number): void {
 		let targetYaw = 0;
 		let targetPitch = 0;
 
@@ -455,7 +445,7 @@ export class PlayerAvatar {
 		);
 	}
 
-	private applyHandOverlay(player: PlayerState, pose: HumanoidPose, delta: number): void {
+	private applyHandOverlay(player: Readonly<PlayerState>, pose: HumanoidPose, delta: number): void {
 		this.handInfluence = dampScalar(
 			this.handInfluence,
 			this.handTargetActive ? 1 : 0,
@@ -511,7 +501,7 @@ export class PlayerAvatar {
 		pose.rightElbowPitch = lerp(pose.rightElbowPitch, -0.88, influence);
 	}
 
-	private writeDefaultHandTarget(player: PlayerState): void {
+	private writeDefaultHandTarget(player: Readonly<PlayerState>): void {
 		const yaw = finiteOr(player.bodyYaw, 0);
 		this.handTarget.set(
 			finiteOr(player.position.x, 0) + Math.sin(yaw) * DEFAULT_HAND_TARGET_DISTANCE,
@@ -520,7 +510,7 @@ export class PlayerAvatar {
 		);
 	}
 
-	private applyFootGrounding(player: PlayerState, pose: HumanoidPose): void {
+	private applyFootGrounding(player: Readonly<PlayerState>, pose: HumanoidPose): void {
 		const groundHeightAt = this.options.groundHeightAt;
 
 		if (!groundHeightAt) {

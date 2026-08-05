@@ -13,26 +13,43 @@ import {
 import type { HumanoidPose } from './HumanoidPose';
 
 /**
- * Orelunza procedural humanoid proportions.
+ * Orelunza procedural humanoid — rebuilt from scratch to match the
+ * "Humain Orelunza" reference sheet.
  *
- * The joint layout intentionally remains compatible with the previous rig so
- * PlayerAvatar, HumanoidAnimator and the debug tools can continue to use the
- * same public joint names.
+ * Design goals taken directly from the reference image:
+ *   - a small, softly cubic head seated on a short, visible neck (never floating);
+ *   - a slim, gently trapezoidal torso (not a massive block);
+ *   - shoulders that sit outboard so the arms hang clearly away from the chest;
+ *   - short tunic sleeves with bare forearms and visible hands;
+ *   - a distinct pelvis, separate thighs, shins and feet;
+ *   - clearly visible boots and a lighter trouser cuff;
+ *   - a simple but expressive face (eyes, brows, a small nose, a mouth);
+ *   - volumetric voxel hair built from boxes.
+ *
+ * The rig is a hierarchy of `Group` joints with thin `Mesh` skins. Only boxes
+ * and lightly tapered boxes are used — no external assets. Joint names are the
+ * stable contract consumed by HumanoidAnimator, PlayerAvatar and diagnostics.
+ */
+
+/**
+ * Body proportions in metres. The citizen stands ~1.7 m: hip pivot at 0.86,
+ * spine/chest stack the torso to the shoulders, and the head crown lands near
+ * 1.7. Limb segment lengths describe the distance between successive joints.
  */
 export const HUMANOID_PROPORTIONS = {
-	height: 1.82,
-	hipsY: 0.82,
-	spineY: 0.18,
-	chestY: 0.36,
-	neckY: 0.36,
-	headY: 0.22,
-	shoulderX: 0.34,
-	shoulderY: 0.22,
-	upperArm: 0.34,
-	forearm: 0.32,
-	thigh: 0.43,
-	shin: 0.43,
-	foot: 0.34
+	height: 1.7,
+	hipsY: 0.86,
+	spineY: 0.14,
+	chestY: 0.26,
+	neckY: 0.3,
+	headY: 0.12,
+	shoulderX: 0.33,
+	shoulderY: 0.12,
+	upperArm: 0.3,
+	forearm: 0.28,
+	thigh: 0.42,
+	shin: 0.42,
+	foot: 0.26
 } as const;
 
 export interface HumanoidRigJointMap {
@@ -62,34 +79,23 @@ export interface HumanoidRigJointMap {
 	shoeRight: Group;
 }
 
-type HumanoidMaterialRole = 'skin' | 'hair' | 'shirt' | 'pants' | 'shoes' | 'face';
+type HumanoidMaterialRole =
+	'skin' | 'hair' | 'shirt' | 'pants' | 'shoes' | 'face' | 'belt' | 'cuff';
 
-/** One shared 12-triangle box for most body parts. */
-const BOX_GEOMETRY = new BoxGeometry(1, 1, 1);
+/** Shared unit box reused by every plain body part. */
+const UNIT_BOX = new BoxGeometry(1, 1, 1);
 
-/** A slightly narrower top gives the head an Orelunza-specific silhouette. */
-const HEAD_GEOMETRY = createTaperedBoxGeometry({
-	bottomX: 1,
-	topX: 0.9,
-	bottomZ: 1,
-	topZ: 0.94
-});
+/**
+ * A softly cubic head: very slightly narrower at the crown and jaw so it does
+ * not read as a hard rectangular Minecraft block.
+ */
+const HEAD_BOX = taperedBox({ bottomX: 0.94, topX: 0.9, bottomZ: 0.96, topZ: 0.92 });
 
-/** Wider shoulders and a smaller waist, without adding geometry. */
-const TORSO_GEOMETRY = createTaperedBoxGeometry({
-	bottomX: 0.78,
-	topX: 1,
-	bottomZ: 0.94,
-	topZ: 1
-});
+/** A gently trapezoidal torso: broader at the shoulders, slimmer at the waist. */
+const TORSO_BOX = taperedBox({ bottomX: 0.82, topX: 1, bottomZ: 0.92, topZ: 1 });
 
-/** A subtly tapered pelvis avoids a perfectly rectangular silhouette. */
-const PELVIS_GEOMETRY = createTaperedBoxGeometry({
-	bottomX: 0.92,
-	topX: 1,
-	bottomZ: 0.96,
-	topZ: 1
-});
+/** A subtly tapered pelvis to avoid a boxy waistline. */
+const PELVIS_BOX = taperedBox({ bottomX: 0.94, topX: 1, bottomZ: 0.96, topZ: 1 });
 
 export class HumanoidRig {
 	readonly object = new Group();
@@ -111,7 +117,7 @@ export class HumanoidRig {
 
 		this.joints = this.createJoints();
 		this.object.add(this.joints.hips);
-		this.buildSkeleton();
+		this.buildBody();
 
 		const face = this.buildFace();
 		this.eyeLeft = face.eyeLeft;
@@ -120,39 +126,15 @@ export class HumanoidRig {
 		this.eyelidRight = face.eyelidRight;
 
 		this.updateAppearance(appearance);
-		this.applyPose({
-			state: 'idle',
-			gaitPhase: 0,
-			rootBob: 0,
-			hipsYaw: 0,
-			hipsRoll: 0,
-			chestPitch: 0,
-			chestYaw: 0,
-			neckYaw: 0,
-			headPitch: 0,
-			headYaw: 0,
-			leftShoulderPitch: 0.12,
-			rightShoulderPitch: 0.12,
-			leftShoulderRoll: 0.1,
-			rightShoulderRoll: -0.1,
-			leftElbowPitch: -0.38,
-			rightElbowPitch: -0.38,
-			leftHipPitch: 0,
-			rightHipPitch: 0,
-			leftHipRoll: 0,
-			rightHipRoll: 0,
-			leftKneePitch: 0.08,
-			rightKneePitch: 0.08,
-			leftAnklePitch: 0,
-			rightAnklePitch: 0,
-			leftFootLift: 0,
-			rightFootLift: 0,
-			blink: 0
-		});
+		this.applyPose(NEUTRAL_RIG_POSE);
 	}
 
 	get objectCount(): number {
 		return countObjects(this.object);
+	}
+
+	get meshCount(): number {
+		return this.meshes.length;
 	}
 
 	get triangleCount(): number {
@@ -168,10 +150,6 @@ export class HumanoidRig {
 		return Math.round(triangles);
 	}
 
-	get meshCount(): number {
-		return this.meshes.length;
-	}
-
 	get appearanceSnapshot(): CharacterAppearanceV1 {
 		return this.appearance;
 	}
@@ -184,28 +162,41 @@ export class HumanoidRig {
 		this.material('pants').color.set(appearance.pantsColor);
 		this.material('shoes').color.set(appearance.shoesColor);
 
+		// The belt and trouser cuff are derived from persisted colours so old
+		// appearance saves keep working without introducing new fields.
+		this.material('belt').color.set(appearance.shoesColor);
+		this.material('cuff').color.set(appearance.pantsColor).offsetHSL(0, -0.04, 0.14);
+
 		this.clearHair();
 		this.buildHair(appearance.hairStyle);
 	}
 
+	/**
+	 * Apply a local-space pose to the joints. Rotations are in radians; foot
+	 * lifts and rootBob are in metres relative to the neutral stance.
+	 */
 	applyPose(pose: HumanoidPose): void {
-		this.joints.hips.position.y = HUMANOID_PROPORTIONS.hipsY + pose.rootBob;
-		this.joints.hips.rotation.set(0, pose.hipsYaw, pose.hipsRoll);
-		this.joints.chest.rotation.set(pose.chestPitch, pose.chestYaw, -pose.hipsRoll * 0.55);
-		this.joints.neck.rotation.set(pose.headPitch * 0.35, pose.neckYaw, 0);
-		this.joints.head.rotation.set(pose.headPitch * 0.65, pose.headYaw, 0);
-		this.joints.shoulderLeft.rotation.set(pose.leftShoulderPitch, 0, pose.leftShoulderRoll);
-		this.joints.shoulderRight.rotation.set(pose.rightShoulderPitch, 0, pose.rightShoulderRoll);
-		this.joints.forearmLeft.rotation.x = pose.leftElbowPitch;
-		this.joints.forearmRight.rotation.x = pose.rightElbowPitch;
-		this.joints.thighLeft.rotation.set(pose.leftHipPitch, 0, pose.leftHipRoll);
-		this.joints.thighRight.rotation.set(pose.rightHipPitch, 0, pose.rightHipRoll);
-		this.joints.shinLeft.rotation.x = pose.leftKneePitch;
-		this.joints.shinRight.rotation.x = pose.rightKneePitch;
-		this.joints.footLeft.rotation.x = pose.leftAnklePitch;
-		this.joints.footRight.rotation.x = pose.rightAnklePitch;
-		this.joints.footLeft.position.y = -HUMANOID_PROPORTIONS.shin + pose.leftFootLift;
-		this.joints.footRight.position.y = -HUMANOID_PROPORTIONS.shin + pose.rightFootLift;
+		const j = this.joints;
+
+		j.hips.position.y = HUMANOID_PROPORTIONS.hipsY + pose.rootBob;
+		j.hips.rotation.set(0, pose.hipsYaw, pose.hipsRoll);
+		j.chest.rotation.set(pose.chestPitch, pose.chestYaw, -pose.hipsRoll * 0.5);
+		j.neck.rotation.set(pose.headPitch * 0.35, pose.neckYaw, 0);
+		j.head.rotation.set(pose.headPitch * 0.65, pose.headYaw, 0);
+
+		j.shoulderLeft.rotation.set(pose.leftShoulderPitch, 0, pose.leftShoulderRoll);
+		j.shoulderRight.rotation.set(pose.rightShoulderPitch, 0, pose.rightShoulderRoll);
+		j.forearmLeft.rotation.x = pose.leftElbowPitch;
+		j.forearmRight.rotation.x = pose.rightElbowPitch;
+
+		j.thighLeft.rotation.set(pose.leftHipPitch, 0, pose.leftHipRoll);
+		j.thighRight.rotation.set(pose.rightHipPitch, 0, pose.rightHipRoll);
+		j.shinLeft.rotation.x = pose.leftKneePitch;
+		j.shinRight.rotation.x = pose.rightKneePitch;
+		j.footLeft.rotation.x = pose.leftAnklePitch;
+		j.footRight.rotation.x = pose.rightAnklePitch;
+		j.footLeft.position.y = -HUMANOID_PROPORTIONS.shin + pose.leftFootLift;
+		j.footRight.position.y = -HUMANOID_PROPORTIONS.shin + pose.rightFootLift;
 
 		const blinking = pose.blink > 0.45;
 		this.eyeLeft.visible = !blinking;
@@ -225,47 +216,41 @@ export class HumanoidRig {
 	}
 
 	private createJoints(): HumanoidRigJointMap {
+		const P = HUMANOID_PROPORTIONS;
+
 		return {
 			avatarRoot: this.object,
-			hips: joint('hips', 0, HUMANOID_PROPORTIONS.hipsY, 0),
-			spine: joint('spine', 0, HUMANOID_PROPORTIONS.spineY, 0),
-			chest: joint('chest', 0, HUMANOID_PROPORTIONS.chestY, 0),
-			neck: joint('neck', 0, HUMANOID_PROPORTIONS.neckY, 0),
-			head: joint('head', 0, HUMANOID_PROPORTIONS.headY, 0),
-			face: joint('face', 0, 0, 0),
+			hips: joint('hips', 0, P.hipsY, 0),
+			spine: joint('spine', 0, P.spineY, 0),
+			chest: joint('chest', 0, P.chestY, 0),
+			neck: joint('neck', 0, P.neckY, 0),
+			head: joint('head', 0, P.headY, 0),
+			face: joint('face', 0, 0.02, 0),
 			hair: joint('hair', 0, 0, 0),
-			shoulderLeft: joint(
-				'shoulderLeft',
-				-HUMANOID_PROPORTIONS.shoulderX,
-				HUMANOID_PROPORTIONS.shoulderY,
-				0
-			),
+			shoulderLeft: joint('shoulderLeft', -P.shoulderX, P.shoulderY, 0),
 			upperArmLeft: joint('upperArmLeft', 0, -0.02, 0),
-			forearmLeft: joint('forearmLeft', 0, -HUMANOID_PROPORTIONS.upperArm, 0),
-			handLeft: joint('handLeft', 0, -HUMANOID_PROPORTIONS.forearm, 0),
-			shoulderRight: joint(
-				'shoulderRight',
-				HUMANOID_PROPORTIONS.shoulderX,
-				HUMANOID_PROPORTIONS.shoulderY,
-				0
-			),
+			forearmLeft: joint('forearmLeft', 0, -P.upperArm, 0),
+			handLeft: joint('handLeft', 0, -P.forearm, 0),
+			shoulderRight: joint('shoulderRight', P.shoulderX, P.shoulderY, 0),
 			upperArmRight: joint('upperArmRight', 0, -0.02, 0),
-			forearmRight: joint('forearmRight', 0, -HUMANOID_PROPORTIONS.upperArm, 0),
-			handRight: joint('handRight', 0, -HUMANOID_PROPORTIONS.forearm, 0),
-			thighLeft: joint('thighLeft', -0.18, -0.06, 0),
-			shinLeft: joint('shinLeft', 0, -HUMANOID_PROPORTIONS.thigh, 0),
-			footLeft: joint('footLeft', 0, -HUMANOID_PROPORTIONS.shin, 0),
-			shoeLeft: joint('shoeLeft', 0, 0, -0.08),
-			thighRight: joint('thighRight', 0.18, -0.06, 0),
-			shinRight: joint('shinRight', 0, -HUMANOID_PROPORTIONS.thigh, 0),
-			footRight: joint('footRight', 0, -HUMANOID_PROPORTIONS.shin, 0),
-			shoeRight: joint('shoeRight', 0, 0, -0.08)
+			forearmRight: joint('forearmRight', 0, -P.upperArm, 0),
+			handRight: joint('handRight', 0, -P.forearm, 0),
+			thighLeft: joint('thighLeft', -0.14, -0.04, 0),
+			shinLeft: joint('shinLeft', 0, -P.thigh, 0),
+			footLeft: joint('footLeft', 0, -P.shin, 0),
+			shoeLeft: joint('shoeLeft', 0, 0, -0.06),
+			thighRight: joint('thighRight', 0.14, -0.04, 0),
+			shinRight: joint('shinRight', 0, -P.thigh, 0),
+			footRight: joint('footRight', 0, -P.shin, 0),
+			shoeRight: joint('shoeRight', 0, 0, -0.06)
 		};
 	}
 
-	private buildSkeleton(): void {
+	private buildBody(): void {
 		const j = this.joints;
+		const P = HUMANOID_PROPORTIONS;
 
+		// Hierarchy.
 		j.hips.add(j.spine, j.thighLeft, j.thighRight);
 		j.spine.add(j.chest);
 		j.chest.add(j.neck, j.shoulderLeft, j.shoulderRight);
@@ -284,16 +269,51 @@ export class HumanoidRig {
 		j.shinRight.add(j.footRight);
 		j.footRight.add(j.shoeRight);
 
-		// One pelvis and one torso replace the previous rounded multi-piece body.
-		this.addPart(j.hips, PELVIS_GEOMETRY, 'pants', 0.43, 0.23, 0.28, 0, 0.04, 0);
-		this.addPart(j.chest, TORSO_GEOMETRY, 'shirt', 0.58, 0.6, 0.3, 0, -0.16, 0);
-		this.addPart(j.neck, BOX_GEOMETRY, 'skin', 0.11, 0.13, 0.11, 0, 0.03, 0);
-		this.addPart(j.head, HEAD_GEOMETRY, 'skin', 0.48, 0.46, 0.42, 0, 0.02, -0.01);
+		// Pelvis, torso, neck, head. The torso is tall enough to reach the neck
+		// base so there is never a gap under the head.
+		this.addPart(j.hips, PELVIS_BOX, 'pants', 0.4, 0.22, 0.26, 0, 0.02, 0);
+		this.addPart(j.chest, TORSO_BOX, 'shirt', 0.5, 0.62, 0.28, 0, -0.05, 0);
+		this.addPart(j.hips, UNIT_BOX, 'belt', 0.52, 0.07, 0.29, 0, 0.15, 0);
+		this.addPart(j.neck, UNIT_BOX, 'skin', 0.12, 0.12, 0.12, 0, -0.02, 0);
+		this.addPart(j.head, HEAD_BOX, 'skin', 0.42, 0.42, 0.4, 0, 0.04, 0);
 
 		this.buildArm(j.upperArmLeft, j.forearmLeft, j.handLeft, -1);
 		this.buildArm(j.upperArmRight, j.forearmRight, j.handRight, 1);
 		this.buildLeg(j.thighLeft, j.shinLeft, j.shoeLeft);
 		this.buildLeg(j.thighRight, j.shinRight, j.shoeRight);
+	}
+
+	private buildArm(upperArm: Group, forearm: Group, hand: Group, side: -1 | 1): void {
+		const P = HUMANOID_PROPORTIONS;
+		const sleeve = P.upperArm * 0.4;
+
+		// Short tunic sleeve, then a bare-skin upper arm so the whole forearm
+		// reads as one continuous bare arm hanging clear of the torso.
+		this.addPart(upperArm, UNIT_BOX, 'shirt', 0.15, sleeve, 0.15, side * 0.01, -sleeve * 0.5, 0);
+		this.addPart(
+			upperArm,
+			UNIT_BOX,
+			'skin',
+			0.13,
+			P.upperArm - sleeve,
+			0.13,
+			side * 0.01,
+			-sleeve - (P.upperArm - sleeve) * 0.5,
+			0
+		);
+		this.addPart(forearm, UNIT_BOX, 'skin', 0.125, P.forearm, 0.125, 0, -P.forearm * 0.5, 0);
+		this.addPart(hand, UNIT_BOX, 'skin', 0.14, 0.1, 0.13, 0, -0.05, -0.004);
+	}
+
+	private buildLeg(thigh: Group, shin: Group, shoe: Group): void {
+		const P = HUMANOID_PROPORTIONS;
+
+		this.addPart(thigh, UNIT_BOX, 'pants', 0.18, P.thigh, 0.19, 0, -P.thigh * 0.5, 0);
+		this.addPart(shin, UNIT_BOX, 'pants', 0.16, P.shin, 0.17, 0, -P.shin * 0.5, 0);
+		// Lighter woven cuff just above the boot.
+		this.addPart(shin, UNIT_BOX, 'cuff', 0.176, 0.06, 0.186, 0, -P.shin + 0.05, 0);
+		// A clearly visible boot, longer than the ankle toward the toes.
+		this.addPart(shoe, UNIT_BOX, 'shoes', 0.2, 0.1, 0.32, 0, -0.04, -0.07);
 	}
 
 	private buildFace(): {
@@ -303,117 +323,43 @@ export class HumanoidRig {
 		eyelidRight: Mesh;
 	} {
 		const face = this.joints.face;
-		const frontZ = -0.225;
+		const frontZ = -0.205;
 
-		const eyeLeft = this.addPart(
-			face,
-			BOX_GEOMETRY,
-			'face',
-			0.052,
-			0.07,
-			0.014,
-			-0.105,
-			0.055,
-			frontZ
-		);
-		const eyeRight = this.addPart(
-			face,
-			BOX_GEOMETRY,
-			'face',
-			0.052,
-			0.07,
-			0.014,
-			0.105,
-			0.055,
-			frontZ
-		);
+		const eyeLeft = this.addPart(face, UNIT_BOX, 'face', 0.05, 0.062, 0.014, -0.092, 0.03, frontZ);
+		const eyeRight = this.addPart(face, UNIT_BOX, 'face', 0.05, 0.062, 0.014, 0.092, 0.03, frontZ);
 		const eyelidLeft = this.addPart(
 			face,
-			BOX_GEOMETRY,
+			UNIT_BOX,
 			'face',
-			0.064,
+			0.058,
 			0.012,
 			0.014,
-			-0.105,
-			0.055,
+			-0.092,
+			0.03,
 			frontZ - 0.001
 		);
 		const eyelidRight = this.addPart(
 			face,
-			BOX_GEOMETRY,
+			UNIT_BOX,
 			'face',
-			0.064,
+			0.058,
 			0.012,
 			0.014,
-			0.105,
-			0.055,
+			0.092,
+			0.03,
 			frontZ - 0.001
 		);
 
 		eyelidLeft.visible = false;
 		eyelidRight.visible = false;
 
-		// The face stays intentionally minimal: two eyes and one small mouth.
-		this.addPart(face, BOX_GEOMETRY, 'face', 0.082, 0.014, 0.014, 0, -0.085, frontZ);
+		// Simple, expressive features: brows, a small nose bridge and a mouth.
+		this.addPart(face, UNIT_BOX, 'face', 0.062, 0.012, 0.014, -0.092, 0.085, frontZ);
+		this.addPart(face, UNIT_BOX, 'face', 0.062, 0.012, 0.014, 0.092, 0.085, frontZ);
+		this.addPart(face, UNIT_BOX, 'skin', 0.03, 0.055, 0.032, 0, -0.02, frontZ + 0.012);
+		this.addPart(face, UNIT_BOX, 'face', 0.072, 0.014, 0.014, 0, -0.09, frontZ);
 
-		return {
-			eyeLeft,
-			eyeRight,
-			eyelidLeft,
-			eyelidRight
-		};
-	}
-
-	private buildArm(upperArm: Group, forearm: Group, hand: Group, side: -1 | 1): void {
-		this.addPart(
-			upperArm,
-			BOX_GEOMETRY,
-			'shirt',
-			0.16,
-			HUMANOID_PROPORTIONS.upperArm,
-			0.16,
-			side * 0.012,
-			-HUMANOID_PROPORTIONS.upperArm * 0.5,
-			0
-		);
-		this.addPart(
-			forearm,
-			BOX_GEOMETRY,
-			'skin',
-			0.145,
-			HUMANOID_PROPORTIONS.forearm,
-			0.145,
-			0,
-			-HUMANOID_PROPORTIONS.forearm * 0.5,
-			0
-		);
-		this.addPart(hand, BOX_GEOMETRY, 'skin', 0.16, 0.11, 0.15, 0, -0.055, -0.005);
-	}
-
-	private buildLeg(thigh: Group, shin: Group, shoe: Group): void {
-		this.addPart(
-			thigh,
-			BOX_GEOMETRY,
-			'pants',
-			0.2,
-			HUMANOID_PROPORTIONS.thigh,
-			0.21,
-			0,
-			-HUMANOID_PROPORTIONS.thigh * 0.5,
-			0
-		);
-		this.addPart(
-			shin,
-			BOX_GEOMETRY,
-			'pants',
-			0.18,
-			HUMANOID_PROPORTIONS.shin,
-			0.19,
-			0,
-			-HUMANOID_PROPORTIONS.shin * 0.5,
-			0
-		);
-		this.addPart(shoe, BOX_GEOMETRY, 'shoes', 0.22, 0.11, 0.36, 0, -0.045, -0.085);
+		return { eyeLeft, eyeRight, eyelidLeft, eyelidRight };
 	}
 
 	private buildHair(style: CharacterAppearanceV1['hairStyle']): void {
@@ -424,44 +370,44 @@ export class HumanoidRig {
 		}
 
 		if (style === 'shaved') {
-			this.addPart(hair, BOX_GEOMETRY, 'hair', 0.455, 0.075, 0.395, 0, 0.22, -0.008);
+			this.addPart(hair, UNIT_BOX, 'hair', 0.4, 0.07, 0.36, 0, 0.19, -0.005);
 			return;
 		}
 
-		// A shared block cap is used by every non-shaved style.
-		this.addPart(hair, BOX_GEOMETRY, 'hair', 0.5, 0.13, 0.44, 0, 0.205, -0.002);
+		// A shared blocky cap sits slightly proud of the skull for every style.
+		this.addPart(hair, UNIT_BOX, 'hair', 0.44, 0.12, 0.4, 0, 0.18, 0);
 
 		if (style === 'short') {
-			this.addPart(hair, BOX_GEOMETRY, 'hair', 0.18, 0.075, 0.05, -0.115, 0.125, -0.218);
-			this.addPart(hair, BOX_GEOMETRY, 'hair', 0.16, 0.06, 0.05, 0.105, 0.135, -0.218);
+			this.addPart(hair, UNIT_BOX, 'hair', 0.16, 0.07, 0.05, -0.1, 0.11, -0.2);
+			this.addPart(hair, UNIT_BOX, 'hair', 0.14, 0.055, 0.05, 0.095, 0.12, -0.2);
 			return;
 		}
 
 		if (style === 'curly') {
-			this.addPart(hair, BOX_GEOMETRY, 'hair', 0.18, 0.15, 0.16, -0.145, 0.205, -0.03);
-			this.addPart(hair, BOX_GEOMETRY, 'hair', 0.18, 0.17, 0.16, 0.145, 0.215, -0.03);
-			this.addPart(hair, BOX_GEOMETRY, 'hair', 0.18, 0.15, 0.15, 0, 0.255, -0.02);
+			this.addPart(hair, UNIT_BOX, 'hair', 0.16, 0.14, 0.15, -0.13, 0.18, -0.02);
+			this.addPart(hair, UNIT_BOX, 'hair', 0.16, 0.15, 0.15, 0.13, 0.19, -0.02);
+			this.addPart(hair, UNIT_BOX, 'hair', 0.16, 0.13, 0.14, 0, 0.23, -0.01);
 			return;
 		}
 
 		if (style === 'afro') {
-			this.addPart(hair, BOX_GEOMETRY, 'hair', 0.24, 0.22, 0.23, -0.16, 0.235, -0.01);
-			this.addPart(hair, BOX_GEOMETRY, 'hair', 0.24, 0.22, 0.23, 0.16, 0.235, -0.01);
-			this.addPart(hair, BOX_GEOMETRY, 'hair', 0.25, 0.22, 0.22, 0, 0.31, 0);
-			this.addPart(hair, BOX_GEOMETRY, 'hair', 0.42, 0.17, 0.16, 0, 0.22, 0.14);
+			this.addPart(hair, UNIT_BOX, 'hair', 0.22, 0.2, 0.21, -0.14, 0.2, 0);
+			this.addPart(hair, UNIT_BOX, 'hair', 0.22, 0.2, 0.21, 0.14, 0.2, 0);
+			this.addPart(hair, UNIT_BOX, 'hair', 0.23, 0.2, 0.2, 0, 0.28, 0.01);
+			this.addPart(hair, UNIT_BOX, 'hair', 0.38, 0.15, 0.15, 0, 0.19, 0.13);
 			return;
 		}
 
 		if (style === 'long') {
-			this.addPart(hair, BOX_GEOMETRY, 'hair', 0.13, 0.4, 0.11, -0.215, -0.015, 0.035);
-			this.addPart(hair, BOX_GEOMETRY, 'hair', 0.13, 0.4, 0.11, 0.215, -0.015, 0.035);
-			this.addPart(hair, BOX_GEOMETRY, 'hair', 0.42, 0.42, 0.1, 0, -0.02, 0.185);
+			this.addPart(hair, UNIT_BOX, 'hair', 0.12, 0.36, 0.1, -0.19, -0.02, 0.03);
+			this.addPart(hair, UNIT_BOX, 'hair', 0.12, 0.36, 0.1, 0.19, -0.02, 0.03);
+			this.addPart(hair, UNIT_BOX, 'hair', 0.38, 0.38, 0.09, 0, -0.03, 0.17);
 			return;
 		}
 
 		if (style === 'braids_simple') {
-			this.addPart(hair, BOX_GEOMETRY, 'hair', 0.075, 0.4, 0.075, -0.17, -0.045, 0.11);
-			this.addPart(hair, BOX_GEOMETRY, 'hair', 0.075, 0.4, 0.075, 0.17, -0.045, 0.11);
+			this.addPart(hair, UNIT_BOX, 'hair', 0.07, 0.36, 0.07, -0.15, -0.05, 0.1);
+			this.addPart(hair, UNIT_BOX, 'hair', 0.07, 0.36, 0.07, 0.15, -0.05, 0.1);
 		}
 	}
 
@@ -535,7 +481,7 @@ interface TaperedBoxOptions {
 	topZ: number;
 }
 
-function createTaperedBoxGeometry(options: TaperedBoxOptions): BoxGeometry {
+function taperedBox(options: TaperedBoxOptions): BoxGeometry {
 	const geometry = new BoxGeometry(1, 1, 1);
 	const position = geometry.getAttribute('position');
 
@@ -572,3 +518,34 @@ function countObjects(group: Group): number {
 
 	return count;
 }
+
+/** Relaxed neutral stance used before the first animation update. */
+const NEUTRAL_RIG_POSE: HumanoidPose = {
+	state: 'idle',
+	gaitPhase: 0,
+	rootBob: 0,
+	hipsYaw: 0,
+	hipsRoll: 0,
+	chestPitch: 0,
+	chestYaw: 0,
+	neckYaw: 0,
+	headPitch: 0,
+	headYaw: 0,
+	leftShoulderPitch: 0.08,
+	rightShoulderPitch: 0.08,
+	leftShoulderRoll: 0.09,
+	rightShoulderRoll: -0.09,
+	leftElbowPitch: -0.3,
+	rightElbowPitch: -0.3,
+	leftHipPitch: 0,
+	rightHipPitch: 0,
+	leftHipRoll: 0,
+	rightHipRoll: 0,
+	leftKneePitch: 0.06,
+	rightKneePitch: 0.06,
+	leftAnklePitch: 0,
+	rightAnklePitch: 0,
+	leftFootLift: 0,
+	rightFootLift: 0,
+	blink: 0
+};

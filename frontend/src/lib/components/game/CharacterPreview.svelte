@@ -142,7 +142,7 @@
 	aria-label="Character preview"
 	data-testid="character-preview"
 	data-avatar-kind="humanoid-rigged"
-	data-avatar-pipeline="fbx-real"
+	data-avatar-pipeline="procedural-voxel"
 	data-avatar-ready={avatarReady ? 'true' : 'false'}
 	data-model-source={modelSource}
 	data-avatar-model-source={modelSource}

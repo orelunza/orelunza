@@ -18,7 +18,22 @@ import { HumanoidRig } from './HumanoidRig';
 import { createFallbackHumanoidClips } from './HumanoidAnimationController';
 import type { HumanoidPose } from './HumanoidPose';
 
-/** Kept here as a public compatibility export for existing player code. */
+/**
+ * Runtime wrapper around the procedural Orelunza rig — rewritten.
+ *
+ * Responsibilities:
+ *   - own one HumanoidRig (geometry + materials);
+ *   - own the procedural animation clip set used by the mixer backend;
+ *   - expose on-demand metrics for the performance HUD;
+ *   - forward appearance and pose changes to the rig.
+ *
+ * The former imported-model / retarget surface is preserved as inert
+ * compatibility shims (all counters zero) because the debug UI and diagnostics
+ * still read those shapes. No GLB / FBX / Mixamo asset is ever loaded — the
+ * citizen is always procedural.
+ */
+
+/** Public compatibility re-export used by player code. */
 export type CharacterBodyType = AppearanceBodyType;
 
 export type HumanoidModelSource = 'procedural-fallback';
@@ -43,12 +58,7 @@ export interface HumanoidSourceAsset {
 	retarget: HumanoidRetargetDiagnostics;
 }
 
-/**
- * Compatibility diagnostics for the former imported-model pipeline.
- *
- * The procedural Orelunza citizen does not retarget external skeletons, so all
- * counters remain zero. Keeping this shape avoids special cases in the debug UI.
- */
+/** Inert retarget diagnostics: the procedural rig retargets nothing. */
 export interface HumanoidRetargetDiagnostics {
 	retargetedClipCount: number;
 	targetSkeletonBoneCount: number;
@@ -63,13 +73,6 @@ const MODEL_OFFSET_Y = 0.12;
 const SOURCE_DESCRIPTION =
 	'Lightweight procedural Orelunza citizen generated directly with Three.js';
 
-/**
- * Runtime wrapper around the procedural voxel rig.
- *
- * The wrapper owns its rig, materials and animation clips. It intentionally
- * preserves the former asynchronous `loadDefault()` surface so PlayerAvatar can
- * later support streamed assets without another API migration.
- */
 export class HumanoidModel {
 	readonly object: Object3D;
 	readonly isRiggedHumanoid = true;
@@ -90,13 +93,7 @@ export class HumanoidModel {
 		this.animationRoot = this.object;
 		this.clips = createFallbackHumanoidClips();
 
-		this.object.userData.avatarPipeline = 'procedural-voxel';
-		this.object.userData.avatarStyle = 'orelunza-simple-voxel';
-		this.object.userData.avatarRole = 'peaceful-citizen-explorer';
-		this.object.userData.noMilitaryGear = true;
-		this.object.userData.modelSource = this.source;
-		this.object.userData.sourceDescription = SOURCE_DESCRIPTION;
-		this.writeAppearanceMetadata(normalized);
+		this.tagObject(normalized);
 	}
 
 	static async loadDefault(appearance: CharacterAppearanceV1): Promise<HumanoidModel> {
@@ -115,9 +112,7 @@ export class HumanoidModel {
 		return this.clips.map((clip) => clip.name);
 	}
 
-	/**
-	 * Measured on demand because changing a hairstyle can add or remove meshes.
-	 */
+	/** Measured on demand: a hairstyle change adds or removes meshes. */
 	get metrics(): HumanoidModelMetrics {
 		return measureModel(this.object);
 	}
@@ -155,21 +150,69 @@ export class HumanoidModel {
 		this.object.userData.disposed = true;
 	}
 
+	private tagObject(appearance: CharacterAppearanceV1): void {
+		const data = this.object.userData;
+		data.avatarPipeline = 'procedural-voxel';
+		data.avatarStyle = 'orelunza-simple-voxel';
+		data.avatarRole = 'peaceful-citizen-explorer';
+		data.noMilitaryGear = true;
+		data.modelSource = this.source;
+		data.sourceDescription = SOURCE_DESCRIPTION;
+		this.writeAppearanceMetadata(appearance);
+	}
+
 	private writeAppearanceMetadata(appearance: CharacterAppearanceV1): void {
 		this.object.userData.appearance = appearance;
 		this.object.userData.requestedBodyType = appearance.bodyType;
 	}
 }
 
-/**
- * Normalize common imported animation filenames to Orelunza's canonical action
- * names. This remains useful for tools and for a possible future GLB pipeline.
- */
+// ---------------------------------------------------------------------------
+// Pure clip-name / bone-name utilities.
+//
+// These are exact-contract helpers used by tooling and by the test suite. They
+// map arbitrary imported filenames and skeleton names to Orelunza's canonical
+// vocabulary so that a future GLB pipeline could plug in without touching the
+// player code. They perform no side effects.
+// ---------------------------------------------------------------------------
+
+const CLIP_ALIASES: Readonly<Record<string, string>> = {
+	idle: 'idle',
+	base_idle: 'idle',
+	idle_loop: 'idle',
+	walk: 'walk',
+	walking: 'walk',
+	walk_forward: 'walk',
+	walking_forward: 'walk',
+	run: 'run',
+	running: 'run',
+	run_forward: 'run',
+	strafe_left: 'strafe_left',
+	left_strafe: 'strafe_left',
+	strafe_right: 'strafe_right',
+	right_strafe: 'strafe_right',
+	walk_backward: 'walk_backward',
+	walking_backward: 'walk_backward',
+	walking_backwards: 'walk_backward',
+	backward_walk: 'walk_backward',
+	jump: 'jump',
+	jump_start: 'jump',
+	fall: 'fall',
+	falling: 'fall',
+	falling_idle: 'fall',
+	airborne: 'fall',
+	land: 'land',
+	landing: 'land',
+	reaction_shoved: 'reaction_shoved',
+	reaction_shoved_spin: 'reaction_shoved',
+	shoved_reaction_with_spin: 'reaction_shoved'
+};
+
 export function canonicalClipNameFromAsset(assetName: string): string | null {
 	const leaf = assetName
 		.toLowerCase()
 		.replace(/\\/g, '/')
-		.split(/[\/|]/)
+		.split(/[/|]/)
 		.at(-1)
 		?.replace(/\.(fbx|glb|gltf)$/i, '')
 		.replace(/\.\d+$/, '')
@@ -181,63 +224,25 @@ export function canonicalClipNameFromAsset(assetName: string): string | null {
 		return null;
 	}
 
-	const aliases: Readonly<Record<string, string>> = {
-		idle: 'idle',
-		base_idle: 'idle',
-		idle_loop: 'idle',
-		walk: 'walk',
-		walking: 'walk',
-		walk_forward: 'walk',
-		walking_forward: 'walk',
-		run: 'run',
-		running: 'run',
-		run_forward: 'run',
-		strafe_left: 'strafe_left',
-		left_strafe: 'strafe_left',
-		strafe_right: 'strafe_right',
-		right_strafe: 'strafe_right',
-		walk_backward: 'walk_backward',
-		walking_backward: 'walk_backward',
-		walking_backwards: 'walk_backward',
-		backward_walk: 'walk_backward',
-		jump: 'jump',
-		jump_start: 'jump',
-		fall: 'fall',
-		falling: 'fall',
-		falling_idle: 'fall',
-		airborne: 'fall',
-		land: 'land',
-		landing: 'land',
-		reaction_shoved: 'reaction_shoved',
-		reaction_shoved_spin: 'reaction_shoved',
-		shoved_reaction_with_spin: 'reaction_shoved'
-	};
-
-	return aliases[leaf] ?? null;
+	return CLIP_ALIASES[leaf] ?? null;
 }
 
 /**
- * Remove only horizontal translation from a hip root-motion track.
- *
- * Cloning and mutating the original track preserves its interpolation mode and
- * any future metadata instead of rebuilding it as a new track from scratch.
+ * Zero the horizontal (X/Z) components of a Mixamo hip position track while
+ * keeping vertical bob. Clones each track so interpolation mode is preserved.
  */
 export function neutralizeRootMotionHorizontal(clip: AnimationClip): AnimationClip {
 	const tracks = clip.tracks.map((sourceTrack) => {
 		const track = sourceTrack.clone();
-		const targetName = trackTargetName(track.name);
-		const propertyName = trackPropertyName(track.name);
-		const canonicalBone = normalizeMixamoBoneName(targetName);
+		const bone = normalizeMixamoBoneName(trackTargetName(track.name));
+		const property = trackPropertyName(track.name);
+		const isHipPosition =
+			(bone === 'hip' || bone === 'hips') &&
+			property === 'position' &&
+			track instanceof VectorKeyframeTrack &&
+			track.values.length % 3 === 0;
 
-		if (
-			(canonicalBone !== 'hip' && canonicalBone !== 'hips') ||
-			propertyName !== 'position' ||
-			!(track instanceof VectorKeyframeTrack)
-		) {
-			return track;
-		}
-
-		if (track.values.length % 3 !== 0) {
+		if (!isHipPosition) {
 			return track;
 		}
 
@@ -306,20 +311,10 @@ export function countClipTrackMatches(
 	};
 }
 
-/**
- * Compatibility loader used by diagnostics and development tools.
- *
- * Each call returns an independently owned procedural scene. The caller owns
- * the returned scene and should dispose its materials through the corresponding
- * model/rig lifecycle when it is no longer needed.
- */
 export async function loadHumanoidSourceAsset(
 	bodyType: CharacterBodyType = 'neutral_m'
 ): Promise<HumanoidSourceAsset> {
-	const appearance = normalizeCharacterAppearance({
-		...DEFAULT_CHARACTER_APPEARANCE,
-		bodyType
-	});
+	const appearance = normalizeCharacterAppearance({ ...DEFAULT_CHARACTER_APPEARANCE, bodyType });
 	const model = HumanoidModel.createFallback(appearance);
 
 	return {
@@ -397,13 +392,13 @@ function trackTargetName(trackName: string): string {
 		return bracket[1];
 	}
 
-	const propertySeparator = trackName.lastIndexOf('.');
-	return propertySeparator >= 0 ? trackName.slice(0, propertySeparator) : trackName;
+	const separator = trackName.lastIndexOf('.');
+	return separator >= 0 ? trackName.slice(0, separator) : trackName;
 }
 
 function trackPropertyName(trackName: string): string {
-	const propertySeparator = trackName.lastIndexOf('.');
-	return propertySeparator >= 0 ? trackName.slice(propertySeparator + 1) : '';
+	const separator = trackName.lastIndexOf('.');
+	return separator >= 0 ? trackName.slice(separator + 1) : '';
 }
 
 function asMaterialArray(material: Material | Material[]): Material[] {

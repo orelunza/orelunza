@@ -1,21 +1,19 @@
 /**
- * Shared procedural-animation contract for the lightweight Orelunza citizen.
+ * Procedural-animation data contract for the Orelunza citizen — rewritten.
  *
- * This module intentionally contains no Three.js objects. A pose is only a
- * compact set of scalar values that can be produced by HumanoidAnimator,
- * consumed by HumanoidRig and inspected by diagnostics or network code.
+ * A pose is a flat bag of scalar joint angles (radians) plus a few world-unit
+ * offsets. It contains no Three.js objects so it can be produced by
+ * HumanoidAnimator, consumed by HumanoidRig, and inspected by diagnostics or
+ * network code without pulling in the renderer.
  */
 
-/** Foot used by a terrain step event. */
 export type HumanoidLeadingFoot = 'left' | 'right';
 
 /**
- * Locomotion states produced by the procedural animator or accepted by the
- * animation controller's compatibility API.
- *
- * `walk_forward`, `jump_start`, `airborne` and `landing` are procedural state
- * names. `walk`, `jump`, `fall` and `land` are clip-compatible aliases kept so
- * existing controller calls remain type-safe.
+ * Locomotion states. `walk_forward`, `jump_start`, `airborne`, `landing` are the
+ * procedural names produced by the animator. `walk`, `jump`, `fall`, `land`,
+ * `turn_*` and `reaction_shoved` are clip-compatible aliases kept so the
+ * animation controller and its tests stay type-safe.
  */
 export type HumanoidLocomotionState =
 	| 'idle'
@@ -35,24 +33,21 @@ export type HumanoidLocomotionState =
 	| 'turn_right'
 	| 'reaction_shoved';
 
-/** Small terrain-step signal emitted by PlayerPhysics. */
+/** Terrain step-up signal emitted by PlayerPhysics, consumed by the animator. */
 export interface HumanoidStepEvent {
 	leadingFoot: HumanoidLeadingFoot;
 	height: number;
 	startedAt: number;
 }
 
-/** Input consumed once per frame by HumanoidAnimator. */
+/** Read-only per-frame input to HumanoidAnimator. */
 export interface HumanoidAnimationInput {
 	/** Legacy single-yaw input used by previews and tests. */
 	yaw?: number;
-
-	/** World-space camera yaw used to drive the head and neck. */
+	/** World-space camera yaw, used to drive the head/neck look. */
 	cameraYaw?: number;
-
-	/** Current body yaw, retained for compatibility with PlayerAvatar. */
+	/** Current body yaw (read-only reference; never written back). */
 	bodyYaw?: number;
-
 	/** Desired world-space movement direction. */
 	desiredMovementYaw?: number;
 
@@ -62,20 +57,12 @@ export interface HumanoidAnimationInput {
 	grounded: boolean;
 	deltaSeconds: number;
 
-	/** Null or absent when no terrain step is active. */
 	stepEvent?: Readonly<HumanoidStepEvent> | null;
-
-	/** Reserved diagnostic flags for the camera/animation integration. */
 	mouseLookActive?: boolean;
 	cameraRecentering?: boolean;
 }
 
-/**
- * Complete local-space pose applied directly to HumanoidRig joints.
- *
- * Rotations are expressed in radians. Foot lifts and root bob are expressed in
- * world units relative to the rig's neutral proportions.
- */
+/** Complete local-space pose applied directly to the rig joints. */
 export interface HumanoidPose {
 	state: HumanoidLocomotionState;
 	gaitPhase: number;
@@ -107,11 +94,11 @@ export interface HumanoidPose {
 	leftFootLift: number;
 	rightFootLift: number;
 
-	/** Normalized blink amount in the inclusive range 0..1. */
+	/** Blink amount, 0..1. */
 	blink: number;
 }
 
-/** Lightweight diagnostics shared with PlayerAvatar and debug tooling. */
+/** Diagnostics shared with PlayerAvatar, the animation controller and tooling. */
 export interface HumanoidAnimationSnapshot {
 	locomotionState: HumanoidLocomotionState;
 	speed: number;
@@ -138,12 +125,10 @@ export interface HumanoidAnimationSnapshot {
 }
 
 /**
- * Create the relaxed neutral pose used before the first animation update.
- *
- * The values match the default stance expected by HumanoidRig: arms hang
- * slightly away from the torso, elbows remain relaxed and knees are not locked.
+ * Relaxed neutral stance: arms hang slightly out from the torso, elbows relaxed,
+ * knees unlocked. Matches the rig's default proportions.
  */
-const NEUTRAL_POSE_TEMPLATE: Readonly<HumanoidPose> = {
+const NEUTRAL: Readonly<HumanoidPose> = Object.freeze({
 	state: 'idle',
 	gaitPhase: 0,
 	rootBob: 0,
@@ -154,30 +139,30 @@ const NEUTRAL_POSE_TEMPLATE: Readonly<HumanoidPose> = {
 	neckYaw: 0,
 	headPitch: 0,
 	headYaw: 0,
-	leftShoulderPitch: 0.12,
-	rightShoulderPitch: 0.12,
-	leftShoulderRoll: 0.1,
-	rightShoulderRoll: -0.1,
-	leftElbowPitch: -0.38,
-	rightElbowPitch: -0.38,
+	leftShoulderPitch: 0.08,
+	rightShoulderPitch: 0.08,
+	leftShoulderRoll: 0.09,
+	rightShoulderRoll: -0.09,
+	leftElbowPitch: -0.3,
+	rightElbowPitch: -0.3,
 	leftHipPitch: 0,
 	rightHipPitch: 0,
 	leftHipRoll: 0,
 	rightHipRoll: 0,
-	leftKneePitch: 0.08,
-	rightKneePitch: 0.08,
+	leftKneePitch: 0.06,
+	rightKneePitch: 0.06,
 	leftAnklePitch: 0,
 	rightAnklePitch: 0,
 	leftFootLift: 0,
 	rightFootLift: 0,
 	blink: 0
-};
+});
 
 export function createNeutralPose(): HumanoidPose {
-	return { ...NEUTRAL_POSE_TEMPLATE };
+	return { ...NEUTRAL };
 }
 
-/** Copy a pose into an existing object without allocating another pose. */
+/** Copy a pose into an existing object without allocating. */
 export function copyHumanoidPose(
 	target: HumanoidPose,
 	source: Readonly<HumanoidPose>
@@ -209,11 +194,10 @@ export function copyHumanoidPose(
 	target.leftFootLift = source.leftFootLift;
 	target.rightFootLift = source.rightFootLift;
 	target.blink = source.blink;
-
 	return target;
 }
 
-/** Restore an existing pose object to the relaxed neutral stance. */
+/** Restore a pose object to the neutral stance. */
 export function resetHumanoidPose(target: HumanoidPose): HumanoidPose {
-	return copyHumanoidPose(target, NEUTRAL_POSE_TEMPLATE);
+	return copyHumanoidPose(target, NEUTRAL);
 }
