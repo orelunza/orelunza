@@ -39,15 +39,17 @@ describe('weather Lot 2 effects', () => {
 		expect(rain.currentState.splashIntensity).toBe(0);
 	});
 
-	test('snow weather is reserved for the snow renderer and does not emit rain', () => {
+	test('snow weather emits snow without rain', () => {
 		const scheduler = weather('snow');
 		const wind = new WindSystem({ seed: 21 });
 		const rain = new PrecipitationSystem();
 		wind.update(1, scheduler.currentState.parameters.windStrength);
 		rain.update(1, scheduler.currentState, wind.currentState, 0);
 
-		expect(rain.currentState.kind).toBe('none');
-		expect(rain.currentState.intensity).toBe(0);
+		expect(rain.currentState.kind).toBe('snow');
+		expect(rain.currentState.intensity).toBeGreaterThan(0.6);
+		expect(rain.currentState.rainIntensity).toBe(0);
+		expect(rain.currentState.snowIntensity).toBeGreaterThan(0.6);
 	});
 
 	test('precipitation save restores its deterministic timeline', () => {

@@ -8,6 +8,8 @@ import type { WindFrameState } from './wind/WindState';
 import type { PrecipitationFrameState } from './weather/PrecipitationState';
 import type { WeatherFogFrameState } from './weather/FogController';
 import type { LightningFrameState } from './weather/LightningState';
+import type { ClimateFrameState } from './climate/ClimateState';
+import type { SurfaceWeatherFrameState } from './surface/SurfaceWeatherState';
 
 export type { WeatherFrameState, WeatherKind, WeatherSaveState } from './weather/WeatherState';
 
@@ -52,6 +54,18 @@ export class EnvironmentState {
 	lightningFlash = 0;
 	lightningStrikeId = 0;
 
+	climateZone = 'Spawn Meadow';
+	temperatureCelsius = 19;
+	windChillCelsius = 19;
+	precipitationType: ClimateFrameState['precipitationType'] = 'none';
+	rainBlend = 0;
+	snowBlend = 0;
+	frostPotential = 0;
+	breathVisibility = 0;
+	wetness = 0;
+	snowCoverage = 0;
+	frost = 0;
+
 	readonly sunDirection = new Vector3(0, 1, 0);
 	readonly moonDirection = new Vector3(0, -1, 0);
 
@@ -85,7 +99,9 @@ export class EnvironmentState {
 		clouds?: Readonly<CloudFrameState>,
 		precipitation?: Readonly<PrecipitationFrameState>,
 		fog?: Readonly<WeatherFogFrameState>,
-		lightning?: Readonly<LightningFrameState>
+		lightning?: Readonly<LightningFrameState>,
+		climate?: Readonly<ClimateFrameState>,
+		surface?: Readonly<SurfaceWeatherFrameState>
 	): void {
 		if (weather) {
 			this.applyWeather(weather);
@@ -109,6 +125,14 @@ export class EnvironmentState {
 
 		if (lightning) {
 			this.applyLightning(lightning);
+		}
+
+		if (climate) {
+			this.applyClimate(climate);
+		}
+
+		if (surface) {
+			this.applySurfaceWeather(surface);
 		}
 
 		this.timeOfDay = clock.normalizedTimeOfDay;
@@ -172,8 +196,8 @@ export class EnvironmentState {
 	}
 
 	applyPrecipitation(frame: Readonly<PrecipitationFrameState>): void {
-		this.rainIntensity = clamp01(frame.intensity);
-		this.rainVisibleIntensity = clamp01(frame.visibleIntensity);
+		this.rainIntensity = clamp01(frame.rainIntensity);
+		this.rainVisibleIntensity = clamp01(frame.visibleRainIntensity);
 		this.rainShelter = clamp01(frame.shelter);
 	}
 
@@ -186,6 +210,24 @@ export class EnvironmentState {
 	applyLightning(frame: Readonly<LightningFrameState>): void {
 		this.lightningFlash = clamp01(frame.flashIntensity);
 		this.lightningStrikeId = frame.strikeId >>> 0;
+	}
+
+	applyClimate(frame: Readonly<ClimateFrameState>): void {
+		this.climateZone = frame.zone;
+		this.temperatureCelsius = finiteOr(frame.temperatureCelsius, 19);
+		this.humidity = clamp01(frame.humidity);
+		this.windChillCelsius = finiteOr(frame.windChillCelsius, this.temperatureCelsius);
+		this.precipitationType = frame.precipitationType;
+		this.rainBlend = clamp01(frame.rainBlend);
+		this.snowBlend = clamp01(frame.snowBlend);
+		this.frostPotential = clamp01(frame.frostPotential);
+		this.breathVisibility = clamp01(frame.breathVisibility);
+	}
+
+	applySurfaceWeather(frame: Readonly<SurfaceWeatherFrameState>): void {
+		this.wetness = clamp01(frame.wetness);
+		this.snowCoverage = clamp01(frame.snowCoverage);
+		this.frost = clamp01(frame.frost);
 	}
 
 	restoreWeather(state: WeatherSaveState): void {
@@ -226,6 +268,13 @@ export class EnvironmentState {
 			this.scratchCloud.setRGB(grey * 0.92, grey * 0.96, grey);
 			this.zenithColor.lerp(this.scratchCloud, cloudInfluence);
 			this.horizonColor.lerp(this.scratchCloud, cloudInfluence * 0.86);
+		}
+
+		const coldInfluence = clamp01((6 - this.windChillCelsius) / 18);
+		if (coldInfluence > 0) {
+			this.scratchCloud.setRGB(0.64, 0.75, 0.9);
+			this.zenithColor.lerp(this.scratchCloud, coldInfluence * 0.16);
+			this.horizonColor.lerp(this.scratchCloud, coldInfluence * 0.22);
 		}
 
 		if (this.lightningFlash > 0) {
@@ -270,6 +319,14 @@ export class EnvironmentState {
 		if (this.rainHaze > 0) {
 			this.scratchCloud.setRGB(0.48, 0.55, 0.62);
 			this.fogColor.lerp(this.scratchCloud, this.rainHaze * 0.62);
+		}
+
+		const coldLighting = clamp01((5 - this.windChillCelsius) / 20);
+		if (coldLighting > 0) {
+			this.scratchCloud.setRGB(0.66, 0.76, 0.92);
+			this.lightColor.lerp(this.scratchCloud, coldLighting * 0.2);
+			this.ambientColor.lerp(this.scratchCloud, coldLighting * 0.18);
+			this.fogColor.lerp(this.scratchCloud, coldLighting * 0.2);
 		}
 
 		const flash = this.lightningFlash;

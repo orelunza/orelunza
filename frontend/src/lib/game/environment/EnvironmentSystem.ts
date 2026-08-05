@@ -29,6 +29,11 @@ import { RainOcclusionSystem } from './weather/rendering/RainOcclusionSystem';
 import { RainRenderer } from './weather/rendering/RainRenderer';
 import { RainSplashRenderer } from './weather/rendering/RainSplashRenderer';
 import { LightningRenderer } from './weather/rendering/LightningRenderer';
+import { SnowRenderer } from './weather/rendering/SnowRenderer';
+import { ClimateSystem } from './climate/ClimateSystem';
+import type { ClimateSaveState } from './climate/ClimateState';
+import { SurfaceWeatherController } from './surface/SurfaceWeatherController';
+import type { SurfaceWeatherSaveState } from './surface/SurfaceWeatherState';
 
 export interface EnvironmentSaveState {
 	version: 1;
@@ -43,6 +48,10 @@ export interface EnvironmentSaveState {
 	precipitation?: PrecipitationSaveState;
 	/** Added in weather Lot 2; optional for older saves. */
 	lightning?: LightningSaveState;
+	/** Added in climate Lot 3; optional for older saves. */
+	climate?: ClimateSaveState;
+	/** Added in climate Lot 3; optional for older saves. */
+	surfaceWeather?: SurfaceWeatherSaveState;
 }
 
 export interface EnvironmentSystemOptions {
@@ -94,6 +103,16 @@ export interface EnvironmentInspect {
 	windStrength: number;
 	windGust: number;
 	temperatureOffset: number;
+	climateZone: string;
+	temperatureCelsius: number;
+	windChillCelsius: number;
+	precipitationType: string;
+	snowIntensity: number;
+	snowVisibleIntensity: number;
+	wetness: number;
+	snowCoverage: number;
+	frost: number;
+	breathVisibility: number;
 	lightningFlash: number;
 	lightningStrikeId: number;
 	lastThunderDelay: number | null;
@@ -110,10 +129,13 @@ export class EnvironmentSystem {
 	private readonly weatherScheduler: WeatherScheduler;
 	private readonly windSystem: WindSystem;
 	private readonly cloudSystem = new CloudSystem();
+	private readonly climateSystem = new ClimateSystem();
 	private readonly precipitationSystem = new PrecipitationSystem();
+	private readonly surfaceWeather = new SurfaceWeatherController();
 	private readonly fogController = new FogController();
 	private readonly lightningSystem: LightningSystem;
 	private readonly rainOcclusion: RainOcclusionSystem;
+	private readonly worldQuery?: WeatherWorldQuery;
 	private readonly state = new EnvironmentState();
 	private quality: EnvironmentQuality;
 
@@ -123,6 +145,7 @@ export class EnvironmentSystem {
 	private clouds: CloudRenderer;
 	private readonly lighting: EnvironmentLighting;
 	private readonly rain: RainRenderer;
+	private readonly snow: SnowRenderer;
 	private readonly splashes: RainSplashRenderer;
 	private readonly lightning: LightningRenderer;
 
@@ -140,6 +163,7 @@ export class EnvironmentSystem {
 		this.weatherScheduler = new WeatherScheduler({ seed: this.seedValue });
 		this.windSystem = new WindSystem({ seed: this.seedValue ^ 0x7a4f3c19 });
 		this.lightningSystem = new LightningSystem(this.seedValue ^ 0x4c544e47);
+		this.worldQuery = options.worldQuery;
 		this.rainOcclusion = new RainOcclusionSystem(options.worldQuery);
 
 		this.atmosphere = new AtmosphereRenderer(this.scene, this.quality);
@@ -148,6 +172,7 @@ export class EnvironmentSystem {
 		this.clouds = new CloudRenderer(this.scene, this.quality);
 		this.lighting = new EnvironmentLighting(this.scene, this.quality);
 		this.rain = new RainRenderer(this.scene, this.quality, this.seedValue);
+		this.snow = new SnowRenderer(this.scene, this.quality, this.seedValue);
 		this.splashes = new RainSplashRenderer(
 			this.scene,
 			this.quality,
@@ -176,6 +201,7 @@ export class EnvironmentSystem {
 		this.stars.update(this.state, cameraPosition);
 		this.clouds.update(this.state, this.cloudSystem.currentState, cameraPosition);
 		this.rain.update(this.precipitationSystem.currentState, cameraPosition);
+		this.snow.update(this.precipitationSystem.currentState, cameraPosition);
 		this.splashes.update(this.precipitationSystem.currentState, cameraPosition, deltaSeconds);
 		this.lightning.update(this.lightningSystem.currentState, cameraPosition);
 		this.lighting.update(this.state, cameraPosition, deltaSeconds);
@@ -196,6 +222,7 @@ export class EnvironmentSystem {
 		this.atmosphere.applyQuality(resolved);
 		this.clouds.applyQuality(resolved);
 		this.rain.applyQuality(resolved);
+		this.snow.applyQuality(resolved);
 		this.splashes.applyQuality(resolved);
 		this.lighting.applyQuality(resolved, this.renderer);
 		this.renderer.shadowMap.enabled = resolved.sunShadows;
@@ -215,7 +242,9 @@ export class EnvironmentSystem {
 			wind: this.windSystem.serialize(),
 			clouds: this.cloudSystem.serialize(),
 			precipitation: this.precipitationSystem.serialize(),
-			lightning: this.lightningSystem.serialize()
+			lightning: this.lightningSystem.serialize(),
+			climate: this.climateSystem.serialize(),
+			surfaceWeather: this.surfaceWeather.serialize()
 		};
 	}
 
@@ -231,6 +260,8 @@ export class EnvironmentSystem {
 		this.cloudSystem.restore(save.clouds);
 		this.precipitationSystem.restore(save.precipitation);
 		this.lightningSystem.restore(save.lightning);
+		this.climateSystem.restore(save.climate);
+		this.surfaceWeather.restore(save.surfaceWeather);
 		this.refreshState(0, ORIGIN);
 		this.lighting.snapTo(this.state, ORIGIN);
 	}
@@ -249,14 +280,18 @@ export class EnvironmentSystem {
 				this.clock.pause();
 				this.weatherScheduler.pause();
 				this.windSystem.pause();
+				this.climateSystem.pause();
 				this.precipitationSystem.pause();
+				this.surfaceWeather.pause();
 				this.lightningSystem.pause();
 			},
 			resumeCycle: () => {
 				this.clock.resume();
 				this.weatherScheduler.resume();
 				this.windSystem.resume();
+				this.climateSystem.resume();
 				this.precipitationSystem.resume();
+				this.surfaceWeather.resume();
 				this.lightningSystem.resume();
 			},
 			setWeather: (weather) => {
@@ -298,6 +333,16 @@ export class EnvironmentSystem {
 				windStrength: this.state.windStrength,
 				windGust: this.state.windGust,
 				temperatureOffset: this.state.temperatureOffset,
+				climateZone: this.state.climateZone,
+				temperatureCelsius: this.state.temperatureCelsius,
+				windChillCelsius: this.state.windChillCelsius,
+				precipitationType: this.state.precipitationType,
+				snowIntensity: this.precipitationSystem.currentState.snowIntensity,
+				snowVisibleIntensity: this.precipitationSystem.currentState.visibleSnowIntensity,
+				wetness: this.state.wetness,
+				snowCoverage: this.state.snowCoverage,
+				frost: this.state.frost,
+				breathVisibility: this.state.breathVisibility,
 				lightningFlash: this.state.lightningFlash,
 				lightningStrikeId: this.state.lightningStrikeId,
 				lastThunderDelay: this.lightningSystem.currentState.lastThunder?.delaySeconds ?? null,
@@ -317,6 +362,7 @@ export class EnvironmentSystem {
 		this.stars.dispose();
 		this.clouds.dispose();
 		this.rain.dispose();
+		this.snow.dispose();
 		this.splashes.dispose();
 		this.lightning.dispose();
 		this.lighting.dispose();
@@ -326,14 +372,30 @@ export class EnvironmentSystem {
 		const weather = this.weatherScheduler.currentState;
 		this.windSystem.update(deltaSeconds, weather.parameters.windStrength);
 		this.cloudSystem.update(weather.parameters, this.windSystem.currentState, deltaSeconds);
+		this.climateSystem.update(
+			deltaSeconds,
+			cameraPosition,
+			this.clock.normalizedTimeOfDay,
+			weather,
+			this.windSystem.currentState,
+			this.worldQuery
+		);
 		this.precipitationSystem.update(
 			deltaSeconds,
 			weather,
 			this.windSystem.currentState,
-			this.rainOcclusion.shelterFactor
+			this.rainOcclusion.shelterFactor,
+			this.climateSystem.currentState
 		);
 		this.fogController.update(weather, this.precipitationSystem.currentState);
 		this.lightningSystem.update(deltaSeconds, weather);
+		this.surfaceWeather.update(
+			deltaSeconds,
+			this.climateSystem.currentState,
+			this.precipitationSystem.currentState,
+			this.clock.sunAltitude,
+			this.windSystem.currentState
+		);
 		this.state.update(
 			this.clock,
 			weather,
@@ -341,12 +403,10 @@ export class EnvironmentSystem {
 			this.cloudSystem.currentState,
 			this.precipitationSystem.currentState,
 			this.fogController.currentState,
-			this.lightningSystem.currentState
+			this.lightningSystem.currentState,
+			this.climateSystem.currentState,
+			this.surfaceWeather.currentState
 		);
-
-		// Keep the argument in the deterministic core signature for future regional
-		// weather without allocating or sampling position-dependent state yet.
-		void cameraPosition;
 	}
 }
 

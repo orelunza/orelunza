@@ -51,6 +51,22 @@ export class Sky {
 		return this.environment.currentState.windStrength;
 	}
 
+	get temperatureCelsius(): number {
+		return this.environment.currentState.temperatureCelsius;
+	}
+
+	get windChillCelsius(): number {
+		return this.environment.currentState.windChillCelsius;
+	}
+
+	get breathVisibility(): number {
+		return this.environment.currentState.breathVisibility;
+	}
+
+	get surfaceWeather(): Readonly<{ wetness: number; snowCoverage: number; frost: number }> {
+		return this.environment.currentState;
+	}
+
 	setQuality(quality: RenderQuality): void {
 		this.environment.setQuality(quality);
 	}

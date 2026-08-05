@@ -25,7 +25,9 @@ export class FogController {
 		precipitation: Readonly<PrecipitationFrameState>
 	): void {
 		const humidityFog = clamp01((weather.parameters.humidity - 0.68) * 0.35);
-		const rainHaze = clamp01(precipitation.intensity * 0.28);
+		const rainHaze = clamp01(
+			precipitation.rainIntensity * 0.28 + precipitation.snowIntensity * 0.18
+		);
 		const density = clamp01(weather.parameters.fogDensity + humidityFog + rainHaze);
 
 		this.frame.density = density;

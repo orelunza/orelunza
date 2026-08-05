@@ -16,6 +16,7 @@ import { BlockRegistry } from './BlockRegistry';
 import { createLeafCanopyGeometry, leafCanopyShapeAt } from './LeafCanopyGeometry';
 import { vegetationRandom01, vegetationTintAt, woodTintAt } from './VegetationPalette';
 import type { VoxelWorld } from './VoxelWorld';
+import type { SurfaceWeatherFrameState } from '../environment/surface/SurfaceWeatherState';
 import type { BlockCoordinate, BlockType, VoxelBlock } from './voxel-types';
 
 export interface BlockInstanceLookup {
@@ -49,7 +50,12 @@ const INSTANCE_COLOR_TYPES = new Set<BlockType>(['grass', 'leaves', 'wood']);
 
 export class BlockMeshFactory {
 	private readonly materials = new Map<BlockType, Material>();
+	private readonly baseMaterialColors = new Map<BlockType, Color>();
 	private readonly instanceColor = new Color();
+	private readonly surfaceTint = new Color();
+	private surfaceWetness = 0;
+	private surfaceSnowCoverage = 0;
+	private surfaceFrost = 0;
 
 	createMeshes(blocks: VoxelBlock[], world?: VoxelWorld): BlockInstanceLookup[] {
 		const groups = new Map<string, RenderGroup>();
@@ -131,6 +137,20 @@ export class BlockMeshFactory {
 		return lookups;
 	}
 
+	updateSurfaceWeather(
+		state: Readonly<Pick<SurfaceWeatherFrameState, 'wetness' | 'snowCoverage' | 'frost'>>
+	): void {
+		this.surfaceWetness = clamp01(state.wetness);
+		this.surfaceSnowCoverage = clamp01(state.snowCoverage);
+		this.surfaceFrost = clamp01(state.frost);
+
+		for (const [type, material] of this.materials) {
+			if (material instanceof MeshLambertMaterial) {
+				this.applySurfaceWeatherToMaterial(type, material);
+			}
+		}
+	}
+
 	dispose(): void {
 		BLOCK_GEOMETRY.dispose();
 		GRASS_GEOMETRY.dispose();
@@ -146,6 +166,7 @@ export class BlockMeshFactory {
 		}
 
 		this.materials.clear();
+		this.baseMaterialColors.clear();
 	}
 
 	private configureLeafTransform(
@@ -208,8 +229,44 @@ export class BlockMeshFactory {
 		});
 
 		this.materials.set(type, material);
+		this.baseMaterialColors.set(type, material.color.clone());
+		this.applySurfaceWeatherToMaterial(type, material);
 
 		return material;
+	}
+
+	private applySurfaceWeatherToMaterial(type: BlockType, material: MeshLambertMaterial): void {
+		const base = this.baseMaterialColors.get(type);
+		if (!base) {
+			return;
+		}
+
+		material.color.copy(base);
+		const wettable = type !== 'glass' && type !== 'water' && type !== 'leaves' && type !== 'flower';
+		if (wettable && this.surfaceWetness > 0) {
+			material.color.multiplyScalar(1 - this.surfaceWetness * 0.2);
+		}
+
+		if (type === 'water') {
+			this.surfaceTint.setRGB(0.63, 0.78, 0.9);
+			material.color.lerp(
+				this.surfaceTint,
+				Math.max(this.surfaceFrost, this.surfaceSnowCoverage) * 0.38
+			);
+			return;
+		}
+
+		const supportsSnow =
+			type === 'grass' || type === 'dirt' || type === 'stone' || type === 'sand' || type === 'wood';
+		if (supportsSnow && this.surfaceSnowCoverage > 0) {
+			this.surfaceTint.setRGB(0.9, 0.94, 1);
+			material.color.lerp(this.surfaceTint, this.surfaceSnowCoverage * 0.68);
+		}
+
+		if (this.surfaceFrost > 0 && type !== 'glass') {
+			this.surfaceTint.setRGB(0.76, 0.86, 0.96);
+			material.color.lerp(this.surfaceTint, this.surfaceFrost * 0.3);
+		}
 	}
 }
 
@@ -280,4 +337,8 @@ function pseudoRandom(x: number, z: number): number {
 	const value = Math.sin(x * 127.1 + z * 311.7) * 43758.5453;
 
 	return value - Math.floor(value);
+}
+
+function clamp01(value: number): number {
+	return Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
 }

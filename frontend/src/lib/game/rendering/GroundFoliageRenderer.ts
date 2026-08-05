@@ -30,6 +30,7 @@ import {
 } from '../vegetation/VegetationInteractionIndex';
 import { VegetationRemovalState } from '../vegetation/VegetationRemovalState';
 import { groundVegetationInstanceId } from '../vegetation/VegetationInstanceId';
+import type { SurfaceWeatherFrameState } from '../environment/surface/SurfaceWeatherState';
 
 export interface GroundFoliageProfile {
 	density: number;
@@ -81,6 +82,10 @@ export class GroundFoliageRenderer {
 	private readonly chunks = new Map<string, GroundFoliageChunkEntry>();
 	private readonly helper = new Object3D();
 	private readonly instanceColor = new Color();
+	private readonly surfaceTint = new Color();
+	private surfaceWetness = 0;
+	private surfaceSnowCoverage = 0;
+	private surfaceFrost = 0;
 	private readonly windVector = new Vector2(1, 0);
 	private readonly timeUniform: UniformValue<number> = { value: 0 };
 	private readonly windDirectionUniform: UniformValue<Vector2> = { value: this.windVector };
@@ -243,6 +248,17 @@ export class GroundFoliageRenderer {
 		this.chunks.clear();
 	}
 
+	updateSurfaceWeather(
+		state: Readonly<Pick<SurfaceWeatherFrameState, 'wetness' | 'snowCoverage' | 'frost'>>
+	): void {
+		this.surfaceWetness = clamp01(state.wetness);
+		this.surfaceSnowCoverage = clamp01(state.snowCoverage);
+		this.surfaceFrost = clamp01(state.frost);
+		for (const material of this.materials.values()) {
+			this.applySurfaceWeatherToMaterial(material);
+		}
+	}
+
 	update(
 		cameraPosition: Readonly<Vector3>,
 		deltaSeconds: number,
@@ -390,8 +406,18 @@ export class GroundFoliageRenderer {
 		});
 		this.configureMaterialShader(material, windFlexForShape(shape), shape);
 		this.materials.set(shape, material);
+		this.applySurfaceWeatherToMaterial(material);
 
 		return material;
+	}
+
+	private applySurfaceWeatherToMaterial(material: MeshLambertMaterial): void {
+		material.color.setRGB(1, 1, 1).multiplyScalar(1 - this.surfaceWetness * 0.12);
+		this.surfaceTint.setRGB(0.9, 0.95, 1);
+		material.color.lerp(
+			this.surfaceTint,
+			this.surfaceSnowCoverage * 0.62 + this.surfaceFrost * 0.2
+		);
 	}
 
 	private configureMaterialShader(
@@ -534,4 +560,8 @@ function windFlexForShape(shape: GroundShape): number {
 
 function clampFinite(value: number, minimum: number, maximum: number, fallback: number): number {
 	return Number.isFinite(value) ? Math.min(maximum, Math.max(minimum, value)) : fallback;
+}
+
+function clamp01(value: number): number {
+	return Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
 }

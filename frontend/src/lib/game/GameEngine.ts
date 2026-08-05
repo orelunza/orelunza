@@ -209,7 +209,8 @@ export class GameEngine {
 			quality,
 			worldQuery: {
 				surfaceHeightAt: (x, z, maxY) => this.weatherSurfaceHeightAt(x, z, maxY),
-				rainOcclusionAt: (x, y, z) => this.weatherRainOcclusionAt(x, y, z)
+				rainOcclusionAt: (x, y, z) => this.weatherRainOcclusionAt(x, y, z),
+				climateZoneAt: (x, z) => this.world.terrainGenerator.zoneAt(x, z)
 			}
 		});
 		if (import.meta.env.DEV || import.meta.env.MODE === 'test') {
@@ -658,6 +659,14 @@ export class GameEngine {
 			this.resolveInteractionPoint(placementPreview?.position ?? null)
 		);
 
+		this.sky.update(this.player.camera.camera.position, deltaSeconds);
+		this.renderer.updateSurfaceWeather(this.sky.surfaceWeather);
+		this.avatar.setColdBreath(
+			this.sky.breathVisibility,
+			this.sky.windDirection,
+			this.sky.windStrength
+		);
+
 		// When camera collision pulls the eye very close to the player, hide the
 		// avatar instead of rendering the camera inside the head or torso.
 		this.avatar.object.visible = this.player.camera.currentDistance >= AVATAR_HIDE_CAMERA_DISTANCE;
@@ -666,7 +675,6 @@ export class GameEngine {
 			Math.hypot(this.player.state.velocity.x, this.player.state.velocity.z) > 0.1,
 			deltaSeconds
 		);
-		this.sky.update(this.player.camera.camera.position, deltaSeconds);
 		this.renderer.updateVegetation(
 			this.player.camera.camera.position,
 			deltaSeconds,

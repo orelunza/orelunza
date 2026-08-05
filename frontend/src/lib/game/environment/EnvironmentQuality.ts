@@ -26,6 +26,8 @@ export interface EnvironmentQuality {
 	readonly rainDropCount: number;
 	/** Maximum pooled ground splash points. */
 	readonly rainSplashCount: number;
+	/** Maximum pooled snow flakes. */
+	readonly snowFlakeCount: number;
 	/** Whether the sun should drive real-time shadows. */
 	readonly sunShadows: boolean;
 	/** Shadow map resolution when shadows are enabled. */
@@ -42,6 +44,7 @@ const LOW: EnvironmentQuality = {
 	cloudDetail: 2,
 	rainDropCount: 180,
 	rainSplashCount: 18,
+	snowFlakeCount: 120,
 	sunShadows: false,
 	shadowMapSize: 512
 };
@@ -56,6 +59,7 @@ const MEDIUM: EnvironmentQuality = {
 	cloudDetail: 4,
 	rainDropCount: 420,
 	rainSplashCount: 36,
+	snowFlakeCount: 300,
 	sunShadows: true,
 	shadowMapSize: 1024
 };
@@ -70,6 +74,7 @@ const HIGH: EnvironmentQuality = {
 	cloudDetail: 5,
 	rainDropCount: 760,
 	rainSplashCount: 64,
+	snowFlakeCount: 560,
 	sunShadows: true,
 	shadowMapSize: 2048
 };

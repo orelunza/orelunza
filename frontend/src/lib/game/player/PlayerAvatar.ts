@@ -22,6 +22,7 @@ import {
 	type HumanoidPose
 } from './HumanoidPose';
 import { BuildHammer } from './BuildHammer';
+import { ColdBreathEmitter } from './ColdBreathEmitter';
 import type { PlayerState } from './PlayerState';
 import { angleDelta } from './ThirdPersonCamera';
 
@@ -131,6 +132,7 @@ export class PlayerAvatar {
 
 	private readonly model: HumanoidModel;
 	private readonly buildHammer = new BuildHammer();
+	private readonly coldBreath = new ColdBreathEmitter();
 	private readonly animationController: HumanoidAnimationController;
 	private readonly trackStats = new Map<string, ReturnType<typeof countClipTrackMatches>>();
 	private readonly renderPose: HumanoidPose = createNeutralPose();
@@ -153,6 +155,9 @@ export class PlayerAvatar {
 	private lookYawOffset = 0;
 	private lookPitchOffset = 0;
 	private handInfluence = 0;
+	private coldBreathIntensity = 0;
+	private weatherWindDirection = 0;
+	private weatherWindStrength = 0;
 
 	constructor(
 		appearance: CharacterAppearanceV1 = DEFAULT_CHARACTER_APPEARANCE,
@@ -176,6 +181,7 @@ export class PlayerAvatar {
 
 		this.object.add(this.model.object);
 		this.model.rig.joints.handRight.add(this.buildHammer.object);
+		this.model.rig.joints.head.add(this.coldBreath.object);
 		// The procedural rig is authored facing local -Z. Correct that once on
 		// the model child so the public avatar root can mirror bodyYaw exactly.
 		this.model.object.rotation.y = MODEL_FORWARD_OFFSET;
@@ -216,6 +222,12 @@ export class PlayerAvatar {
 		}
 
 		this.model.updateAppearance(normalizeCharacterAppearance(appearance));
+	}
+
+	setColdBreath(intensity: number, windDirection: number, windStrength: number): void {
+		this.coldBreathIntensity = clamp01(finiteOr(intensity, 0));
+		this.weatherWindDirection = finiteOr(windDirection, 0);
+		this.weatherWindStrength = clamp01(finiteOr(windStrength, 0));
 	}
 
 	setHandTarget(position?: Vector3): void {
@@ -281,6 +293,8 @@ export class PlayerAvatar {
 		this.lookPitchOffset = 0;
 		this.handInfluence = 0;
 		this.buildHammer.cancelSwing();
+		this.coldBreathIntensity = 0;
+		this.coldBreath.setEnvironment(0, 0);
 		this.updateMs = 0;
 		this.error = null;
 		this.status = 'ready';
@@ -317,6 +331,11 @@ export class PlayerAvatar {
 			});
 
 			this.buildHammer.update(delta);
+			const localWindX =
+				Math.sin(this.weatherWindDirection - finiteOr(player.bodyYaw, 0)) *
+				this.weatherWindStrength;
+			this.coldBreath.setEnvironment(this.coldBreathIntensity, localWindX);
+			this.coldBreath.update(delta);
 			copyHumanoidPose(this.renderPose, locomotionPose);
 			this.applyLookOverlay(player, this.renderPose, delta);
 			this.applyHandOverlay(player, this.renderPose, delta);
@@ -361,6 +380,8 @@ export class PlayerAvatar {
 		});
 
 		this.buildHammer.update(delta);
+		this.coldBreath.setEnvironment(this.coldBreathIntensity, 0);
+		this.coldBreath.update(delta);
 		copyHumanoidPose(this.renderPose, locomotionPose);
 		this.handInfluence = dampScalar(
 			this.handInfluence,
@@ -384,6 +405,7 @@ export class PlayerAvatar {
 		this.error = null;
 		this.animationController.dispose();
 		this.buildHammer.dispose();
+		this.coldBreath.dispose();
 		this.model.dispose();
 		this.trackStats.clear();
 		this.object.clear();
@@ -679,4 +701,8 @@ function errorMessage(cause: unknown): string {
 
 function nowMilliseconds(): number {
 	return typeof performance !== 'undefined' ? performance.now() : Date.now();
+}
+
+function clamp01(value: number): number {
+	return Math.max(0, Math.min(1, value));
 }

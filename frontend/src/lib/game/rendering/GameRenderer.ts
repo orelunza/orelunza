@@ -26,6 +26,7 @@ import {
 	type VegetationInteractionInstance
 } from '../vegetation/VegetationInteractionIndex';
 import { VegetationRemovalState } from '../vegetation/VegetationRemovalState';
+import type { SurfaceWeatherFrameState } from '../environment/surface/SurfaceWeatherState';
 
 export class GameRenderer {
 	readonly scene = new Scene();
@@ -197,6 +198,14 @@ export class GameRenderer {
 
 		this.vegetationSelection.setTarget(null);
 		return instance;
+	}
+
+	updateSurfaceWeather(
+		state: Readonly<Pick<SurfaceWeatherFrameState, 'wetness' | 'snowCoverage' | 'frost'>>
+	): void {
+		this.meshFactory.updateSurfaceWeather(state);
+		this.tallGrass.updateSurfaceWeather(state);
+		this.groundFoliage.updateSurfaceWeather(state);
 	}
 
 	updateVegetation(

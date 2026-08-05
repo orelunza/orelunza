@@ -409,6 +409,8 @@ describe('environment quality profiles', () => {
 		expect(high.sunShadows).toBe(true);
 
 		expect(high.shadowMapSize).toBeGreaterThanOrEqual(medium.shadowMapSize);
+		expect(low.snowFlakeCount).toBeLessThan(medium.snowFlakeCount);
+		expect(medium.snowFlakeCount).toBeLessThan(high.snowFlakeCount);
 	});
 
 	test('an unknown value falls back to medium', () => {

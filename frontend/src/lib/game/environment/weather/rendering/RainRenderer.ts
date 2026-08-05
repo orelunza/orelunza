@@ -66,7 +66,7 @@ export class RainRenderer {
 			return;
 		}
 
-		const intensity = clamp01(precipitation.visibleIntensity);
+		const intensity = clamp01(precipitation.visibleRainIntensity);
 		const active = Math.min(this.pool.count, Math.ceil(this.pool.count * intensity));
 		this.geometry.setDrawRange(0, active * 2);
 		this.material.opacity = lerp(0.24, 0.78, intensity) * Math.min(1, intensity * 2.4);

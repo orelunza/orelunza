@@ -25,6 +25,7 @@ import {
 } from '../vegetation/VegetationInteractionIndex';
 import { VegetationRemovalState } from '../vegetation/VegetationRemovalState';
 import { tallGrassInstanceId } from '../vegetation/VegetationInstanceId';
+import type { SurfaceWeatherFrameState } from '../environment/surface/SurfaceWeatherState';
 
 export interface TallGrassProfile {
 	density: number;
@@ -91,6 +92,7 @@ export class TallGrassRenderer {
 	private readonly chunks = new Map<string, TallGrassChunkEntry>();
 	private readonly helper = new Object3D();
 	private readonly instanceColor = new Color();
+	private readonly surfaceTint = new Color();
 	private readonly windVector = new Vector2(1, 0);
 	private readonly timeUniform: UniformValue<number> = { value: 0 };
 	private readonly windDirectionUniform: UniformValue<Vector2> = { value: this.windVector };
@@ -243,6 +245,17 @@ export class TallGrassRenderer {
 		}
 
 		this.chunks.clear();
+	}
+
+	updateSurfaceWeather(
+		state: Readonly<Pick<SurfaceWeatherFrameState, 'wetness' | 'snowCoverage' | 'frost'>>
+	): void {
+		const wetness = clamp01(state.wetness);
+		const snow = clamp01(state.snowCoverage);
+		const frost = clamp01(state.frost);
+		this.material.color.setRGB(1, 1, 1).multiplyScalar(1 - wetness * 0.14);
+		this.surfaceTint.setRGB(0.9, 0.95, 1);
+		this.material.color.lerp(this.surfaceTint, snow * 0.7 + frost * 0.22);
 	}
 
 	update(
@@ -410,4 +423,8 @@ function clampFinite(value: number, minimum: number, maximum: number, fallback: 
 	}
 
 	return Math.min(maximum, Math.max(minimum, value));
+}
+
+function clamp01(value: number): number {
+	return Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
 }
