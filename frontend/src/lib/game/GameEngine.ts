@@ -445,14 +445,17 @@ export class GameEngine {
 		}
 
 		if (this.chunkStreaming.update(this.player.state.position)) {
-			this.diagnostics.chunkRefreshes += 1;
-			this.needsWorldRebuild = true;
+			const changes = this.chunkStreaming.lastChanges;
+
+			this.renderer.applyStreamingChanges(this.world, changes);
+			this.diagnostics.chunkRefreshes += changes.loaded.length + changes.unloaded.length;
 		}
 
-		const streaming = this.chunkStreaming.snapshot;
+		// Full rebuilds are now reserved for rare global edits such as block
+		// placement/removal. Chunk streaming is rendered incrementally above.
 		const shouldRebuildWorld =
 			this.needsWorldRebuild &&
-			(streaming.ready || frameStartedAt - this.lastWorldRebuildAt >= CHUNK_RENDER_INTERVAL_MS);
+			frameStartedAt - this.lastWorldRebuildAt >= CHUNK_RENDER_INTERVAL_MS;
 
 		if (shouldRebuildWorld) {
 			this.renderer.rebuildWorld(this.world);

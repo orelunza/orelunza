@@ -24,6 +24,12 @@ export interface ChunkStreamingSnapshot {
 	ready: boolean;
 }
 
+export interface ChunkStreamingChanges {
+	loaded: ChunkCoordinate[];
+	unloaded: ChunkCoordinate[];
+	changed: boolean;
+}
+
 const DEFAULT_VISIBLE_RADIUS = 2;
 const DEFAULT_RETAIN_RADIUS = 3;
 const DEFAULT_MAX_LOADS_PER_UPDATE = 1;
@@ -44,6 +50,7 @@ export class ChunkStreamingSystem {
 	private pendingLoads: ChunkCoordinate[] = [];
 	private center: ChunkCoordinate | null = null;
 	private disposed = false;
+	private lastUpdateChanges: ChunkStreamingChanges = emptyChanges();
 
 	constructor(options: ChunkStreamingOptions) {
 		this.visibleRadius = normalizeRadius(
@@ -81,6 +88,8 @@ export class ChunkStreamingSystem {
 			this.loaded.set(chunkKey(normalized), normalized);
 		}
 
+		this.lastUpdateChanges = emptyChanges();
+
 		if (this.center) {
 			this.rebuildLoadQueue();
 		}
@@ -109,11 +118,19 @@ export class ChunkStreamingSystem {
 		}
 	}
 
+	/**
+	 * Loads and unloads a bounded number of chunks.
+	 *
+	 * The boolean return value is preserved for existing callers. Exact changed
+	 * chunk coordinates are exposed through `lastChanges`, allowing the renderer
+	 * to update only affected chunks instead of rebuilding the entire world.
+	 */
 	update(position: ChunkStreamingPosition): boolean {
 		this.assertUsable();
 
 		const nextCenter = worldToChunk(position);
-		let changed = false;
+		const loaded: ChunkCoordinate[] = [];
+		const unloaded: ChunkCoordinate[] = [];
 
 		if (!sameChunk(this.center, nextCenter)) {
 			this.center = nextCenter;
@@ -139,7 +156,7 @@ export class ChunkStreamingSystem {
 			}
 
 			this.loaded.delete(key);
-			changed = true;
+			unloaded.push({ ...chunk });
 		}
 
 		let loadAttempts = 0;
@@ -170,10 +187,21 @@ export class ChunkStreamingSystem {
 			}
 
 			this.loaded.set(key, chunk);
-			changed = true;
+			loaded.push({ ...chunk });
 		}
 
+		const changed = loaded.length > 0 || unloaded.length > 0;
+		this.lastUpdateChanges = { loaded, unloaded, changed };
+
 		return changed;
+	}
+
+	get lastChanges(): ChunkStreamingChanges {
+		return {
+			loaded: this.lastUpdateChanges.loaded.map((chunk) => ({ ...chunk })),
+			unloaded: this.lastUpdateChanges.unloaded.map((chunk) => ({ ...chunk })),
+			changed: this.lastUpdateChanges.changed
+		};
 	}
 
 	get snapshot(): ChunkStreamingSnapshot {
@@ -197,6 +225,7 @@ export class ChunkStreamingSystem {
 		this.pendingLoads = [];
 		this.pendingLoadKeys.clear();
 		this.center = null;
+		this.lastUpdateChanges = emptyChanges();
 	}
 
 	dispose(): void {
@@ -205,6 +234,7 @@ export class ChunkStreamingSystem {
 		this.pendingLoads = [];
 		this.pendingLoadKeys.clear();
 		this.center = null;
+		this.lastUpdateChanges = emptyChanges();
 	}
 
 	private rebuildLoadQueue(): void {
@@ -279,6 +309,14 @@ export class ChunkStreamingSystem {
 			throw new Error('ChunkStreamingSystem has been disposed.');
 		}
 	}
+}
+
+function emptyChanges(): ChunkStreamingChanges {
+	return {
+		loaded: [],
+		unloaded: [],
+		changed: false
+	};
 }
 
 function normalizeRadius(value: number, name: string): number {

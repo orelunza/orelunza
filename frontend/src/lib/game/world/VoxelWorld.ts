@@ -139,6 +139,55 @@ export class VoxelWorld {
 		return blocks;
 	}
 
+	getVisibleBlocksInChunk(chunk: ChunkCoordinate): VoxelBlock[] {
+		const normalized = normalizeChunk(chunk);
+		const key = chunkKey(normalized);
+
+		if (!this.loadedChunks.has(key)) {
+			return [];
+		}
+
+		const blocks: VoxelBlock[] = [];
+		const generatedKeys = this.generatedChunkBlocks.get(key);
+
+		if (generatedKeys) {
+			for (const blockPositionKey of generatedKeys) {
+				if (this.removedBlocks.has(blockPositionKey) || this.placedBlocks.has(blockPositionKey)) {
+					continue;
+				}
+
+				const position = parseKey(blockPositionKey);
+
+				if (this.isExposed(position)) {
+					const type = this.generatedBlocks.get(blockPositionKey);
+
+					if (type) {
+						blocks.push(BlockRegistry.create(type, position));
+					}
+				}
+			}
+		}
+
+		// Player-placed blocks are usually few, so scanning this map remains cheap.
+		for (const [blockPositionKey, type] of this.placedBlocks) {
+			if (this.removedBlocks.has(blockPositionKey) || type === 'air') {
+				continue;
+			}
+
+			const position = parseKey(blockPositionKey);
+
+			if (chunkKey(worldToChunk(position)) !== key) {
+				continue;
+			}
+
+			if (this.isExposed(position)) {
+				blocks.push(BlockRegistry.create(type, position));
+			}
+		}
+
+		return blocks;
+	}
+
 	getVisibleConstructionBlocks(): VoxelBlock[] {
 		return this.getVisibleBlocks().filter((block) => {
 			const key = blockKey(block.position);
