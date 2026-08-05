@@ -1525,31 +1525,120 @@ describe('inventory and placement', () => {
 		expect(inventory.getSelectedStack(1)?.quantity).toBe(33);
 	});
 
-	test('does not place a block inside the player', () => {
+	test('pillar-builds beneath the player and lifts them onto the new block', () => {
 		const world = new VoxelWorld(STARTER_WORLD_SEED);
 		world.loadChunk({ x: 0, z: 0 });
 		world.setBlock({ x: 10, y: 19, z: 10 }, 'stone');
 		const controller = new PlayerController(world, 'p', 'w', { x: 10.5, y: 20, z: 10.5 }, 1);
-		const inventory = new Inventory();
 		const system = new BlockPlacementSystem(
 			world,
-			inventory,
+			new Inventory(),
 			controller.state,
 			controller.physics.collider,
 			() => undefined
 		);
 
-		const placed = system.place(
-			{
-				block: { x: 10, y: 19, z: 10 },
-				normal: { x: 0, y: 1, z: 0 },
-				type: 'stone'
-			},
-			'brick',
-			true
+		expect(
+			system.place(
+				{
+					block: { x: 10, y: 19, z: 10 },
+					normal: { x: 0, y: 1, z: 0 },
+					type: 'stone'
+				},
+				'brick',
+				true
+			)
+		).toBe(true);
+		expect(world.getLoadedBlock({ x: 10, y: 20, z: 10 })?.type).toBe('brick');
+		expect(controller.state.position.y).toBe(21);
+		expect(controller.state.onGround).toBe(true);
+	});
+
+	test('supports repeated assisted pillar building', () => {
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		world.loadChunk({ x: 0, z: 0 });
+		world.setBlock({ x: 10, y: 39, z: 10 }, 'stone');
+		const controller = new PlayerController(world, 'p', 'w', { x: 10.5, y: 40, z: 10.5 }, 1);
+		const system = new BlockPlacementSystem(
+			world,
+			new Inventory(),
+			controller.state,
+			controller.physics.collider,
+			() => undefined
 		);
 
-		expect(placed).toBe(false);
+		for (let index = 0; index < 12; index += 1) {
+			const baseY = 39 + index;
+			expect(
+				system.place(
+					{
+						block: { x: 10, y: baseY, z: 10 },
+						normal: { x: 0, y: 1, z: 0 },
+						type: index === 0 ? 'stone' : 'brick'
+					},
+					'brick',
+					true
+				)
+			).toBe(true);
+		}
+
+		expect(controller.state.position.y).toBe(52);
+		expect(world.getLoadedBlock({ x: 10, y: 51, z: 10 })?.type).toBe('brick');
+	});
+
+	test('still refuses a side placement that intersects the player torso', () => {
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		world.loadChunk({ x: 0, z: 0 });
+		world.setBlock({ x: 9, y: 20, z: 10 }, 'stone');
+		const controller = new PlayerController(world, 'p', 'w', { x: 10.2, y: 20, z: 10.5 }, 1);
+		const system = new BlockPlacementSystem(
+			world,
+			new Inventory(),
+			controller.state,
+			controller.physics.collider,
+			() => undefined
+		);
+
+		expect(
+			system.place(
+				{
+					block: { x: 9, y: 20, z: 10 },
+					normal: { x: 1, y: 0, z: 0 },
+					type: 'stone'
+				},
+				'brick',
+				true
+			)
+		).toBe(false);
+	});
+
+	test('refuses pillar lifting when a ceiling blocks the new player position', () => {
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		world.loadChunk({ x: 0, z: 0 });
+		world.setBlock({ x: 10, y: 19, z: 10 }, 'stone');
+		world.setBlock({ x: 10, y: 22, z: 10 }, 'stone');
+		const controller = new PlayerController(world, 'p', 'w', { x: 10.5, y: 20, z: 10.5 }, 1);
+		const system = new BlockPlacementSystem(
+			world,
+			new Inventory(),
+			controller.state,
+			controller.physics.collider,
+			() => undefined
+		);
+
+		expect(
+			system.place(
+				{
+					block: { x: 10, y: 19, z: 10 },
+					normal: { x: 0, y: 1, z: 0 },
+					type: 'stone'
+				},
+				'brick',
+				true
+			)
+		).toBe(false);
+		expect(controller.state.position.y).toBe(20);
+		expect(world.getLoadedBlock({ x: 10, y: 20, z: 10 })?.type).toBe('air');
 	});
 
 	test('builds tall vertical walls above the former height limit', () => {

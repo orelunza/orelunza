@@ -58,7 +58,18 @@ export class BlockPlacementSystem {
 			return false;
 		}
 
-		if (definition.solid && this.collider.intersectsPlayerBlock(this.player, position)) {
+		const intersectsPlayer =
+			definition.solid && this.collider.intersectsPlayerBlock(this.player, position);
+		const pillarLiftPosition = intersectsPlayer
+			? this.resolvePillarLiftPosition(target, position)
+			: null;
+
+		if (intersectsPlayer && !pillarLiftPosition) {
+			this.refund(selected, consumed);
+			return false;
+		}
+
+		if (pillarLiftPosition && this.collider.wouldCollide(this.player, pillarLiftPosition)) {
 			this.refund(selected, consumed);
 			return false;
 		}
@@ -68,9 +79,49 @@ export class BlockPlacementSystem {
 			return false;
 		}
 
+		if (pillarLiftPosition) {
+			this.player.position.x = pillarLiftPosition.x;
+			this.player.position.y = pillarLiftPosition.y;
+			this.player.position.z = pillarLiftPosition.z;
+			this.player.velocity.y = 0;
+			this.player.verticalSpeed = 0;
+			this.player.onGround = true;
+			this.player.stepEvent = null;
+		}
+
 		this.onChanged(position);
 
 		return true;
+	}
+
+	private resolvePillarLiftPosition(
+		target: TargetedBlock,
+		position: BlockCoordinate
+	): { x: number; y: number; z: number } | null {
+		if (target.normal.x !== 0 || target.normal.y !== 1 || target.normal.z !== 0) {
+			return null;
+		}
+
+		const blockTop = position.y + 1;
+		const liftHeight = blockTop - this.player.position.y;
+		const horizontalOverlap =
+			this.player.position.x + this.player.radius > position.x &&
+			this.player.position.x - this.player.radius < position.x + 1 &&
+			this.player.position.z + this.player.radius > position.z &&
+			this.player.position.z - this.player.radius < position.z + 1;
+
+		// Assisted pillar building: placing on the top face directly beneath the
+		// player's footprint lifts the feet onto the new block. Side placements
+		// and blocks intersecting the torso remain forbidden.
+		if (!horizontalOverlap || liftHeight <= 0 || liftHeight > 1.001) {
+			return null;
+		}
+
+		return {
+			x: this.player.position.x,
+			y: blockTop,
+			z: this.player.position.z
+		};
 	}
 
 	private refund(type: BlockType, consumed: boolean): void {
