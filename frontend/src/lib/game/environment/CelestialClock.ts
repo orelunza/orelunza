@@ -8,8 +8,11 @@ import { TWO_PI, clamp, wrap01Range } from './EnvironmentMath';
  */
 export const LUNAR_CYCLE_DAYS = 30;
 
-/** Default real-time length of one in-world day, in seconds (20 minutes). */
-export const DEFAULT_DAY_LENGTH_SECONDS = 1200;
+/** Legacy real-time length of one in-world day before the calendar system. */
+export const LEGACY_DEFAULT_DAY_LENGTH_SECONDS = 1200;
+
+/** Default real-time length of one in-world day, in seconds (2 hours). */
+export const DEFAULT_DAY_LENGTH_SECONDS = 7200;
 
 /** Serializable portion of the clock, embedded in the world save. */
 export interface CelestialClockState {
@@ -17,6 +20,29 @@ export interface CelestialClockState {
 	timeOfDaySeconds: number;
 	/** Whole-day counter since world creation. Increments at each midnight. */
 	dayNumber: number;
+}
+
+/**
+ * Remaps a clock save between day lengths while preserving the visible time.
+ * This is used when legacy 20-minute worlds migrate to the two-hour day.
+ */
+export function migrateClockStateToDayLength(
+	state: Readonly<CelestialClockState>,
+	sourceDayLengthSeconds: number,
+	targetDayLengthSeconds: number
+): CelestialClockState {
+	const source = Math.max(1, finitePositiveOr(sourceDayLengthSeconds, DEFAULT_DAY_LENGTH_SECONDS));
+	const target = Math.max(1, finitePositiveOr(targetDayLengthSeconds, DEFAULT_DAY_LENGTH_SECONDS));
+	const fraction = wrap01Range(state.timeOfDaySeconds, source) / source;
+
+	return {
+		timeOfDaySeconds: fraction * target,
+		dayNumber: Math.max(0, Math.floor(Number.isFinite(state.dayNumber) ? state.dayNumber : 0))
+	};
+}
+
+function finitePositiveOr(value: number, fallback: number): number {
+	return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
 export interface CelestialClockOptions {
@@ -50,7 +76,7 @@ export class CelestialClock {
 	constructor(options: CelestialClockOptions = {}) {
 		this.dayLengthSeconds = Math.max(1, options.dayLengthSeconds ?? DEFAULT_DAY_LENGTH_SECONDS);
 		this.timeOfDaySeconds = clamp(
-			options.timeOfDaySeconds ?? this.dayLengthSeconds * 0.3,
+			options.timeOfDaySeconds ?? this.dayLengthSeconds / 3,
 			0,
 			this.dayLengthSeconds
 		);

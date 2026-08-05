@@ -38,6 +38,7 @@ import { PlayerAvatar } from './player/PlayerAvatar';
 import { PlayerController } from './player/PlayerController';
 import { GameRenderer } from './rendering/GameRenderer';
 import { Sky } from './rendering/Sky';
+import type { WorldDayAnnouncement } from './environment/time/WorldDate';
 import { BlockRegistry } from './world/BlockRegistry';
 import { VegetationRemovalState } from './vegetation/VegetationRemovalState';
 import { ChunkStreamingSystem } from './world/ChunkStreamingSystem';
@@ -117,6 +118,9 @@ export class GameEngine {
 	);
 	private readonly creativeBuild = true;
 	private introVisible = true;
+	private lastObservedWorldDayNumber = 0;
+	private dayAnnouncement: WorldDayAnnouncement | null = null;
+	private dayAnnouncementExpiresAt = 0;
 	private readonly interactionPoint = new Vector3();
 	private diagnosticsWindowStartedAt = performance.now();
 	private diagnosticsFrameCount = 0;
@@ -302,6 +306,8 @@ export class GameEngine {
 
 		try {
 			await this.persistence.load();
+			this.lastObservedWorldDayNumber = this.sky.worldTime.dayNumber;
+			this.dayAnnouncement = null;
 			this.restoreBuildWorkspace();
 			this.recordAvatarMetrics();
 
@@ -362,6 +368,26 @@ export class GameEngine {
 		}
 
 		this.status = 'playing';
+		this.emitSnapshot();
+	}
+
+	openCalendar(): void {
+		if (this.status !== 'playing') {
+			return;
+		}
+
+		this.status = 'calendar';
+		this.pointerLock.exit();
+		this.emitSnapshot();
+	}
+
+	closeCalendar(): void {
+		if (this.status !== 'calendar') {
+			return;
+		}
+
+		this.status = 'playing';
+		this.pointerLock.request();
 		this.emitSnapshot();
 	}
 
@@ -529,8 +555,18 @@ export class GameEngine {
 				this.pause();
 			} else if (this.status === 'build-catalog') {
 				this.closeBuildCatalog();
+			} else if (this.status === 'calendar') {
+				this.closeCalendar();
 			} else {
 				this.resume();
+			}
+		}
+
+		if (commands.calendar) {
+			if (this.status === 'calendar') {
+				this.closeCalendar();
+			} else if (this.status === 'playing') {
+				this.openCalendar();
 			}
 		}
 
@@ -660,6 +696,7 @@ export class GameEngine {
 		);
 
 		this.sky.update(this.player.camera.camera.position, deltaSeconds);
+		this.updateWorldDayAnnouncement(frameStartedAt);
 		this.renderer.updateSurfaceWeather(this.sky.surfaceWeather);
 		this.avatar.setColdBreath(
 			this.sky.breathVisibility,
@@ -1128,6 +1165,35 @@ export class GameEngine {
 		this.options.onSnapshot?.(this.snapshot());
 	}
 
+	private updateWorldDayAnnouncement(now: number): void {
+		const time = this.sky.worldTime;
+
+		if (time.dayNumber !== this.lastObservedWorldDayNumber) {
+			const kind = time.day === 1 ? (time.month === 1 ? 'year' : 'month') : 'day';
+			const title =
+				kind === 'year'
+					? 'A new year begins'
+					: kind === 'month'
+						? `${time.monthName} — Year ${time.year}`
+						: `${time.weekdayName}, ${time.monthName} ${time.day}`;
+			const subtitle =
+				kind === 'day' ? `Year ${time.year}` : `${time.weekdayName}, ${time.monthName} ${time.day}`;
+
+			this.dayAnnouncement = {
+				id: `${time.dayNumber}:${kind}`,
+				kind,
+				title,
+				subtitle
+			};
+			this.dayAnnouncementExpiresAt = now + 6000;
+			this.lastObservedWorldDayNumber = time.dayNumber;
+		}
+
+		if (this.dayAnnouncement && now >= this.dayAnnouncementExpiresAt) {
+			this.dayAnnouncement = null;
+		}
+	}
+
 	private snapshotKey(): string {
 		const position = this.player.state.position;
 		const chunk = worldToChunk(position);
@@ -1146,6 +1212,8 @@ export class GameEngine {
 			this.buildWorkspace.palette.join(','),
 			this.pointerLock.isLocked ? 1 : 0,
 			this.saveStatus,
+			this.sky.worldTime.minuteKey,
+			this.dayAnnouncement?.id ?? '',
 			this.world.terrainGenerator.zoneAt(position.x, position.z),
 			this.target?.kind === 'block'
 				? `block:${this.target.block.block.x},${this.target.block.block.y},${this.target.block.block.z}`
@@ -1188,6 +1256,15 @@ export class GameEngine {
 				this.player.state.position.x,
 				this.player.state.position.z
 			),
+			environment: {
+				time: { ...this.sky.worldTime },
+				weather: this.sky.weather,
+				temperatureCelsius: this.sky.temperatureCelsius,
+				windChillCelsius: this.sky.windChillCelsius,
+				lunarPhase: this.sky.lunarPhase,
+				lunarIllumination: this.sky.lunarIllumination
+			},
+			dayAnnouncement: this.dayAnnouncement ? { ...this.dayAnnouncement } : null,
 			targetedBlock: this.target?.kind === 'block' ? this.target.block : null,
 			buildMode: this.buildMode,
 			buildCatalogOpen: this.status === 'build-catalog',

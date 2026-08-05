@@ -1,8 +1,12 @@
 import { Scene, Vector3, type WebGLRenderer } from 'three';
 import { hashStringToUint32 } from './EnvironmentMath';
+import { worldMinuteOfDay, worldTimeFromClock } from './time/WorldCalendar';
+import type { WorldTimeSnapshot } from './time/WorldDate';
 import {
 	CelestialClock,
 	DEFAULT_DAY_LENGTH_SECONDS,
+	LEGACY_DEFAULT_DAY_LENGTH_SECONDS,
+	migrateClockStateToDayLength,
 	type CelestialClockState
 } from './CelestialClock';
 import { EnvironmentState } from './EnvironmentState';
@@ -64,7 +68,8 @@ import {
 } from './diagnostics/EnvironmentDiagnostics';
 
 export interface EnvironmentSaveState {
-	version: 1;
+	/** V1 used the legacy twenty-minute day; V2 introduces civil time. */
+	version: 1 | 2;
 	clock: CelestialClockState;
 	dayLengthSeconds: number;
 	weather: WeatherSaveState;
@@ -128,7 +133,16 @@ export interface EnvironmentDebugApi {
 
 export interface EnvironmentInspect {
 	timeOfDay: number;
+	dayLengthSeconds: number;
 	dayNumber: number;
+	minuteOfDay: number;
+	formattedTime: string;
+	formattedDate: string;
+	weekdayName: string;
+	monthName: string;
+	dayOfMonth: number;
+	year: number;
+	season: string;
 	sunAltitude: number;
 	daylight: number;
 	night: number;
@@ -219,6 +233,8 @@ export class EnvironmentSystem {
 	private readonly rainOcclusion: RainOcclusionSystem;
 	private readonly worldQuery?: WeatherWorldQuery;
 	private readonly state = new EnvironmentState();
+	private worldTime: WorldTimeSnapshot = worldTimeFromClock(0, 1 / 3);
+	private worldTimeMinuteKey = this.worldTime.minuteKey;
 	private quality: EnvironmentQuality;
 
 	private atmosphere: AtmosphereRenderer;
@@ -359,7 +375,7 @@ export class EnvironmentSystem {
 
 	serialize(): EnvironmentSaveState {
 		return {
-			version: 1,
+			version: 2,
 			clock: this.clock.serialize(),
 			dayLengthSeconds: this.clock.dayLength,
 			weather: this.weatherScheduler.serialize(),
@@ -379,12 +395,25 @@ export class EnvironmentSystem {
 	}
 
 	restore(save: EnvironmentSaveState | null | undefined): void {
-		if (this.disposed || !save || save.version !== 1) {
+		if (this.disposed || !save || (save.version !== 1 && save.version !== 2)) {
 			return;
 		}
 
-		this.clock.setDayLengthSeconds(save.dayLengthSeconds);
-		this.clock.restore(save.clock);
+		const savedDayLength =
+			Number.isFinite(save.dayLengthSeconds) && save.dayLengthSeconds > 0
+				? save.dayLengthSeconds
+				: DEFAULT_DAY_LENGTH_SECONDS;
+		const shouldMigrateLegacyDay =
+			save.version === 1 && Math.abs(savedDayLength - LEGACY_DEFAULT_DAY_LENGTH_SECONDS) < 0.001;
+		const restoredDayLength = shouldMigrateLegacyDay ? DEFAULT_DAY_LENGTH_SECONDS : savedDayLength;
+		const restoredClock = migrateClockStateToDayLength(
+			save.clock,
+			savedDayLength,
+			restoredDayLength
+		);
+
+		this.clock.setDayLengthSeconds(restoredDayLength);
+		this.clock.restore(restoredClock);
 		this.weatherScheduler.restore(save.weather);
 		this.windSystem.restore(save.wind);
 		this.cloudSystem.restore(save.clouds);
@@ -406,11 +435,24 @@ export class EnvironmentSystem {
 		return this.state;
 	}
 
+	get currentWorldTime(): Readonly<WorldTimeSnapshot> {
+		return this.worldTime;
+	}
+
 	createDebugApi(): EnvironmentDebugApi {
 		return {
-			setTimeOfDay: (fraction) => this.clock.setDayFraction(fraction),
-			advanceTime: (seconds) => this.clock.advance(seconds),
-			setDayLengthSeconds: (seconds) => this.clock.setDayLengthSeconds(seconds),
+			setTimeOfDay: (fraction) => {
+				this.clock.setDayFraction(fraction);
+				this.refreshState(0, this.lastCameraPosition);
+			},
+			advanceTime: (seconds) => {
+				this.clock.advance(seconds);
+				this.refreshState(0, this.lastCameraPosition);
+			},
+			setDayLengthSeconds: (seconds) => {
+				this.clock.setDayLengthSeconds(seconds);
+				this.refreshState(0, this.lastCameraPosition);
+			},
 			setDevelopmentTimeScale: (scale) => this.clock.setDevelopmentTimeScale(scale),
 			pauseCycle: () => {
 				this.clock.pause();
@@ -502,7 +544,16 @@ export class EnvironmentSystem {
 			},
 			getState: () => ({
 				timeOfDay: this.state.timeOfDay,
+				dayLengthSeconds: this.clock.dayLength,
 				dayNumber: this.state.dayNumber,
+				minuteOfDay: this.worldTime.minuteOfDay,
+				formattedTime: this.worldTime.formattedTime,
+				formattedDate: this.worldTime.formattedDate,
+				weekdayName: this.worldTime.weekdayName,
+				monthName: this.worldTime.monthName,
+				dayOfMonth: this.worldTime.day,
+				year: this.worldTime.year,
+				season: this.worldTime.season,
 				sunAltitude: this.state.sunAltitude,
 				daylight: this.state.daylight,
 				night: this.state.night,
@@ -658,9 +709,25 @@ export class EnvironmentSystem {
 			this.regionalWeather.currentInspect,
 			this.specialWeatherSystem.currentState
 		);
+		this.refreshWorldTime();
 		this.rainbowSystem.update(deltaSeconds, this.state);
 		this.shootingStarSystem.update(deltaSeconds, this.state);
 		this.auroraSystem.update(deltaSeconds, this.state);
+	}
+
+	private refreshWorldTime(): void {
+		const minuteOfDay = worldMinuteOfDay(this.clock.normalizedTimeOfDay);
+		const minuteKey = this.clock.currentDayNumber * 1440 + minuteOfDay;
+
+		if (minuteKey === this.worldTimeMinuteKey) {
+			return;
+		}
+
+		this.worldTime = worldTimeFromClock(
+			this.clock.currentDayNumber,
+			this.clock.normalizedTimeOfDay
+		);
+		this.worldTimeMinuteKey = this.worldTime.minuteKey;
 	}
 }
 

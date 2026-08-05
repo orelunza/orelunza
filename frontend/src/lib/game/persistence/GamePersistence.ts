@@ -6,6 +6,7 @@ import type { SaveStatus } from '../game-types';
 import { IndexedDbWorldStore } from './IndexedDbWorldStore';
 import type { CharacterAppearanceV1 } from '../character/CharacterAppearance';
 import type { EnvironmentSaveState } from '../environment/EnvironmentSystem';
+import { DEFAULT_DAY_LENGTH_SECONDS } from '../environment/CelestialClock';
 
 /**
  * Minimal environment surface the persistence layer talks to. The concrete
@@ -159,9 +160,9 @@ export class GamePersistence {
 		}
 
 		return {
-			version: 1,
-			clock: { timeOfDaySeconds: 0, dayNumber: 0 },
-			dayLengthSeconds: 1200,
+			version: 2,
+			clock: { timeOfDaySeconds: DEFAULT_DAY_LENGTH_SECONDS / 3, dayNumber: 0 },
+			dayLengthSeconds: DEFAULT_DAY_LENGTH_SECONDS,
 			weather: { current: 'clear', next: 'clear', transition: 0, seed: 0 }
 		};
 	}

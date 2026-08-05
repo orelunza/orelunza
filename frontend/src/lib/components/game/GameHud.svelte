@@ -2,14 +2,16 @@
 	import type { GameSnapshot } from '$lib/game/game-types';
 	import BuildHotbar from './BuildHotbar.svelte';
 	import InteractionPrompt from './InteractionPrompt.svelte';
+	import WorldClockHud from './WorldClockHud.svelte';
 
 	interface Props {
 		snapshot: GameSnapshot;
 		onHotbarSelect?: (index: number) => void;
 		onPause?: () => void;
+		onCalendar?: () => void;
 	}
 
-	let { snapshot, onHotbarSelect, onPause }: Props = $props();
+	let { snapshot, onHotbarSelect, onPause, onCalendar }: Props = $props();
 
 	let selectedSlot = $derived(
 		snapshot.buildMode && snapshot.selectedBuildBlock
@@ -36,9 +38,23 @@
 		</p>
 	</div>
 
+	<div class="absolute top-3 left-1/2 -translate-x-1/2">
+		<WorldClockHud environment={snapshot.environment} onOpen={onCalendar} />
+	</div>
+
+	{#if snapshot.dayAnnouncement}
+		<div
+			class="absolute top-28 left-1/2 min-w-64 -translate-x-1/2 rounded-sm border border-[#f97316]/28 bg-[#171c20]/86 px-5 py-3 text-center shadow-xl backdrop-blur-md"
+			aria-live="polite"
+		>
+			<p class="m-0 text-sm font-semibold text-white">{snapshot.dayAnnouncement.title}</p>
+			<p class="mt-1 mb-0 text-xs text-white/52">{snapshot.dayAnnouncement.subtitle}</p>
+		</div>
+	{/if}
+
 	{#if snapshot.buildMode}
 		<div
-			class="absolute top-3 left-1/2 -translate-x-1/2 rounded-sm border border-[#f97316]/35 bg-[#1a1e22]/76 px-3 py-2 text-xs font-semibold text-[#f97316] backdrop-blur-md"
+			class="absolute top-24 left-1/2 -translate-x-1/2 rounded-sm border border-[#f97316]/35 bg-[#1a1e22]/76 px-3 py-2 text-xs font-semibold text-[#f97316] backdrop-blur-md"
 		>
 			Build Mode
 		</div>

@@ -10,6 +10,7 @@ export interface KeyboardCommands {
 	pause: boolean;
 	build: boolean;
 	catalog: boolean;
+	calendar: boolean;
 	debugPerformance: boolean;
 	recenterBuildCursor: boolean;
 	hotbarIndex: number | null;
@@ -21,6 +22,7 @@ export class KeyboardInput {
 	private pausePressed = false;
 	private buildPressed = false;
 	private catalogPressed = false;
+	private calendarPressed = false;
 	private debugPerformancePressed = false;
 	private recenterBuildCursorPressed = false;
 	private hotbarPressed: number | null = null;
@@ -41,6 +43,10 @@ export class KeyboardInput {
 
 		if (event.code === 'KeyC') {
 			this.catalogPressed = true;
+		}
+
+		if (event.code === 'KeyK') {
+			this.calendarPressed = true;
 		}
 
 		if (event.code === 'F3') {
@@ -105,6 +111,7 @@ export class KeyboardInput {
 			pause: this.pausePressed,
 			build: this.buildPressed,
 			catalog: this.catalogPressed,
+			calendar: this.calendarPressed,
 			debugPerformance: this.debugPerformancePressed,
 			recenterBuildCursor: this.recenterBuildCursorPressed,
 			hotbarIndex: this.hotbarPressed
@@ -114,6 +121,7 @@ export class KeyboardInput {
 		this.pausePressed = false;
 		this.buildPressed = false;
 		this.catalogPressed = false;
+		this.calendarPressed = false;
 		this.debugPerformancePressed = false;
 		this.recenterBuildCursorPressed = false;
 		this.hotbarPressed = null;

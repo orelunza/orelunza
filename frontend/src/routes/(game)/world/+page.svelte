@@ -4,6 +4,7 @@
 	import { onMount } from 'svelte';
 
 	import BuildCatalogOverlay from '$lib/components/game/BuildCatalogOverlay.svelte';
+	import CalendarPanel from '$lib/components/game/CalendarPanel.svelte';
 	import GameCanvas from '$lib/components/game/GameCanvas.svelte';
 	import GameHud from '$lib/components/game/GameHud.svelte';
 	import InventoryOverlay from '$lib/components/game/InventoryOverlay.svelte';
@@ -23,6 +24,8 @@
 		| 'inventory'
 		| 'close-inventory'
 		| 'save'
+		| 'open-calendar'
+		| 'close-calendar'
 		| 'open-build-catalog'
 		| 'close-build-catalog';
 
@@ -171,6 +174,10 @@
 				data-player-z={snapshot.player.position.z.toFixed(3)}
 				data-player-yaw={snapshot.player.yaw.toFixed(3)}
 				data-zone={snapshot.zoneName}
+				data-world-time={snapshot.environment.time.formattedTime}
+				data-world-date={snapshot.environment.time.formattedDate}
+				data-world-day={snapshot.environment.time.dayNumber}
+				data-calendar-open={snapshot.status === 'calendar' ? 'true' : 'false'}
 				data-build-mode={snapshot.buildMode ? 'true' : 'false'}
 				data-build-catalog-open={snapshot.buildCatalogOpen ? 'true' : 'false'}
 				data-selected-build-block={snapshot.selectedBuildBlock ?? ''}
@@ -270,7 +277,19 @@
 				onPause={() => {
 					sendCommand('pause');
 				}}
+				onCalendar={() => {
+					sendCommand('open-calendar');
+				}}
 			/>
+
+			{#if snapshot.status === 'calendar'}
+				<CalendarPanel
+					{snapshot}
+					onClose={() => {
+						sendCommand('close-calendar');
+					}}
+				/>
+			{/if}
 
 			{#if snapshot.status === 'build-catalog'}
 				<BuildCatalogOverlay

@@ -6,6 +6,8 @@ import {
 } from '../environment/EnvironmentSystem';
 import type { RenderQuality } from './QualitySettings';
 import type { WeatherWorldQuery } from '../environment/weather/WeatherWorldQuery';
+import type { WorldTimeSnapshot } from '../environment/time/WorldDate';
+import type { WeatherKind } from '../environment/weather/WeatherState';
 
 export interface SkyOptions {
 	renderer: WebGLRenderer;
@@ -65,6 +67,22 @@ export class Sky {
 
 	get surfaceWeather(): Readonly<{ wetness: number; snowCoverage: number; frost: number }> {
 		return this.environment.currentState;
+	}
+
+	get worldTime(): Readonly<WorldTimeSnapshot> {
+		return this.environment.currentWorldTime;
+	}
+
+	get weather(): WeatherKind {
+		return this.environment.currentState.localWeather;
+	}
+
+	get lunarPhase(): number {
+		return this.environment.currentState.lunarPhase;
+	}
+
+	get lunarIllumination(): number {
+		return this.environment.currentState.lunarIllumination;
 	}
 
 	setQuality(quality: RenderQuality): void {

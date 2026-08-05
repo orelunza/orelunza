@@ -1151,6 +1151,18 @@ describe('player physics', () => {
 		input.destroy();
 	});
 
+	test('opens the world calendar with K', () => {
+		const windowTarget = new FakeWindow();
+		const input = new KeyboardInput(windowTarget as unknown as Window);
+
+		windowTarget.press('KeyK');
+
+		expect(input.consumeCommands()).toMatchObject({
+			calendar: true
+		});
+		input.destroy();
+	});
+
 	test('recenters the independent build cursor with R', () => {
 		const windowTarget = new FakeWindow();
 		const input = new KeyboardInput(windowTarget as unknown as Window);

@@ -9,6 +9,8 @@ import type { CharacterAppearanceV1 } from './character/CharacterAppearance';
 import type { PerformanceSnapshot } from './debug/PerformanceMonitor';
 import type { HumanoidAnimationSnapshot } from './player/HumanoidPose';
 import type { RenderQuality } from './rendering/QualitySettings';
+import type { WeatherKind } from './environment/weather/WeatherState';
+import type { WorldDayAnnouncement, WorldTimeSnapshot } from './environment/time/WorldDate';
 
 export type GameStatus =
 	| 'booting'
@@ -16,6 +18,7 @@ export type GameStatus =
 	| 'playing'
 	| 'paused'
 	| 'inventory'
+	| 'calendar'
 	| 'build-catalog'
 	| 'error'
 	| 'destroyed';
@@ -36,6 +39,15 @@ export interface TargetedBlock {
 	type: BlockType;
 }
 
+export interface WorldEnvironmentSnapshot {
+	time: WorldTimeSnapshot;
+	weather: WeatherKind;
+	temperatureCelsius: number;
+	windChillCelsius: number;
+	lunarPhase: number;
+	lunarIllumination: number;
+}
+
 export interface GameSnapshot {
 	status: GameStatus;
 	player: PlayerTransform;
@@ -48,6 +60,8 @@ export interface GameSnapshot {
 	saveStatus: SaveStatus;
 	regionName: string;
 	zoneName: string;
+	environment: WorldEnvironmentSnapshot;
+	dayAnnouncement: WorldDayAnnouncement | null;
 	targetedBlock: TargetedBlock | null;
 	buildMode: boolean;
 	buildCatalogOpen: boolean;

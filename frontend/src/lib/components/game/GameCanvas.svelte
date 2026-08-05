@@ -7,7 +7,14 @@
 
 	type GameCommand =
 		| {
-				type: 'pause' | 'resume' | 'inventory' | 'close-inventory' | 'save';
+				type:
+					| 'pause'
+					| 'resume'
+					| 'inventory'
+					| 'close-inventory'
+					| 'open-calendar'
+					| 'close-calendar'
+					| 'save';
 				token: number;
 		  }
 		| {
@@ -95,6 +102,14 @@
 
 			case 'close-inventory':
 				engine.closeInventory();
+				break;
+
+			case 'open-calendar':
+				engine.openCalendar();
+				break;
+
+			case 'close-calendar':
+				engine.closeCalendar();
 				break;
 
 			case 'save':
