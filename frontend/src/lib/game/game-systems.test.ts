@@ -920,14 +920,14 @@ describe('humanoid avatar rig and animation', () => {
 		expect(Math.abs(animator.diagnostics.headYaw)).toBeLessThanOrEqual(0.78);
 	});
 
-	test('short strafe does not rotate the body instantly and prolonged strafe turns gradually', () => {
+	test('strafe never overrides the controller-owned body yaw', () => {
 		const animator = new HumanoidAnimator();
-		const initial = animator.bodyYaw;
+		const bodyYaw = Math.PI;
 
-		for (let index = 0; index < 12; index += 1) {
+		for (let index = 0; index < 180; index += 1) {
 			animator.update({
-				cameraYaw: initial,
-				bodyYaw: initial,
+				cameraYaw: bodyYaw,
+				bodyYaw,
 				desiredMovementYaw: -Math.PI / 2,
 				velocityX: -WALK_SPEED,
 				velocityY: 0,
@@ -938,26 +938,9 @@ describe('humanoid avatar rig and animation', () => {
 			});
 		}
 
-		const shortYaw = animator.bodyYaw;
 		expect(animator.diagnostics.locomotionState).toBe('strafe_left');
-		expect(Math.abs(angleDelta(initial, shortYaw))).toBeLessThan(0.2);
-
-		for (let index = 0; index < 120; index += 1) {
-			animator.update({
-				cameraYaw: initial,
-				bodyYaw: shortYaw,
-				desiredMovementYaw: -Math.PI / 2,
-				velocityX: -WALK_SPEED,
-				velocityY: 0,
-				velocityZ: 0,
-				grounded: true,
-				deltaSeconds: 1 / 60,
-				stepEvent: null
-			});
-		}
-
-		expect(Math.abs(angleDelta(shortYaw, animator.bodyYaw))).toBeGreaterThan(0.2);
-		expect(Math.abs(angleDelta(initial, animator.bodyYaw))).toBeLessThan(Math.PI / 2);
+		expect(animator.bodyYaw).toBeCloseTo(bodyYaw, 6);
+		expect(animator.diagnostics.bodyYaw).toBeCloseTo(bodyYaw, 6);
 	});
 
 	test('head yaw is clamped and jump, airborne and landing states are distinct', () => {
@@ -1322,7 +1305,11 @@ describe('player physics', () => {
 		camera.update(player, 1 / 60);
 		const yawAfterMouse = camera.orientationYaw;
 
-		expect(player.mouseLookActive).toBe(true);
+		expect(camera.mouseLookActive).toBe(true);
+		expect(camera.cameraRecentering).toBe(false);
+
+		// ThirdPersonCamera must not mutate PlayerState directly.
+		expect(player.mouseLookActive).toBe(false);
 		expect(player.cameraRecentering).toBe(false);
 
 		for (let index = 0; index < 90; index += 1) {

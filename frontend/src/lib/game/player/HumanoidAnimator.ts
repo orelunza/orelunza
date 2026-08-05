@@ -1,4 +1,3 @@
-import { dampAngle, angleDelta } from './ThirdPersonCamera';
 import { SPRINT_SPEED, WALK_SPEED } from './PlayerPhysics';
 import {
 	createNeutralPose,
@@ -18,10 +17,10 @@ import {
  * player each frame and returns a reusable HumanoidPose. It never touches
  * PlayerState and never writes bodyYaw / yaw / desiredMovementYaw.
  *
- * It keeps its own `visualYaw` purely for the *rendered* body, so a sustained
- * strafe can lean the torso around gradually without affecting the real body
- * orientation owned by PlayerController. Two reusable pose objects (a target and
- * the smoothed output) avoid all per-frame allocations.
+ * Body orientation is read from the authoritative PlayerController snapshot.
+ * The animator never invents, smooths or redirects a second body yaw. Two
+ * reusable pose objects (a target and the smoothed output) avoid per-frame
+ * allocations.
  */
 
 const MAX_DELTA = 0.05;
@@ -33,11 +32,6 @@ const TWO_PI = Math.PI * 2;
 const IDLE_ENTER_SPEED = 0.05;
 const IDLE_EXIT_SPEED = 0.12;
 
-// Strafe: hold the facing briefly, then rotate the visual body slowly.
-const STRAFE_HOLD_SECONDS = 0.7;
-const STRAFE_TURN_SLOW = 0.35;
-const STRAFE_TURN_FAST = 1.8;
-
 const LANDING_SECONDS = 0.26;
 const STEP_SECONDS = 0.34;
 
@@ -47,13 +41,12 @@ export class HumanoidAnimator {
 	private readonly target: HumanoidPose = createNeutralPose();
 	private readonly snapshot: HumanoidAnimationSnapshot = createSnapshot();
 
-	private visualYaw = Math.PI;
+	private bodyYawValue = Math.PI;
 	private gaitPhase = 0;
 	private clock = 0;
 	private blink = 0;
 	private blinkCountdown = 2;
 	private moving = false;
-	private strafeHold = 0;
 	private landingTimer = 0;
 	private landingPower = 0;
 	private wasGrounded = true;
@@ -77,38 +70,20 @@ export class HumanoidAnimator {
 
 		this.initialize(input);
 
-		const cameraYaw = resolveYaw(input.cameraYaw, input.yaw, this.visualYaw);
-		const desiredYaw = resolveYaw(input.desiredMovementYaw, input.yaw, this.visualYaw);
+		const bodyYaw = resolveYaw(input.bodyYaw, input.yaw, this.bodyYawValue);
+		const cameraYaw = resolveYaw(input.cameraYaw, input.yaw, bodyYaw);
+		const desiredYaw = resolveYaw(input.desiredMovementYaw, input.yaw, bodyYaw);
+		this.bodyYawValue = bodyYaw;
 
 		// Idle hysteresis.
 		this.moving = this.moving ? speed > IDLE_ENTER_SPEED : speed > IDLE_EXIT_SPEED;
 
-		// Local components relative to the *current* visual facing.
-		const preForward = localForward(this.visualYaw, vx, vz);
-		const preSide = localSide(this.visualYaw, vx, vz);
-		const sideDominant = Math.abs(preSide) > Math.abs(preForward) * 1.15;
+		// Locomotion is classified relative to the real body orientation owned by
+		// PlayerController. This preserves true backward walking and strafing.
+		const localFwd = localForward(bodyYaw, vx, vz);
+		const localSd = localSide(bodyYaw, vx, vz);
 		const running = speed > (WALK_SPEED + SPRINT_SPEED) * 0.5;
-
-		// Strafe hold timer.
-		if (this.moving && sideDominant && grounded) {
-			this.strafeHold += delta;
-		} else {
-			this.strafeHold = 0;
-		}
-
-		// Turn the *visual* body toward the movement direction. During a brief
-		// strafe the facing barely moves; a sustained strafe rotates slowly.
 		const movementYaw = this.moving && speed > Number.EPSILON ? Math.atan2(vx, vz) : desiredYaw;
-		const turnSpeed = this.turnSpeed(running, grounded, sideDominant);
-
-		if (this.moving) {
-			this.visualYaw = dampAngle(this.visualYaw, movementYaw, turnSpeed, delta);
-		} else {
-			this.visualYaw = normalize(this.visualYaw);
-		}
-
-		const localFwd = localForward(this.visualYaw, vx, vz);
-		const localSd = localSide(this.visualYaw, vx, vz);
 
 		this.updateLanding(grounded, vy);
 		this.updateStep(input.stepEvent ?? null, grounded, delta);
@@ -116,7 +91,7 @@ export class HumanoidAnimator {
 
 		const state = this.resolveState(localFwd, localSd, running, grounded, vy);
 
-		this.writeTarget(state, speed, localFwd, localSd, running, grounded, cameraYaw, vy);
+		this.writeTarget(state, speed, localFwd, localSd, running, grounded, vy);
 		this.smooth(delta, state);
 
 		this.updateMs = now() - startedAt;
@@ -136,7 +111,7 @@ export class HumanoidAnimator {
 	}
 
 	get bodyYaw(): number {
-		return this.visualYaw;
+		return this.bodyYawValue;
 	}
 
 	get lastUpdateMs(): number {
@@ -148,13 +123,12 @@ export class HumanoidAnimator {
 	}
 
 	reset(bodyYaw = Math.PI): void {
-		this.visualYaw = normalize(finite(bodyYaw, Math.PI));
+		this.bodyYawValue = normalize(finite(bodyYaw, Math.PI));
 		this.gaitPhase = 0;
 		this.clock = 0;
 		this.blink = 0;
 		this.blinkCountdown = 2;
 		this.moving = false;
-		this.strafeHold = 0;
 		this.landingTimer = 0;
 		this.landingPower = 0;
 		this.wasGrounded = true;
@@ -168,7 +142,7 @@ export class HumanoidAnimator {
 
 		resetHumanoidPose(this.pose);
 		resetHumanoidPose(this.target);
-		resetSnapshot(this.snapshot, this.visualYaw);
+		resetSnapshot(this.snapshot, this.bodyYawValue);
 	}
 
 	private initialize(input: HumanoidAnimationInput): void {
@@ -177,28 +151,14 @@ export class HumanoidAnimator {
 		}
 
 		if (Number.isFinite(input.bodyYaw)) {
-			this.visualYaw = normalize(input.bodyYaw as number);
+			this.bodyYawValue = normalize(input.bodyYaw as number);
+		} else if (Number.isFinite(input.yaw)) {
+			this.bodyYawValue = normalize(input.yaw as number);
 		}
 
 		this.wasGrounded = Boolean(input.grounded);
 		this.lastVerticalSpeed = finite(input.velocityY, 0);
 		this.initialized = true;
-	}
-
-	private turnSpeed(running: boolean, grounded: boolean, sideDominant: boolean): number {
-		if (!grounded) {
-			return 1.2;
-		}
-
-		if (!this.moving) {
-			return 0.6;
-		}
-
-		if (sideDominant) {
-			return this.strafeHold < STRAFE_HOLD_SECONDS ? STRAFE_TURN_SLOW : STRAFE_TURN_FAST;
-		}
-
-		return running ? 8.5 : 5.8;
 	}
 
 	private updateLanding(grounded: boolean, verticalSpeed: number): void {
@@ -303,7 +263,6 @@ export class HumanoidAnimator {
 		localSd: number,
 		running: boolean,
 		grounded: boolean,
-		cameraYaw: number,
 		verticalSpeed: number
 	): void {
 		const pose = resetHumanoidPose(this.target);
@@ -324,18 +283,15 @@ export class HumanoidAnimator {
 		const armAmp = walkWeight * 0.56 + runWeight * 0.32;
 		const legAmp = walkWeight * 0.56 + runWeight * 0.34;
 		const cautious = lerp(1, 0.58, backWeight);
-		const lookBias = clamp(localSd / SPRINT_SPEED, -0.12, 0.12);
-		const lookYaw = clamp(
-			angleDelta(this.visualYaw, cameraYaw) + lookBias,
-			-MAX_HEAD_YAW,
-			MAX_HEAD_YAW
-		);
 
 		pose.state = state;
 		pose.gaitPhase = phase;
 		pose.blink = this.blink;
-		pose.neckYaw = lookYaw * 0.46;
-		pose.headYaw = lookYaw * 0.54;
+
+		// Camera orbit must not twist the citizen's head. Explicit world-look
+		// targets are layered later by PlayerAvatar.applyLookOverlay().
+		pose.neckYaw = 0;
+		pose.headYaw = 0;
 		pose.headPitch = clamp(-verticalSpeed * 0.015, -MAX_HEAD_PITCH, MAX_HEAD_PITCH);
 
 		if (!this.moving && grounded && state !== 'landing') {
@@ -522,7 +478,7 @@ export class HumanoidAnimator {
 		s.legRightAngle = this.pose.rightHipPitch;
 		s.grounded = grounded;
 		s.headYaw = clamp(this.pose.headYaw + this.pose.neckYaw, -MAX_HEAD_YAW, MAX_HEAD_YAW);
-		s.bodyYaw = this.visualYaw;
+		s.bodyYaw = this.bodyYawValue;
 		s.cameraYaw = cameraYaw;
 		s.desiredMovementYaw = movementYaw;
 		s.localForwardSpeed = localFwd;

@@ -109,6 +109,8 @@ const EMPTY_TRACK_STATS: ReturnType<typeof countClipTrackMatches> = {
 };
 
 const MAX_DELTA_SECONDS = 0.05;
+// HumanoidRig is authored facing local -Z, while gameplay yaw 0 faces world +Z.
+const MODEL_FORWARD_OFFSET = Math.PI;
 const MAX_LOOK_YAW = 0.78;
 const MAX_LOOK_PITCH = 0.35;
 const LOOK_RESPONSE = 12;
@@ -167,6 +169,9 @@ export class PlayerAvatar {
 		}
 
 		this.object.add(this.model.object);
+		// The procedural rig is authored facing local -Z. Correct that once on
+		// the model child so the public avatar root can mirror bodyYaw exactly.
+		this.model.object.rotation.y = MODEL_FORWARD_OFFSET;
 		this.ready = Promise.resolve();
 	}
 

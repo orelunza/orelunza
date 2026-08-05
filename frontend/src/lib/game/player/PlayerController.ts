@@ -7,13 +7,18 @@ import { PlayerPhysics } from './PlayerPhysics';
 import { createPlayerState, type PlayerState } from './PlayerState';
 
 /**
- * Orelunza player controller — rebuilt from scratch.
+ * Orelunza player controller.
  *
- * Single source of truth for the body orientation. It owns bodyYaw, yaw and
- * desiredMovementYaw. It derives the desired movement direction from the raw
- * input relative to the camera, then turns the body toward that direction along
- * the shortest angular path. It never reads anything back from the animator, and
- * the camera is fully independent (no recentring), so there is no feedback loop.
+ * PlayerController is the single authority for bodyYaw, yaw and
+ * desiredMovementYaw. Physics owns position and velocity. The camera owns only
+ * its orbit.
+ *
+ * Facing rules:
+ * - every movement input produces one camera-relative world direction;
+ * - the body turns toward that exact direction;
+ * - W, A, S, D and diagonals are all forward locomotion after turning;
+ * - there is no permanent shoulder-first strafe in normal exploration;
+ * - idle mouse look may turn the body in place after a large camera offset.
  */
 
 const DEFAULT_YAW = Math.PI;
@@ -26,9 +31,8 @@ const MOVING_TURN_RESPONSE = 18;
 const TURN_IN_PLACE_RESPONSE = 12;
 
 /**
- * When the camera has swung this far from the body while the player is idle and
- * actively mouse-looking, the body turns in place to face the camera. Below it,
- * the body stays put so small look-around does not spin the avatar.
+ * Small camera movement only moves the head. Beyond this angle the idle body may
+ * turn in place. The camera itself never recentres toward the body.
  */
 const TURN_IN_PLACE_THRESHOLD = 0.62;
 const MAX_HEAD_YAW = 0.78;
@@ -64,19 +68,17 @@ export class PlayerController {
 		this.syncCameraState();
 
 		const movementYaw = this.movementYaw(input);
+		const facingYaw = this.facingYaw(input, movementYaw);
 
 		if (movementYaw !== null) {
+			// Actual world-space direction requested by the input.
 			this.state.desiredMovementYaw = movementYaw;
 		}
 
-		// Physics owns position and velocity.
 		this.physics.step(this.state, input, delta);
-
-		// Controller owns body orientation.
-		this.updateBodyFacing(movementYaw, delta);
+		this.updateBodyFacing(facingYaw, delta);
 		this.updateLocomotionTelemetry();
 
-		// Camera follows last so it sees the final position this frame.
 		this.camera.update(this.state, delta);
 		this.syncCameraState();
 	}
@@ -119,8 +121,7 @@ export class PlayerController {
 	}
 
 	/**
-	 * Desired movement direction from raw input, relative to the camera.
-	 * Returns null when there is effectively no input.
+	 * Actual movement direction in world space, relative to the camera.
 	 */
 	private movementYaw(input: MovementInput): number | null {
 		const forward = finiteOr(input.forward, 0);
@@ -135,8 +136,6 @@ export class PlayerController {
 		const normalizedRight = right / magnitude;
 		const cameraYaw = this.state.cameraYaw;
 
-		// Orelunza uses +Z as yaw 0. At camera yaw PI, forward points toward -Z
-		// and right toward +X.
 		const directionX =
 			Math.sin(cameraYaw) * normalizedForward - Math.cos(cameraYaw) * normalizedRight;
 		const directionZ =
@@ -145,14 +144,20 @@ export class PlayerController {
 		return Math.atan2(directionX, directionZ);
 	}
 
-	private updateBodyFacing(movementYaw: number | null, delta: number): void {
-		if (movementYaw !== null) {
-			// Moving: turn toward the movement direction along the shortest path.
-			this.state.bodyYaw = dampAngle(this.state.bodyYaw, movementYaw, MOVING_TURN_RESPONSE, delta);
+	/**
+	 * The visible body always faces the actual travel direction.
+	 *
+	 * Normal exploration therefore has directional locomotion rather than
+	 * permanent strafing: A turns left, D turns right and S turns around.
+	 */
+	private facingYaw(_input: MovementInput, movementYaw: number | null): number | null {
+		return movementYaw;
+	}
+
+	private updateBodyFacing(facingYaw: number | null, delta: number): void {
+		if (facingYaw !== null) {
+			this.state.bodyYaw = dampAngle(this.state.bodyYaw, facingYaw, MOVING_TURN_RESPONSE, delta);
 		} else if (this.state.mouseLookActive) {
-			// Idle but actively looking: once the camera swings past a threshold,
-			// turn the body in place to face it. Small look-around leaves the body
-			// still. The camera itself never chases the body, so this is one-way.
 			const offset = angleDelta(this.state.bodyYaw, this.state.cameraYaw);
 
 			if (Math.abs(offset) > TURN_IN_PLACE_THRESHOLD) {
@@ -162,7 +167,6 @@ export class PlayerController {
 					TURN_IN_PLACE_RESPONSE,
 					delta
 				);
-				this.state.desiredMovementYaw = this.state.bodyYaw;
 			}
 		}
 
