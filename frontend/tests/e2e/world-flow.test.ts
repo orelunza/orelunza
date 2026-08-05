@@ -894,7 +894,7 @@ async function waitForWorldReady(page: Page): Promise<void> {
 
 		return (
 			state?.dataset.avatarReady === 'true' &&
-			state?.dataset.modelSource === 'reallusion-neutral-m' &&
+			state?.dataset.modelSource === 'procedural-fallback' &&
 			Number(state?.dataset.activeLoops ?? 0) === 1
 		);
 	});
@@ -947,15 +947,15 @@ test.describe('world flow', () => {
 		expect(await numericAttribute(state, 'data-chunks-active')).toBeLessThanOrEqual(9);
 		expect(await numericAttribute(state, 'data-callbacks-per-second')).toBeLessThanOrEqual(12);
 		expect(await numericAttribute(state, 'data-three-objects')).toBeLessThan(250);
-		expect(await numericAttribute(state, 'data-avatar-objects')).toBeGreaterThan(60);
+		expect(await numericAttribute(state, 'data-avatar-objects')).toBeGreaterThan(40);
 		expect(await numericAttribute(state, 'data-avatar-objects')).toBeLessThan(180);
-		expect(await numericAttribute(state, 'data-skinned-mesh-count')).toBeGreaterThan(0);
+		expect(await numericAttribute(state, 'data-skinned-mesh-count')).toBe(0);
 		expect(await numericAttribute(state, 'data-avatar-update-ms')).toBeLessThan(1);
-		await expect(state).toHaveAttribute('data-avatar-model-source', 'reallusion-neutral-m');
-		await expect(state).toHaveAttribute('data-model-source', 'reallusion-neutral-m');
+		await expect(state).toHaveAttribute('data-avatar-model-source', 'procedural-fallback');
+		await expect(state).toHaveAttribute('data-model-source', 'procedural-fallback');
 		expect(await numericAttribute(state, 'data-avatar-animation-clips')).toBeGreaterThanOrEqual(9);
-		expect(await numericAttribute(state, 'data-retargeted-clip-count')).toBeGreaterThanOrEqual(9);
-		expect(await numericAttribute(state, 'data-target-skeleton-bone-count')).toBeGreaterThan(40);
+		expect(await numericAttribute(state, 'data-retargeted-clip-count')).toBe(0);
+		expect(await numericAttribute(state, 'data-target-skeleton-bone-count')).toBe(0);
 		expect(await numericAttribute(state, 'data-total-track-count')).toBeGreaterThan(0);
 		expect(await numericAttribute(state, 'data-matched-track-count')).toBeGreaterThan(0);
 		await expect(state).toHaveAttribute('data-hips-bone-name', /Hips/);

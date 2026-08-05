@@ -13,6 +13,24 @@ import type {
 	HumanoidLocomotionState
 } from './HumanoidPose';
 
+/**
+ * Orelunza animation state controller — rewritten.
+ *
+ * The controller maps locomotion states to a small blend state machine and, when
+ * real transform clips are present, drives a Three.js AnimationMixer. Its
+ * internals are split into two collaborators:
+ *
+ *   - a numeric BlendState: authoritative weights, transition counting and the
+ *     public blend snapshot. It is allocation-free and always runs.
+ *   - a lazily-created MixerBackend: crossfades real actions, scales playback by
+ *     speed and keeps at most two actions active. Only created when clips carry
+ *     meaningful transform tracks, or when a caller explicitly reads `mixer`.
+ *
+ * The procedural avatar is posed directly by HumanoidAnimator, so with the empty
+ * placeholder clips the controller stays purely numeric. A future GLB with real
+ * tracks flips it to the mixer backend automatically, with no API change.
+ */
+
 export const REQUIRED_HUMANOID_CLIPS = [
 	'idle',
 	'walk',
@@ -78,36 +96,25 @@ export interface HumanoidAnimationDebugFlags {
 const MAX_DELTA_SECONDS = 0.05;
 const DEFAULT_FADE_SECONDS = 0.18;
 const MIN_FADE_SECONDS = 0.001;
-const FALLBACK_TURN_CLIPS = new Set<HumanoidAnimationState>(['turn_left', 'turn_right']);
+const TURN_ALIAS_STATES = new Set<HumanoidAnimationState>(['turn_left', 'turn_right']);
 const ONE_SHOT_STATES = new Set<HumanoidAnimationState>(['jump', 'land', 'reaction_shoved']);
 
-/**
- * Lightweight state and transition controller for Orelunza humanoids.
- *
- * The current procedural avatar is already posed directly by HumanoidAnimator,
- * so creating and updating an AnimationMixer for placeholder clips would only
- * duplicate work. In `auto` mode this controller therefore remains numeric and
- * allocation-free while clips contain no real transform tracks.
- *
- * When a future GLB supplies actual position/quaternion/scale tracks, the same
- * controller automatically enables its mixer backend without changing
- * PlayerAvatar or the locomotion API.
- */
 export class HumanoidAnimationController {
 	readonly backend: Exclude<HumanoidAnimationBackend, 'auto'>;
 
 	private readonly clipByName = new Map<string, AnimationClip>();
-	private readonly actions = new Map<HumanoidAnimationState, AnimationAction>();
 	private readonly fadeSeconds: number;
 	private readonly weights = createWeightRecord();
 	private readonly blendSnapshot: HumanoidAnimationBlendSnapshot;
-	private readonly legacySnapshot = createMutableLocomotionSnapshot();
+	private readonly legacySnapshot = createLocomotionSnapshot();
 	private readonly debugFlags: HumanoidAnimationDebugFlags = {
 		mouseLookActive: false,
 		cameraRecentering: false
 	};
 
-	private mixerValue: AnimationMixer | null = null;
+	private mixerBackend: MixerBackend | null = null;
+
+	// Blend state.
 	private activeState: HumanoidAnimationState = 'idle';
 	private currentActionName = 'idle';
 	private previousActionName: string | null = null;
@@ -139,46 +146,16 @@ export class HumanoidAnimationController {
 
 		this.backend = resolveBackend(options.backend ?? 'auto', clips);
 		this.weights.idle = 1;
-		this.blendSnapshot = {
-			activeState: 'idle',
-			currentAction: 'idle',
-			previousAction: null,
-			weights: this.weights,
-			clipCount: this.clipByName.size,
-			mixerTime: 0,
-			transitionCount: 0,
-			actionTime: 0,
-			actionWeight: 1,
-			activeActionCount: 1,
-			cameraYaw: 0,
-			bodyYaw: 0,
-			desiredMovementYaw: 0,
-			headYaw: 0,
-			localForwardSpeed: 0,
-			localSideSpeed: 0,
-			verticalSpeed: 0,
-			grounded: true,
-			stepActive: false,
-			stepHeight: 0,
-			leadingFoot: null,
-			mouseLookActive: false,
-			cameraRecentering: false
-		};
+		this.blendSnapshot = createBlendSnapshot(this.weights, this.clipByName.size);
 
 		if (this.backend === 'mixer') {
 			this.ensureMixer();
 		}
 	}
 
-	/**
-	 * Compatibility access for diagnostics and tests.
-	 *
-	 * Procedural runtime code never reads this property, so no mixer is created
-	 * for the lightweight avatar. Accessing it explicitly creates the mixer on
-	 * demand and keeps the previous public surface available.
-	 */
+	/** Compatibility accessor: creates the mixer on demand for diagnostics/tests. */
 	get mixer(): AnimationMixer {
-		return this.ensureMixer();
+		return this.ensureMixer().mixer;
 	}
 
 	get snapshot(): HumanoidAnimationBlendSnapshot {
@@ -241,14 +218,15 @@ export class HumanoidAnimationController {
 		this.actionStartedAt = this.totalTime;
 		this.transitionCount += 1;
 
-		this.weights[state] = this.fadeSeconds <= MIN_FADE_SECONDS ? 1 : 0;
+		const instant = this.fadeSeconds <= MIN_FADE_SECONDS;
+		this.weights[state] = instant ? 1 : 0;
 
-		if (this.fadeSeconds <= MIN_FADE_SECONDS) {
+		if (instant) {
 			this.weights[previous] = 0;
 			this.transitionFrom = null;
 		}
 
-		this.startMixerTransition(previous, state);
+		this.mixerBackend?.beginTransition(previous, state, this.fadeSeconds);
 		this.syncBlendSnapshot();
 	}
 
@@ -270,12 +248,7 @@ export class HumanoidAnimationController {
 		this.debugFlags.mouseLookActive = false;
 		this.debugFlags.cameraRecentering = false;
 
-		if (this.mixerValue) {
-			this.mixerValue.stopAllAction();
-			this.mixerValue.setTime(0);
-			this.activateMixerState(state, true);
-		}
-
+		this.mixerBackend?.reset(state);
 		resetBlendSnapshot(this.blendSnapshot, this.weights, state, this.clipByName.size);
 	}
 
@@ -285,15 +258,9 @@ export class HumanoidAnimationController {
 		}
 
 		this.disposed = true;
-
-		if (this.mixerValue) {
-			this.mixerValue.stopAllAction();
-			this.mixerValue.uncacheRoot(this.root);
-		}
-
-		this.actions.clear();
+		this.mixerBackend?.dispose();
+		this.mixerBackend = null;
 		this.clipByName.clear();
-		this.mixerValue = null;
 		this.transitionFrom = null;
 		zeroWeights(this.weights);
 	}
@@ -318,27 +285,22 @@ export class HumanoidAnimationController {
 			this.weights[this.activeState] = 1;
 		}
 
-		if (this.mixerValue) {
-			this.applyMixerPlaybackScale(this.activeState);
-			this.mixerValue.update(deltaSeconds);
-			this.cleanupMixerActions();
+		if (this.mixerBackend) {
+			this.mixerBackend.advance(
+				this.activeState,
+				this.blendSnapshot,
+				deltaSeconds,
+				!this.transitionFrom
+			);
 		}
 
 		this.syncBlendSnapshot();
 	}
 
 	private finishTransition(): void {
-		const previous = this.transitionFrom;
-
-		if (previous) {
-			this.weights[previous] = 0;
-			const action = this.actions.get(previous);
-
-			if (action) {
-				action.stop();
-				action.enabled = false;
-				action.setEffectiveWeight(0);
-			}
+		if (this.transitionFrom) {
+			this.weights[this.transitionFrom] = 0;
+			this.mixerBackend?.stopState(this.transitionFrom);
 		}
 
 		this.weights[this.activeState] = 1;
@@ -378,19 +340,37 @@ export class HumanoidAnimationController {
 		snapshot.cameraRecentering = this.debugFlags.cameraRecentering;
 	}
 
-	private ensureMixer(): AnimationMixer {
-		if (this.mixerValue) {
-			return this.mixerValue;
+	private ensureMixer(): MixerBackend {
+		if (!this.mixerBackend) {
+			this.mixerBackend = new MixerBackend(this.root, this.clipByName, this.activeState);
 		}
 
-		const mixer = new AnimationMixer(this.root);
-		this.mixerValue = mixer;
+		return this.mixerBackend;
+	}
+}
+
+/**
+ * AnimationMixer wrapper. Owns one action per state, performs crossfades, scales
+ * playback by measured speed and guarantees at most two simultaneously-active
+ * actions (the outgoing one is hard-stopped once a transition completes).
+ */
+class MixerBackend {
+	readonly mixer: AnimationMixer;
+
+	private readonly actions = new Map<HumanoidAnimationState, AnimationAction>();
+
+	constructor(
+		private readonly root: Object3D,
+		clipByName: Map<string, AnimationClip>,
+		activeState: HumanoidAnimationState
+	) {
+		this.mixer = new AnimationMixer(root);
 
 		for (const state of HUMANOID_ANIMATION_STATES) {
-			const sourceName = FALLBACK_TURN_CLIPS.has(state) ? 'idle' : state;
-			const sourceClip = this.clipByName.get(sourceName) ?? createEmptyClip(sourceName);
-			const clip = FALLBACK_TURN_CLIPS.has(state) ? cloneClipAs(sourceClip, state) : sourceClip;
-			const action = mixer.clipAction(clip);
+			const sourceName = TURN_ALIAS_STATES.has(state) ? 'idle' : state;
+			const sourceClip = clipByName.get(sourceName) ?? createEmptyClip(sourceName);
+			const clip = TURN_ALIAS_STATES.has(state) ? cloneClipAs(sourceClip, state) : sourceClip;
+			const action = this.mixer.clipAction(clip);
 
 			if (ONE_SHOT_STATES.has(state)) {
 				action.setLoop(LoopOnce, 1);
@@ -404,11 +384,74 @@ export class HumanoidAnimationController {
 			this.actions.set(state, action);
 		}
 
-		this.activateMixerState(this.activeState, true);
-		return mixer;
+		this.activate(activeState, true);
 	}
 
-	private activateMixerState(state: HumanoidAnimationState, reset: boolean): void {
+	beginTransition(
+		previous: HumanoidAnimationState,
+		next: HumanoidAnimationState,
+		fadeSeconds: number
+	): void {
+		const nextAction = this.actions.get(next);
+
+		if (!nextAction) {
+			return;
+		}
+
+		nextAction.enabled = true;
+		nextAction.reset();
+		nextAction.setEffectiveWeight(1);
+		nextAction.play();
+
+		const previousAction = this.actions.get(previous);
+
+		if (previousAction && previousAction !== nextAction && fadeSeconds > MIN_FADE_SECONDS) {
+			previousAction.enabled = true;
+			previousAction.crossFadeTo(nextAction, fadeSeconds, false);
+		} else if (previousAction && previousAction !== nextAction) {
+			previousAction.stop();
+			previousAction.enabled = false;
+			previousAction.setEffectiveWeight(0);
+		}
+	}
+
+	advance(
+		activeState: HumanoidAnimationState,
+		locomotion: HumanoidAnimationBlendSnapshot,
+		deltaSeconds: number,
+		settled: boolean
+	): void {
+		this.applyPlaybackScale(activeState, locomotion);
+		this.mixer.update(deltaSeconds);
+
+		if (settled) {
+			this.cleanup(activeState);
+		}
+	}
+
+	stopState(state: HumanoidAnimationState): void {
+		const action = this.actions.get(state);
+
+		if (action) {
+			action.stop();
+			action.enabled = false;
+			action.setEffectiveWeight(0);
+		}
+	}
+
+	reset(state: HumanoidAnimationState): void {
+		this.mixer.stopAllAction();
+		this.mixer.setTime(0);
+		this.activate(state, true);
+	}
+
+	dispose(): void {
+		this.mixer.stopAllAction();
+		this.mixer.uncacheRoot(this.root);
+		this.actions.clear();
+	}
+
+	private activate(state: HumanoidAnimationState, reset: boolean): void {
 		const action = this.actions.get(state);
 
 		if (!action) {
@@ -425,44 +468,16 @@ export class HumanoidAnimationController {
 		action.play();
 	}
 
-	private startMixerTransition(
-		previousState: HumanoidAnimationState,
-		nextState: HumanoidAnimationState
+	private applyPlaybackScale(
+		state: HumanoidAnimationState,
+		locomotion: HumanoidAnimationBlendSnapshot
 	): void {
-		if (!this.mixerValue) {
-			return;
-		}
-
-		const previous = this.actions.get(previousState);
-		const next = this.actions.get(nextState);
-
-		if (!next) {
-			return;
-		}
-
-		next.enabled = true;
-		next.reset();
-		next.setEffectiveWeight(1);
-		next.play();
-
-		if (previous && previous !== next && this.fadeSeconds > MIN_FADE_SECONDS) {
-			previous.enabled = true;
-			previous.crossFadeTo(next, this.fadeSeconds, false);
-		} else if (previous && previous !== next) {
-			previous.stop();
-			previous.enabled = false;
-			previous.setEffectiveWeight(0);
-		}
-	}
-
-	private applyMixerPlaybackScale(state: HumanoidAnimationState): void {
 		const action = this.actions.get(state);
 
 		if (!action) {
 			return;
 		}
 
-		const locomotion = this.blendSnapshot;
 		const forwardSpeed = Math.abs(locomotion.localForwardSpeed);
 		const sideSpeed = Math.abs(locomotion.localSideSpeed);
 		let scale = 1;
@@ -474,20 +489,15 @@ export class HumanoidAnimationController {
 		} else if (state === 'strafe_left' || state === 'strafe_right') {
 			scale = clamp(sideSpeed / 4.5, 0.8, 1.25);
 		} else if (state === 'run') {
-			const planarSpeed = Math.hypot(forwardSpeed, sideSpeed);
-			scale = clamp(planarSpeed / 8, 0.9, 1.4);
+			scale = clamp(Math.hypot(forwardSpeed, sideSpeed) / 8, 0.9, 1.4);
 		}
 
 		action.setEffectiveTimeScale(scale);
 	}
 
-	private cleanupMixerActions(): void {
-		if (this.transitionFrom) {
-			return;
-		}
-
+	private cleanup(activeState: HumanoidAnimationState): void {
 		for (const [state, action] of this.actions) {
-			if (state === this.activeState) {
+			if (state === activeState) {
 				continue;
 			}
 
@@ -608,7 +618,38 @@ function zeroWeights(weights: Record<HumanoidAnimationState, number>): void {
 	}
 }
 
-function createMutableLocomotionSnapshot(): HumanoidAnimationSnapshot {
+function createBlendSnapshot(
+	weights: Record<HumanoidAnimationState, number>,
+	clipCount: number
+): HumanoidAnimationBlendSnapshot {
+	return {
+		activeState: 'idle',
+		currentAction: 'idle',
+		previousAction: null,
+		weights,
+		clipCount,
+		mixerTime: 0,
+		transitionCount: 0,
+		actionTime: 0,
+		actionWeight: 1,
+		activeActionCount: 1,
+		cameraYaw: 0,
+		bodyYaw: 0,
+		desiredMovementYaw: 0,
+		headYaw: 0,
+		localForwardSpeed: 0,
+		localSideSpeed: 0,
+		verticalSpeed: 0,
+		grounded: true,
+		stepActive: false,
+		stepHeight: 0,
+		leadingFoot: null,
+		mouseLookActive: false,
+		cameraRecentering: false
+	};
+}
+
+function createLocomotionSnapshot(): HumanoidAnimationSnapshot {
 	return {
 		locomotionState: 'idle',
 		speed: 0,
@@ -641,6 +682,9 @@ function writeLegacyLocomotionSnapshot(
 	speed: number
 ): HumanoidAnimationSnapshot {
 	const normalizedSpeed = Math.max(0, finiteOr(speed, 0));
+	const airborne =
+		state === 'jump_start' || state === 'jump' || state === 'airborne' || state === 'fall';
+
 	target.locomotionState = state;
 	target.speed = normalizedSpeed;
 	target.gaitPhase = 0;
@@ -648,8 +692,7 @@ function writeLegacyLocomotionSnapshot(
 	target.armRightAngle = 0;
 	target.legLeftAngle = 0;
 	target.legRightAngle = 0;
-	target.grounded =
-		state !== 'jump_start' && state !== 'jump' && state !== 'airborne' && state !== 'fall';
+	target.grounded = !airborne;
 	target.headYaw = 0;
 	target.bodyYaw = Math.PI;
 	target.cameraYaw = Math.PI;

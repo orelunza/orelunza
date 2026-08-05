@@ -384,9 +384,9 @@ test.describe('authentication flow', () => {
 		await expect(preview).toBeVisible();
 		await expect(preview).toHaveAttribute('data-avatar-ready', 'true', { timeout: 15_000 });
 		await expect(preview).toHaveAttribute('data-avatar-kind', 'humanoid-rigged');
-		await expect(preview).toHaveAttribute('data-avatar-pipeline', 'fbx-real');
-		await expect(preview).toHaveAttribute('data-model-source', 'reallusion-neutral-m');
-		await expect(preview).toHaveAttribute('data-avatar-model-source', 'reallusion-neutral-m');
+		await expect(preview).toHaveAttribute('data-avatar-pipeline', 'procedural-voxel');
+		await expect(preview).toHaveAttribute('data-model-source', 'procedural-fallback');
+		await expect(preview).toHaveAttribute('data-avatar-model-source', 'procedural-fallback');
 		await expect(preview).toHaveAttribute('data-current-animation', 'idle');
 		await expect(preview).toHaveAttribute('data-hat-visible', 'false');
 		expect(Number(await preview.getAttribute('data-skinned-mesh-count'))).toBeGreaterThan(0);

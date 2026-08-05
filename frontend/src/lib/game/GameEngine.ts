@@ -318,6 +318,7 @@ export class GameEngine {
 
 		this.selectedBuildBlock = type;
 		this.buildMode = true;
+		this.player.camera.setShoulderFraming('build');
 		this.message = `Selected ${definition.label}`;
 		this.emitSnapshot();
 
@@ -332,6 +333,7 @@ export class GameEngine {
 		this.buildMode = false;
 		this.selectedBuildBlock = null;
 		this.target = null;
+		this.player.camera.setShoulderFraming('explore');
 		this.renderer.setSelection(null);
 
 		if (this.status === 'build-catalog') {

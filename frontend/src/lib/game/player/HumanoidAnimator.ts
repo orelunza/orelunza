@@ -1,4 +1,3 @@
-import { dampAngle, angleDelta } from './ThirdPersonCamera';
 import { SPRINT_SPEED, WALK_SPEED } from './PlayerPhysics';
 import {
 	createNeutralPose,
@@ -11,125 +10,108 @@ import {
 	type HumanoidStepEvent
 } from './HumanoidPose';
 
-const MAX_DELTA_SECONDS = 0.05;
+/**
+ * Orelunza procedural locomotion — rewritten from scratch.
+ *
+ * The animator is a pure pose producer. It receives a read-only snapshot of the
+ * player each frame and returns a reusable HumanoidPose. It never touches
+ * PlayerState and never writes bodyYaw / yaw / desiredMovementYaw.
+ *
+ * Body orientation is read from the authoritative PlayerController snapshot.
+ * The animator never invents, smooths or redirects a second body yaw. Two
+ * reusable pose objects (a target and the smoothed output) avoid per-frame
+ * allocations.
+ */
+
+const MAX_DELTA = 0.05;
 const MAX_HEAD_YAW = 0.78;
 const MAX_HEAD_PITCH = 0.35;
-const IDLE_ENTER_SPEED = 0.06;
-const IDLE_EXIT_SPEED = 0.13;
-const STRAFE_HOLD_SECONDS = 0.7;
-const LANDING_MAX_SECONDS = 0.28;
-const STEP_POSE_SECONDS = 0.34;
 const TWO_PI = Math.PI * 2;
 
-/**
- * Lightweight procedural locomotion for the Orelunza voxel citizen.
- *
- * The animator owns two reusable pose objects: one visible pose and one target
- * pose. Every update mutates these objects in place, avoiding per-frame pose or
- * diagnostics allocations while still smoothing transitions between states.
- */
+// Idle hysteresis so the tiniest residual velocity does not flicker into a walk.
+const IDLE_ENTER_SPEED = 0.05;
+const IDLE_EXIT_SPEED = 0.12;
+
+const LANDING_SECONDS = 0.26;
+const STEP_SECONDS = 0.34;
+
 export class HumanoidAnimator {
 	readonly pose: HumanoidPose = createNeutralPose();
 
-	private readonly targetPose: HumanoidPose = createNeutralPose();
-	private readonly snapshot: HumanoidAnimationSnapshot = createInitialSnapshot();
+	private readonly target: HumanoidPose = createNeutralPose();
+	private readonly snapshot: HumanoidAnimationSnapshot = createSnapshot();
 
-	private visualYaw = Math.PI;
+	private bodyYawValue = Math.PI;
 	private gaitPhase = 0;
-	private elapsedSeconds = 0;
-	private blinkTimer = 1.8;
+	private clock = 0;
 	private blink = 0;
+	private blinkCountdown = 2;
+	private moving = false;
 	private landingTimer = 0;
-	private landingStrength = 0;
+	private landingPower = 0;
 	private wasGrounded = true;
 	private lastVerticalSpeed = 0;
-	private moving = false;
-	private strafeHoldTime = 0;
 	private initialized = false;
 	private updateMs = 0;
 
 	private stepTimer = 0;
 	private stepHeight = 0;
-	private stepLeadingFoot: HumanoidLeadingFoot | null = null;
-	private stepStartedAt = -1;
+	private stepFoot: HumanoidLeadingFoot | null = null;
+	private stepId = -1;
 
 	update(input: HumanoidAnimationInput): HumanoidPose {
-		const startedAt = nowMilliseconds();
-		const delta = safeDelta(input.deltaSeconds);
-		const velocityX = finiteOr(input.velocityX, 0);
-		const velocityY = finiteOr(input.velocityY, 0);
-		const velocityZ = finiteOr(input.velocityZ, 0);
+		const startedAt = now();
+		const delta = clamp(finite(input.deltaSeconds, 0), 0, MAX_DELTA);
+		const vx = finite(input.velocityX, 0);
+		const vy = finite(input.velocityY, 0);
+		const vz = finite(input.velocityZ, 0);
 		const grounded = Boolean(input.grounded);
+		const speed = Math.hypot(vx, vz);
 
-		this.initializeYaw(input);
+		this.initialize(input);
 
-		const cameraYaw = resolveYaw(input.cameraYaw, input.yaw, this.visualYaw);
-		const desiredInputYaw = resolveYaw(input.desiredMovementYaw, input.yaw, this.visualYaw);
-		const speed = Math.hypot(velocityX, velocityZ);
+		const bodyYaw = resolveYaw(input.bodyYaw, input.yaw, this.bodyYawValue);
+		const cameraYaw = resolveYaw(input.cameraYaw, input.yaw, bodyYaw);
+		const desiredYaw = resolveYaw(input.desiredMovementYaw, input.yaw, bodyYaw);
+		this.bodyYawValue = bodyYaw;
 
+		// Idle hysteresis.
 		this.moving = this.moving ? speed > IDLE_ENTER_SPEED : speed > IDLE_EXIT_SPEED;
 
-		const desiredMovementYaw =
-			this.moving && speed > Number.EPSILON ? Math.atan2(velocityX, velocityZ) : desiredInputYaw;
-		const preTurnLocalForward = localForwardSpeed(this.visualYaw, velocityX, velocityZ);
-		const preTurnLocalSide = localSideSpeed(this.visualYaw, velocityX, velocityZ);
-		const sideDominant = Math.abs(preTurnLocalSide) > Math.abs(preTurnLocalForward) * 1.15;
-
-		if (this.moving && sideDominant && grounded) {
-			this.strafeHoldTime += delta;
-		} else {
-			this.strafeHoldTime = 0;
-		}
-
+		// Locomotion is classified relative to the real body orientation owned by
+		// PlayerController. This preserves true backward walking and strafing.
+		const localFwd = localForward(bodyYaw, vx, vz);
+		const localSd = localSide(bodyYaw, vx, vz);
 		const running = speed > (WALK_SPEED + SPRINT_SPEED) * 0.5;
-		const turnSpeed = this.resolveBodyTurnSpeed(this.moving, running, grounded, sideDominant);
+		const movementYaw = this.moving && speed > Number.EPSILON ? Math.atan2(vx, vz) : desiredYaw;
 
-		if (this.moving) {
-			this.visualYaw = dampAngle(this.visualYaw, desiredMovementYaw, turnSpeed, delta);
-		} else {
-			this.visualYaw = normalizeAngle(this.visualYaw);
-		}
-
-		const localForward = localForwardSpeed(this.visualYaw, velocityX, velocityZ);
-		const localSide = localSideSpeed(this.visualYaw, velocityX, velocityZ);
-
-		this.updateLanding(grounded, velocityY);
+		this.updateLanding(grounded, vy);
 		this.updateStep(input.stepEvent ?? null, grounded, delta);
-		this.updateTimers(speed, running, grounded, delta);
+		this.advanceTimers(speed, running, grounded, delta);
 
-		const state = this.resolveState(localForward, localSide, running, grounded, velocityY);
+		const state = this.resolveState(localFwd, localSd, running, grounded, vy);
 
-		this.writeTargetPose(
-			state,
-			speed,
-			localForward,
-			localSide,
-			running,
-			grounded,
-			cameraYaw,
-			velocityY
-		);
-		this.blendPose(delta, state);
+		this.writeTarget(state, speed, localFwd, localSd, running, grounded, vy);
+		this.smooth(delta, state);
 
-		this.updateMs = nowMilliseconds() - startedAt;
+		this.updateMs = now() - startedAt;
 		this.writeSnapshot(
 			state,
 			speed,
 			grounded,
 			cameraYaw,
-			desiredMovementYaw,
-			localForward,
-			localSide,
-			velocityY,
-			Boolean(input.mouseLookActive),
-			Boolean(input.cameraRecentering)
+			movementYaw,
+			localFwd,
+			localSd,
+			vy,
+			input
 		);
 
 		return this.pose;
 	}
 
 	get bodyYaw(): number {
-		return this.visualYaw;
+		return this.bodyYawValue;
 	}
 
 	get lastUpdateMs(): number {
@@ -140,51 +122,49 @@ export class HumanoidAnimator {
 		return this.snapshot;
 	}
 
-	/** Reset temporal animation state while preserving the reusable objects. */
 	reset(bodyYaw = Math.PI): void {
-		this.visualYaw = normalizeAngle(finiteOr(bodyYaw, Math.PI));
+		this.bodyYawValue = normalize(finite(bodyYaw, Math.PI));
 		this.gaitPhase = 0;
-		this.elapsedSeconds = 0;
-		this.blinkTimer = 1.8;
+		this.clock = 0;
 		this.blink = 0;
+		this.blinkCountdown = 2;
+		this.moving = false;
 		this.landingTimer = 0;
-		this.landingStrength = 0;
+		this.landingPower = 0;
 		this.wasGrounded = true;
 		this.lastVerticalSpeed = 0;
-		this.moving = false;
-		this.strafeHoldTime = 0;
 		this.initialized = true;
 		this.updateMs = 0;
 		this.stepTimer = 0;
 		this.stepHeight = 0;
-		this.stepLeadingFoot = null;
-		this.stepStartedAt = -1;
+		this.stepFoot = null;
+		this.stepId = -1;
 
 		resetHumanoidPose(this.pose);
-		resetHumanoidPose(this.targetPose);
-		resetSnapshot(this.snapshot, this.visualYaw);
+		resetHumanoidPose(this.target);
+		resetSnapshot(this.snapshot, this.bodyYawValue);
 	}
 
-	private initializeYaw(input: HumanoidAnimationInput): void {
+	private initialize(input: HumanoidAnimationInput): void {
 		if (this.initialized) {
 			return;
 		}
 
-		// PlayerAvatar supplies bodyYaw. Legacy previews/tests usually supply only
-		// yaw and intentionally keep the historical Math.PI starting direction.
 		if (Number.isFinite(input.bodyYaw)) {
-			this.visualYaw = normalizeAngle(input.bodyYaw as number);
+			this.bodyYawValue = normalize(input.bodyYaw as number);
+		} else if (Number.isFinite(input.yaw)) {
+			this.bodyYawValue = normalize(input.yaw as number);
 		}
 
 		this.wasGrounded = Boolean(input.grounded);
-		this.lastVerticalSpeed = finiteOr(input.velocityY, 0);
+		this.lastVerticalSpeed = finite(input.velocityY, 0);
 		this.initialized = true;
 	}
 
 	private updateLanding(grounded: boolean, verticalSpeed: number): void {
 		if (grounded && !this.wasGrounded) {
-			this.landingStrength = clamp(Math.abs(this.lastVerticalSpeed) / 12, 0.35, 1);
-			this.landingTimer = LANDING_MAX_SECONDS * this.landingStrength;
+			this.landingPower = clamp(Math.abs(this.lastVerticalSpeed) / 12, 0.35, 1);
+			this.landingTimer = LANDING_SECONDS * this.landingPower;
 		}
 
 		this.wasGrounded = grounded;
@@ -192,26 +172,21 @@ export class HumanoidAnimator {
 	}
 
 	private updateStep(
-		stepEvent: Readonly<HumanoidStepEvent> | null,
+		event: Readonly<HumanoidStepEvent> | null,
 		grounded: boolean,
 		delta: number
 	): void {
-		if (
-			grounded &&
-			stepEvent &&
-			Number.isFinite(stepEvent.startedAt) &&
-			stepEvent.startedAt !== this.stepStartedAt
-		) {
-			this.stepStartedAt = stepEvent.startedAt;
-			this.stepLeadingFoot = stepEvent.leadingFoot;
-			this.stepHeight = clamp(finiteOr(stepEvent.height, 0), 0, 1);
-			this.stepTimer = STEP_POSE_SECONDS;
+		if (grounded && event && Number.isFinite(event.startedAt) && event.startedAt !== this.stepId) {
+			this.stepId = event.startedAt;
+			this.stepFoot = event.leadingFoot;
+			this.stepHeight = clamp(finite(event.height, 0), 0, 1);
+			this.stepTimer = STEP_SECONDS;
 		}
 
 		if (!grounded) {
 			this.stepTimer = 0;
 			this.stepHeight = 0;
-			this.stepLeadingFoot = null;
+			this.stepFoot = null;
 			return;
 		}
 
@@ -219,30 +194,28 @@ export class HumanoidAnimator {
 
 		if (this.stepTimer === 0) {
 			this.stepHeight = 0;
-			this.stepLeadingFoot = null;
+			this.stepFoot = null;
 		}
 	}
 
-	private updateTimers(speed: number, running: boolean, grounded: boolean, delta: number): void {
-		this.elapsedSeconds += delta;
+	private advanceTimers(speed: number, running: boolean, grounded: boolean, delta: number): void {
+		this.clock += delta;
 
 		if (this.moving && grounded) {
 			const cadence = running ? 12.5 : 8.2;
-			const velocityScale = clamp(speed / WALK_SPEED, 0.25, 1.45);
-			this.gaitPhase += cadence * delta * velocityScale;
+			const scale = clamp(speed / WALK_SPEED, 0.25, 1.45);
+			this.gaitPhase += cadence * delta * scale;
 
-			// Keep long-running sessions numerically stable without changing normal
-			// diagnostic comparisons or short test sequences.
 			if (this.gaitPhase > 1_000_000) {
 				this.gaitPhase %= TWO_PI;
 			}
 		}
 
-		this.blinkTimer -= delta;
+		this.blinkCountdown -= delta;
 
-		if (this.blinkTimer <= 0) {
+		if (this.blinkCountdown <= 0) {
 			this.blink = 1;
-			this.blinkTimer = 2.6 + (Math.sin(this.elapsedSeconds * 1.7) + 1) * 1.2;
+			this.blinkCountdown = 2.6 + (Math.sin(this.clock * 1.7) + 1) * 1.2;
 		}
 
 		this.blink = Math.max(0, this.blink - delta * 12);
@@ -250,8 +223,8 @@ export class HumanoidAnimator {
 	}
 
 	private resolveState(
-		localForward: number,
-		localSide: number,
+		localFwd: number,
+		localSd: number,
 		running: boolean,
 		grounded: boolean,
 		verticalSpeed: number
@@ -272,49 +245,27 @@ export class HumanoidAnimator {
 			return 'run';
 		}
 
-		if (Math.abs(localSide) > Math.abs(localForward) * 1.15) {
-			return localSide > 0 ? 'strafe_right' : 'strafe_left';
+		if (Math.abs(localSd) > Math.abs(localFwd) * 1.15) {
+			return localSd > 0 ? 'strafe_right' : 'strafe_left';
 		}
 
-		if (localForward < -0.2) {
+		if (localFwd < -0.2) {
 			return 'walk_backward';
 		}
 
 		return 'walk_forward';
 	}
 
-	private resolveBodyTurnSpeed(
-		moving: boolean,
-		running: boolean,
-		grounded: boolean,
-		sideDominant: boolean
-	): number {
-		if (!grounded) {
-			return 1.2;
-		}
-
-		if (!moving) {
-			return 0.6;
-		}
-
-		if (sideDominant) {
-			return this.strafeHoldTime < STRAFE_HOLD_SECONDS ? 0.35 : 1.8;
-		}
-
-		return running ? 8.5 : 5.8;
-	}
-
-	private writeTargetPose(
+	private writeTarget(
 		state: HumanoidLocomotionState,
 		speed: number,
-		localForward: number,
-		localSide: number,
+		localFwd: number,
+		localSd: number,
 		running: boolean,
 		grounded: boolean,
-		cameraYaw: number,
 		verticalSpeed: number
 	): void {
-		const pose = resetHumanoidPose(this.targetPose);
+		const pose = resetHumanoidPose(this.target);
 		const phase = this.gaitPhase;
 		const stride = Math.sin(phase);
 		const opposite = -stride;
@@ -325,59 +276,55 @@ export class HumanoidAnimator {
 		const runWeight = running
 			? clamp((speed - WALK_SPEED) / Math.max(SPRINT_SPEED - WALK_SPEED, 0.001), 0, 1)
 			: 0;
-		const sideSign = Math.sign(localSide);
-		const backwardWeight = localForward < -0.2 ? clamp(-localForward / WALK_SPEED, 0, 1) : 0;
-		const sideWeight = clamp(Math.abs(localSide) / WALK_SPEED, 0, 1);
-		const breath = Math.sin(this.elapsedSeconds * 1.65);
-		const armAmplitude = walkWeight * 0.56 + runWeight * 0.32;
-		const legAmplitude = walkWeight * 0.56 + runWeight * 0.34;
-		const cautious = lerp(1, 0.58, backwardWeight);
-		const movementLook = clamp(localSide / SPRINT_SPEED, -0.12, 0.12);
-		const totalLookYaw = clamp(
-			angleDelta(this.visualYaw, cameraYaw) + movementLook,
-			-MAX_HEAD_YAW,
-			MAX_HEAD_YAW
-		);
+		const sideSign = Math.sign(localSd);
+		const backWeight = localFwd < -0.2 ? clamp(-localFwd / WALK_SPEED, 0, 1) : 0;
+		const sideWeight = clamp(Math.abs(localSd) / WALK_SPEED, 0, 1);
+		const breath = Math.sin(this.clock * 1.65);
+		const armAmp = walkWeight * 0.56 + runWeight * 0.32;
+		const legAmp = walkWeight * 0.56 + runWeight * 0.34;
+		const cautious = lerp(1, 0.58, backWeight);
 
 		pose.state = state;
 		pose.gaitPhase = phase;
 		pose.blink = this.blink;
-		pose.neckYaw = totalLookYaw * 0.46;
-		pose.headYaw = totalLookYaw * 0.54;
+
+		// Camera orbit must not twist the citizen's head. Explicit world-look
+		// targets are layered later by PlayerAvatar.applyLookOverlay().
+		pose.neckYaw = 0;
+		pose.headYaw = 0;
 		pose.headPitch = clamp(-verticalSpeed * 0.015, -MAX_HEAD_PITCH, MAX_HEAD_PITCH);
 
 		if (!this.moving && grounded && state !== 'landing') {
+			// Idle: an almost imperceptible breath, no gait motion at all.
 			pose.rootBob = breath * 0.006;
 			pose.chestPitch = breath * 0.006;
-			pose.leftShoulderPitch = 0.12 + breath * 0.008;
-			pose.rightShoulderPitch = 0.12 - breath * 0.008;
-			pose.leftKneePitch = 0.08;
-			pose.rightKneePitch = 0.08;
+			pose.leftShoulderPitch = 0.08 + breath * 0.008;
+			pose.rightShoulderPitch = 0.08 - breath * 0.008;
+			pose.leftKneePitch = 0.06;
+			pose.rightKneePitch = 0.06;
 		} else if (grounded) {
 			pose.rootBob = Math.abs(Math.sin(phase * 2)) * (0.008 + speedRatio * 0.03) + breath * 0.003;
 			pose.hipsYaw = stride * (0.03 + speedRatio * 0.04) + sideSign * sideWeight * 0.07;
 			pose.hipsRoll = opposite * (0.016 + speedRatio * 0.024) + sideSign * sideWeight * 0.055;
-			pose.chestPitch = -runWeight * 0.16 + backwardWeight * 0.09;
+			pose.chestPitch = -runWeight * 0.16 + backWeight * 0.09;
 			pose.chestYaw = -pose.hipsYaw * 0.7;
 
-			pose.leftShoulderPitch = -opposite * armAmplitude * cautious - runWeight * 0.2;
-			pose.rightShoulderPitch = -stride * armAmplitude * cautious - runWeight * 0.2;
-			pose.leftShoulderRoll = 0.14 - sideSign * sideWeight * 0.13;
-			pose.rightShoulderRoll = -0.14 - sideSign * sideWeight * 0.13;
-			pose.leftElbowPitch = -0.4 - walkWeight * 0.18 - runWeight * 0.38;
-			pose.rightElbowPitch = -0.4 - walkWeight * 0.18 - runWeight * 0.38;
+			// Opposite arms/legs, arms kept out from the torso via shoulder roll.
+			pose.leftShoulderPitch = -opposite * armAmp * cautious - runWeight * 0.2;
+			pose.rightShoulderPitch = -stride * armAmp * cautious - runWeight * 0.2;
+			pose.leftShoulderRoll = 0.12 - sideSign * sideWeight * 0.13;
+			pose.rightShoulderRoll = -0.12 - sideSign * sideWeight * 0.13;
+			pose.leftElbowPitch = -0.34 - walkWeight * 0.18 - runWeight * 0.38;
+			pose.rightElbowPitch = -0.34 - walkWeight * 0.18 - runWeight * 0.38;
 
-			pose.leftHipPitch = stride * legAmplitude * cautious - backwardWeight * 0.14;
-			pose.rightHipPitch = opposite * legAmplitude * cautious - backwardWeight * 0.14;
+			pose.leftHipPitch = stride * legAmp * cautious - backWeight * 0.14;
+			pose.rightHipPitch = opposite * legAmp * cautious - backWeight * 0.14;
 			pose.leftHipRoll = sideSign * sideWeight * 0.2;
 			pose.rightHipRoll = sideSign * sideWeight * 0.2;
-			pose.leftKneePitch = Math.max(
-				0.08,
-				liftLeft * (0.44 + runWeight * 0.36) + backwardWeight * 0.18
-			);
+			pose.leftKneePitch = Math.max(0.06, liftLeft * (0.44 + runWeight * 0.36) + backWeight * 0.18);
 			pose.rightKneePitch = Math.max(
-				0.08,
-				liftRight * (0.44 + runWeight * 0.36) + backwardWeight * 0.18
+				0.06,
+				liftRight * (0.44 + runWeight * 0.36) + backWeight * 0.18
 			);
 			pose.leftAnklePitch = -pose.leftHipPitch * 0.27 - liftLeft * 0.11;
 			pose.rightAnklePitch = -pose.rightHipPitch * 0.27 - liftRight * 0.11;
@@ -385,6 +332,7 @@ export class HumanoidAnimator {
 			pose.rightFootLift = liftRight * (0.012 + runWeight * 0.022);
 
 			if (sideWeight > 0.3 && !running) {
+				// Cross-step feel for a lateral strafe, not a rotated forward walk.
 				pose.leftHipPitch *= 0.45;
 				pose.rightHipPitch *= 0.45;
 				pose.leftKneePitch += sideWeight * (sideSign < 0 ? 0.24 : 0.1);
@@ -395,31 +343,32 @@ export class HumanoidAnimator {
 		}
 
 		if (!grounded) {
-			this.writeAirbornePose(pose, state, verticalSpeed);
+			this.writeAirborne(pose, state, verticalSpeed);
 		} else if (state === 'landing') {
-			this.applyLandingPose(pose);
+			this.applyLanding(pose);
 		}
 
-		this.applyStepPose(pose);
+		this.applyStep(pose);
 		clampPose(pose);
 	}
 
-	private writeAirbornePose(
+	private writeAirborne(
 		pose: HumanoidPose,
 		state: HumanoidLocomotionState,
 		verticalSpeed: number
 	): void {
 		const rising = state === 'jump_start';
-		const fallWeight = clamp(-verticalSpeed / 8, 0, 1);
+		const fall = clamp(-verticalSpeed / 8, 0, 1);
 
+		// Preparation/impulse on the way up, a stable spread pose while falling.
 		pose.rootBob = rising ? -0.018 : -0.035;
-		pose.chestPitch = rising ? -0.04 : 0.07 + fallWeight * 0.04;
+		pose.chestPitch = rising ? -0.04 : 0.07 + fall * 0.04;
 		pose.hipsYaw *= 0.35;
 		pose.hipsRoll *= 0.35;
 		pose.leftHipPitch = rising ? 0.22 : 0.16;
 		pose.rightHipPitch = rising ? -0.16 : -0.1;
-		pose.leftKneePitch = rising ? 0.44 : 0.38 + fallWeight * 0.08;
-		pose.rightKneePitch = rising ? 0.34 : 0.32 + fallWeight * 0.08;
+		pose.leftKneePitch = rising ? 0.44 : 0.38 + fall * 0.08;
+		pose.rightKneePitch = rising ? 0.34 : 0.32 + fall * 0.08;
 		pose.leftAnklePitch = -0.08;
 		pose.rightAnklePitch = -0.08;
 		pose.leftFootLift = 0;
@@ -432,8 +381,8 @@ export class HumanoidAnimator {
 		pose.rightElbowPitch = -0.7;
 	}
 
-	private applyLandingPose(pose: HumanoidPose): void {
-		const duration = Math.max(LANDING_MAX_SECONDS * this.landingStrength, 0.001);
+	private applyLanding(pose: HumanoidPose): void {
+		const duration = Math.max(LANDING_SECONDS * this.landingPower, 0.001);
 		const land = clamp(this.landingTimer / duration, 0, 1);
 
 		pose.rootBob -= land * 0.075;
@@ -446,65 +395,64 @@ export class HumanoidAnimator {
 		pose.rightShoulderPitch += land * 0.08;
 	}
 
-	private applyStepPose(pose: HumanoidPose): void {
-		if (this.stepTimer <= 0 || !this.stepLeadingFoot) {
+	private applyStep(pose: HumanoidPose): void {
+		if (this.stepTimer <= 0 || !this.stepFoot) {
 			return;
 		}
 
-		const progress = 1 - this.stepTimer / STEP_POSE_SECONDS;
+		const progress = 1 - this.stepTimer / STEP_SECONDS;
 		const influence = Math.sin(clamp(progress, 0, 1) * Math.PI);
-		const height = this.stepHeight;
-		const footLift = influence * height * 0.1;
-		const kneeLift = influence * height * 0.42;
-		const hipLift = influence * height * 0.16;
+		const foot = influence * this.stepHeight * 0.1;
+		const knee = influence * this.stepHeight * 0.42;
+		const hip = influence * this.stepHeight * 0.16;
 
-		if (this.stepLeadingFoot === 'left') {
-			pose.leftFootLift += footLift;
-			pose.leftKneePitch += kneeLift;
-			pose.leftHipPitch += hipLift;
+		if (this.stepFoot === 'left') {
+			pose.leftFootLift += foot;
+			pose.leftKneePitch += knee;
+			pose.leftHipPitch += hip;
 			pose.hipsRoll -= influence * 0.035;
 		} else {
-			pose.rightFootLift += footLift;
-			pose.rightKneePitch += kneeLift;
-			pose.rightHipPitch += hipLift;
+			pose.rightFootLift += foot;
+			pose.rightKneePitch += knee;
+			pose.rightHipPitch += hip;
 			pose.hipsRoll += influence * 0.035;
 		}
 	}
 
-	private blendPose(delta: number, state: HumanoidLocomotionState): void {
+	private smooth(delta: number, state: HumanoidLocomotionState): void {
 		const response =
 			state === 'landing' ? 24 : state === 'jump_start' || state === 'airborne' ? 18 : 16;
 		const amount = 1 - Math.exp(-response * delta);
-		const source = this.targetPose;
-		const target = this.pose;
+		const s = this.target;
+		const p = this.pose;
 
-		target.state = source.state;
-		target.gaitPhase = source.gaitPhase;
-		target.rootBob = lerp(target.rootBob, source.rootBob, amount);
-		target.hipsYaw = lerp(target.hipsYaw, source.hipsYaw, amount);
-		target.hipsRoll = lerp(target.hipsRoll, source.hipsRoll, amount);
-		target.chestPitch = lerp(target.chestPitch, source.chestPitch, amount);
-		target.chestYaw = lerp(target.chestYaw, source.chestYaw, amount);
-		target.neckYaw = lerp(target.neckYaw, source.neckYaw, amount);
-		target.headPitch = lerp(target.headPitch, source.headPitch, amount);
-		target.headYaw = lerp(target.headYaw, source.headYaw, amount);
-		target.leftShoulderPitch = lerp(target.leftShoulderPitch, source.leftShoulderPitch, amount);
-		target.rightShoulderPitch = lerp(target.rightShoulderPitch, source.rightShoulderPitch, amount);
-		target.leftShoulderRoll = lerp(target.leftShoulderRoll, source.leftShoulderRoll, amount);
-		target.rightShoulderRoll = lerp(target.rightShoulderRoll, source.rightShoulderRoll, amount);
-		target.leftElbowPitch = lerp(target.leftElbowPitch, source.leftElbowPitch, amount);
-		target.rightElbowPitch = lerp(target.rightElbowPitch, source.rightElbowPitch, amount);
-		target.leftHipPitch = lerp(target.leftHipPitch, source.leftHipPitch, amount);
-		target.rightHipPitch = lerp(target.rightHipPitch, source.rightHipPitch, amount);
-		target.leftHipRoll = lerp(target.leftHipRoll, source.leftHipRoll, amount);
-		target.rightHipRoll = lerp(target.rightHipRoll, source.rightHipRoll, amount);
-		target.leftKneePitch = lerp(target.leftKneePitch, source.leftKneePitch, amount);
-		target.rightKneePitch = lerp(target.rightKneePitch, source.rightKneePitch, amount);
-		target.leftAnklePitch = lerp(target.leftAnklePitch, source.leftAnklePitch, amount);
-		target.rightAnklePitch = lerp(target.rightAnklePitch, source.rightAnklePitch, amount);
-		target.leftFootLift = lerp(target.leftFootLift, source.leftFootLift, amount);
-		target.rightFootLift = lerp(target.rightFootLift, source.rightFootLift, amount);
-		target.blink = source.blink;
+		p.state = s.state;
+		p.gaitPhase = s.gaitPhase;
+		p.rootBob = lerp(p.rootBob, s.rootBob, amount);
+		p.hipsYaw = lerp(p.hipsYaw, s.hipsYaw, amount);
+		p.hipsRoll = lerp(p.hipsRoll, s.hipsRoll, amount);
+		p.chestPitch = lerp(p.chestPitch, s.chestPitch, amount);
+		p.chestYaw = lerp(p.chestYaw, s.chestYaw, amount);
+		p.neckYaw = lerp(p.neckYaw, s.neckYaw, amount);
+		p.headPitch = lerp(p.headPitch, s.headPitch, amount);
+		p.headYaw = lerp(p.headYaw, s.headYaw, amount);
+		p.leftShoulderPitch = lerp(p.leftShoulderPitch, s.leftShoulderPitch, amount);
+		p.rightShoulderPitch = lerp(p.rightShoulderPitch, s.rightShoulderPitch, amount);
+		p.leftShoulderRoll = lerp(p.leftShoulderRoll, s.leftShoulderRoll, amount);
+		p.rightShoulderRoll = lerp(p.rightShoulderRoll, s.rightShoulderRoll, amount);
+		p.leftElbowPitch = lerp(p.leftElbowPitch, s.leftElbowPitch, amount);
+		p.rightElbowPitch = lerp(p.rightElbowPitch, s.rightElbowPitch, amount);
+		p.leftHipPitch = lerp(p.leftHipPitch, s.leftHipPitch, amount);
+		p.rightHipPitch = lerp(p.rightHipPitch, s.rightHipPitch, amount);
+		p.leftHipRoll = lerp(p.leftHipRoll, s.leftHipRoll, amount);
+		p.rightHipRoll = lerp(p.rightHipRoll, s.rightHipRoll, amount);
+		p.leftKneePitch = lerp(p.leftKneePitch, s.leftKneePitch, amount);
+		p.rightKneePitch = lerp(p.rightKneePitch, s.rightKneePitch, amount);
+		p.leftAnklePitch = lerp(p.leftAnklePitch, s.leftAnklePitch, amount);
+		p.rightAnklePitch = lerp(p.rightAnklePitch, s.rightAnklePitch, amount);
+		p.leftFootLift = lerp(p.leftFootLift, s.leftFootLift, amount);
+		p.rightFootLift = lerp(p.rightFootLift, s.rightFootLift, amount);
+		p.blink = s.blink;
 	}
 
 	private writeSnapshot(
@@ -512,48 +460,47 @@ export class HumanoidAnimator {
 		speed: number,
 		grounded: boolean,
 		cameraYaw: number,
-		desiredMovementYaw: number,
-		localForward: number,
-		localSide: number,
+		movementYaw: number,
+		localFwd: number,
+		localSd: number,
 		verticalSpeed: number,
-		mouseLookActive: boolean,
-		cameraRecentering: boolean
+		input: HumanoidAnimationInput
 	): void {
-		const snapshot = this.snapshot;
-		const stepActive = this.stepTimer > 0 && this.stepLeadingFoot !== null;
+		const s = this.snapshot;
+		const stepActive = this.stepTimer > 0 && this.stepFoot !== null;
 
-		snapshot.locomotionState = state;
-		snapshot.speed = speed;
-		snapshot.gaitPhase = this.gaitPhase;
-		snapshot.armLeftAngle = this.pose.leftShoulderPitch;
-		snapshot.armRightAngle = this.pose.rightShoulderPitch;
-		snapshot.legLeftAngle = this.pose.leftHipPitch;
-		snapshot.legRightAngle = this.pose.rightHipPitch;
-		snapshot.grounded = grounded;
-		snapshot.headYaw = clamp(this.pose.headYaw + this.pose.neckYaw, -MAX_HEAD_YAW, MAX_HEAD_YAW);
-		snapshot.bodyYaw = this.visualYaw;
-		snapshot.cameraYaw = cameraYaw;
-		snapshot.desiredMovementYaw = desiredMovementYaw;
-		snapshot.localForwardSpeed = localForward;
-		snapshot.localSideSpeed = localSide;
-		snapshot.verticalSpeed = verticalSpeed;
-		snapshot.stepActive = stepActive;
-		snapshot.stepHeight = stepActive ? this.stepHeight : 0;
-		snapshot.leadingFoot = stepActive ? this.stepLeadingFoot : null;
-		snapshot.stepStartedAt = stepActive ? this.stepStartedAt : -1;
-		snapshot.mouseLookActive = mouseLookActive;
-		snapshot.cameraRecentering = cameraRecentering;
-		snapshot.updateMs = this.updateMs;
+		s.locomotionState = state;
+		s.speed = speed;
+		s.gaitPhase = this.gaitPhase;
+		s.armLeftAngle = this.pose.leftShoulderPitch;
+		s.armRightAngle = this.pose.rightShoulderPitch;
+		s.legLeftAngle = this.pose.leftHipPitch;
+		s.legRightAngle = this.pose.rightHipPitch;
+		s.grounded = grounded;
+		s.headYaw = clamp(this.pose.headYaw + this.pose.neckYaw, -MAX_HEAD_YAW, MAX_HEAD_YAW);
+		s.bodyYaw = this.bodyYawValue;
+		s.cameraYaw = cameraYaw;
+		s.desiredMovementYaw = movementYaw;
+		s.localForwardSpeed = localFwd;
+		s.localSideSpeed = localSd;
+		s.verticalSpeed = verticalSpeed;
+		s.stepActive = stepActive;
+		s.stepHeight = stepActive ? this.stepHeight : 0;
+		s.leadingFoot = stepActive ? this.stepFoot : null;
+		s.stepStartedAt = stepActive ? this.stepId : -1;
+		s.mouseLookActive = Boolean(input.mouseLookActive);
+		s.cameraRecentering = Boolean(input.cameraRecentering);
+		s.updateMs = this.updateMs;
 	}
 }
 
-function createInitialSnapshot(): HumanoidAnimationSnapshot {
+function createSnapshot(): HumanoidAnimationSnapshot {
 	return {
 		locomotionState: 'idle',
 		speed: 0,
 		gaitPhase: 0,
-		armLeftAngle: 0.12,
-		armRightAngle: 0.12,
+		armLeftAngle: 0.08,
+		armRightAngle: 0.08,
 		legLeftAngle: 0,
 		legRightAngle: 0,
 		grounded: true,
@@ -575,28 +522,10 @@ function createInitialSnapshot(): HumanoidAnimationSnapshot {
 }
 
 function resetSnapshot(snapshot: HumanoidAnimationSnapshot, bodyYaw: number): void {
-	snapshot.locomotionState = 'idle';
-	snapshot.speed = 0;
-	snapshot.gaitPhase = 0;
-	snapshot.armLeftAngle = 0.12;
-	snapshot.armRightAngle = 0.12;
-	snapshot.legLeftAngle = 0;
-	snapshot.legRightAngle = 0;
-	snapshot.grounded = true;
-	snapshot.headYaw = 0;
+	Object.assign(snapshot, createSnapshot());
 	snapshot.bodyYaw = bodyYaw;
 	snapshot.cameraYaw = bodyYaw;
 	snapshot.desiredMovementYaw = bodyYaw;
-	snapshot.localForwardSpeed = 0;
-	snapshot.localSideSpeed = 0;
-	snapshot.verticalSpeed = 0;
-	snapshot.stepActive = false;
-	snapshot.stepHeight = 0;
-	snapshot.leadingFoot = null;
-	snapshot.stepStartedAt = -1;
-	snapshot.mouseLookActive = false;
-	snapshot.cameraRecentering = false;
-	snapshot.updateMs = 0;
 }
 
 function clampPose(pose: HumanoidPose): void {
@@ -627,50 +556,46 @@ function clampPose(pose: HumanoidPose): void {
 	pose.blink = clamp(pose.blink, 0, 1);
 }
 
-function localForwardSpeed(yaw: number, velocityX: number, velocityZ: number): number {
-	return Math.sin(yaw) * velocityX + Math.cos(yaw) * velocityZ;
+function localForward(yaw: number, vx: number, vz: number): number {
+	return Math.sin(yaw) * vx + Math.cos(yaw) * vz;
 }
 
-function localSideSpeed(yaw: number, velocityX: number, velocityZ: number): number {
-	return -Math.cos(yaw) * velocityX + Math.sin(yaw) * velocityZ;
+function localSide(yaw: number, vx: number, vz: number): number {
+	return -Math.cos(yaw) * vx + Math.sin(yaw) * vz;
 }
 
 function resolveYaw(
 	primary: number | undefined,
 	fallback: number | undefined,
-	defaultYaw: number
+	def: number
 ): number {
 	if (Number.isFinite(primary)) {
-		return normalizeAngle(primary as number);
+		return normalize(primary as number);
 	}
 
 	if (Number.isFinite(fallback)) {
-		return normalizeAngle(fallback as number);
+		return normalize(fallback as number);
 	}
 
-	return normalizeAngle(defaultYaw);
+	return normalize(def);
 }
 
-function safeDelta(value: number): number {
-	return clamp(finiteOr(value, 0), 0, MAX_DELTA_SECONDS);
-}
-
-function finiteOr(value: number | undefined, fallback: number): number {
+function finite(value: number | undefined, fallback: number): number {
 	return Number.isFinite(value) ? (value as number) : fallback;
 }
 
-function clamp(value: number, minimum: number, maximum: number): number {
-	return Math.min(maximum, Math.max(minimum, value));
+function clamp(value: number, min: number, max: number): number {
+	return Math.min(max, Math.max(min, value));
 }
 
-function lerp(start: number, end: number, amount: number): number {
-	return start + (end - start) * amount;
+function lerp(a: number, b: number, t: number): number {
+	return a + (b - a) * t;
 }
 
-function normalizeAngle(value: number): number {
+function normalize(value: number): number {
 	return Math.atan2(Math.sin(value), Math.cos(value));
 }
 
-function nowMilliseconds(): number {
+function now(): number {
 	return typeof performance !== 'undefined' ? performance.now() : Date.now();
 }

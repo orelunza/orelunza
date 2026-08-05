@@ -3,7 +3,9 @@ import {
 	AnimationClip,
 	AnimationMixer,
 	Bone,
+	Box3,
 	QuaternionKeyframeTrack,
+	Vector3,
 	VectorKeyframeTrack
 } from 'three';
 
@@ -639,6 +641,107 @@ describe('humanoid avatar rig and animation', () => {
 		rig.dispose();
 	});
 
+	test('matches the Orelunza silhouette: attached head, separated arms, tunic and boots', () => {
+		const rig = new HumanoidRig(DEFAULT_CHARACTER_APPEARANCE);
+		const joints = rig.joints;
+		rig.object.updateMatrixWorld(true);
+
+		const worldPosition = (object: (typeof joints)['head']): Vector3 =>
+			new Vector3().setFromMatrixPosition(object.matrixWorld);
+
+		const head = worldPosition(joints.head);
+		const neck = worldPosition(joints.neck);
+		const chest = worldPosition(joints.chest);
+		const leftArm = worldPosition(joints.upperArmLeft);
+		const rightArm = worldPosition(joints.upperArmRight);
+
+		// The head sits directly on a short neck that rises from the chest, so it
+		// is never a floating cube: head is above neck, neck is above chest, and
+		// the vertical gaps are small and human.
+		expect(head.y).toBeGreaterThan(neck.y);
+		expect(neck.y).toBeGreaterThan(chest.y);
+		expect(head.y - neck.y).toBeLessThan(0.4);
+		expect(Math.hypot(head.x - neck.x, head.z - neck.z)).toBeLessThan(0.05);
+
+		// The arms hang clearly to the sides of the torso, not merged into it.
+		expect(Math.abs(leftArm.x)).toBeGreaterThan(0.28);
+		expect(Math.abs(rightArm.x)).toBeGreaterThan(0.28);
+		expect(rightArm.x - leftArm.x).toBeGreaterThan(0.56);
+
+		// There must be a real air gap between the inner edge of each arm and the
+		// side of the torso — the arms are never glued to the body.
+		const ARM_HALF_WIDTH = 0.075;
+		const TORSO_HALF_WIDTH = 0.25;
+		expect(Math.abs(rightArm.x) - ARM_HALF_WIDTH).toBeGreaterThan(TORSO_HALF_WIDTH);
+
+		// A short sleeve leaves the forearm bare: the forearm and hand read as
+		// skin while the shoulder wears the shirt.
+		const roles = (group: (typeof joints)['upperArmLeft']): string[] =>
+			group.children
+				.filter(
+					(child): child is import('three').Mesh => (child as { isMesh?: boolean }).isMesh === true
+				)
+				.map((mesh) => String(mesh.userData.avatarPart));
+
+		expect(roles(joints.upperArmLeft)).toEqual(expect.arrayContaining(['shirt', 'skin']));
+		expect(roles(joints.forearmLeft)).toEqual(['skin']);
+		expect(roles(joints.handLeft)).toEqual(['skin']);
+
+		// Civilian details from the reference: a waist belt and a trouser cuff.
+		const hipRoles = joints.hips.children
+			.filter(
+				(child): child is import('three').Mesh => (child as { isMesh?: boolean }).isMesh === true
+			)
+			.map((mesh) => String(mesh.userData.avatarPart));
+		const shinRoles = joints.shinLeft.children
+			.filter(
+				(child): child is import('three').Mesh => (child as { isMesh?: boolean }).isMesh === true
+			)
+			.map((mesh) => String(mesh.userData.avatarPart));
+
+		expect(hipRoles).toContain('belt');
+		expect(shinRoles).toContain('cuff');
+		expect(shinRoles).toContain('pants');
+
+		// A visible boot at the foot.
+		const shoeRoles = joints.shoeLeft.children
+			.filter(
+				(child): child is import('three').Mesh => (child as { isMesh?: boolean }).isMesh === true
+			)
+			.map((mesh) => String(mesh.userData.avatarPart));
+		expect(shoeRoles).toContain('shoes');
+
+		// Simple but expressive face: eyes, brows, a nose and a mouth.
+		expect(joints.face.children.length).toBeGreaterThanOrEqual(7);
+
+		// There is no vertical air gap under the head: the torso reaches the neck
+		// and the head sits on the neck, so the head can never float.
+		const partBox = (jointName: keyof typeof joints): Box3 => {
+			const box = new Box3();
+			let started = false;
+			joints[jointName].children.forEach((child) => {
+				if ((child as { isMesh?: boolean }).isMesh !== true) {
+					return;
+				}
+				const childBox = new Box3().setFromObject(child);
+				if (started) {
+					box.union(childBox);
+				} else {
+					box.copy(childBox);
+					started = true;
+				}
+			});
+			return box;
+		};
+		const headBox = partBox('head');
+		const neckBox = partBox('neck');
+		const chestBox = partBox('chest');
+		expect(headBox.min.y - neckBox.max.y).toBeLessThan(0.02);
+		expect(neckBox.min.y - chestBox.max.y).toBeLessThan(0.02);
+
+		rig.dispose();
+	});
+
 	test('applies appearance colors and keeps old saves compatible', () => {
 		const appearance = normalizeCharacterAppearance({
 			...DEFAULT_CHARACTER_APPEARANCE,
@@ -817,14 +920,14 @@ describe('humanoid avatar rig and animation', () => {
 		expect(Math.abs(animator.diagnostics.headYaw)).toBeLessThanOrEqual(0.78);
 	});
 
-	test('short strafe does not rotate the body instantly and prolonged strafe turns gradually', () => {
+	test('strafe never overrides the controller-owned body yaw', () => {
 		const animator = new HumanoidAnimator();
-		const initial = animator.bodyYaw;
+		const bodyYaw = Math.PI;
 
-		for (let index = 0; index < 12; index += 1) {
+		for (let index = 0; index < 180; index += 1) {
 			animator.update({
-				cameraYaw: initial,
-				bodyYaw: initial,
+				cameraYaw: bodyYaw,
+				bodyYaw,
 				desiredMovementYaw: -Math.PI / 2,
 				velocityX: -WALK_SPEED,
 				velocityY: 0,
@@ -835,26 +938,9 @@ describe('humanoid avatar rig and animation', () => {
 			});
 		}
 
-		const shortYaw = animator.bodyYaw;
 		expect(animator.diagnostics.locomotionState).toBe('strafe_left');
-		expect(Math.abs(angleDelta(initial, shortYaw))).toBeLessThan(0.2);
-
-		for (let index = 0; index < 120; index += 1) {
-			animator.update({
-				cameraYaw: initial,
-				bodyYaw: shortYaw,
-				desiredMovementYaw: -Math.PI / 2,
-				velocityX: -WALK_SPEED,
-				velocityY: 0,
-				velocityZ: 0,
-				grounded: true,
-				deltaSeconds: 1 / 60,
-				stepEvent: null
-			});
-		}
-
-		expect(Math.abs(angleDelta(shortYaw, animator.bodyYaw))).toBeGreaterThan(0.2);
-		expect(Math.abs(angleDelta(initial, animator.bodyYaw))).toBeLessThan(Math.PI / 2);
+		expect(animator.bodyYaw).toBeCloseTo(bodyYaw, 6);
+		expect(animator.diagnostics.bodyYaw).toBeCloseTo(bodyYaw, 6);
 	});
 
 	test('head yaw is clamped and jump, airborne and landing states are distinct', () => {
@@ -1205,7 +1291,7 @@ describe('player physics', () => {
 		expect(camera.currentDistance).toBeLessThan(camera.orbitDistance);
 	});
 
-	test('mouse look suspends camera recentering, then body yaw is followed smoothly', () => {
+	test('mouse look keeps the camera independent from body yaw', () => {
 		const world = new VoxelWorld(STARTER_WORLD_SEED);
 		const player = testPlayer(world, {
 			bodyYaw: Math.PI / 2,
@@ -1217,24 +1303,67 @@ describe('player physics', () => {
 
 		camera.applyMouse(player, { x: 80, y: 0 });
 		camera.update(player, 1 / 60);
-		const yawDuringMouse = camera.orientationYaw;
+		const yawAfterMouse = camera.orientationYaw;
 
-		expect(player.mouseLookActive).toBe(true);
+		expect(camera.mouseLookActive).toBe(true);
+		expect(camera.cameraRecentering).toBe(false);
+
+		// ThirdPersonCamera must not mutate PlayerState directly.
+		expect(player.mouseLookActive).toBe(false);
 		expect(player.cameraRecentering).toBe(false);
-		expect(camera.orientationYaw).toBeCloseTo(yawDuringMouse);
 
 		for (let index = 0; index < 90; index += 1) {
 			camera.update(player, 1 / 60);
 		}
 
-		const yawAfterDelay = camera.orientationYaw;
-		camera.update(player, 1 / 60);
 		expect(player.mouseLookActive).toBe(false);
-		expect(player.cameraRecentering).toBe(true);
-		expect(Math.abs(camera.orientationYaw - yawDuringMouse)).toBeGreaterThan(0.001);
-		expect(Math.abs(camera.orientationYaw - player.bodyYaw)).toBeLessThan(
-			Math.abs(yawAfterDelay - player.bodyYaw)
-		);
+		expect(player.cameraRecentering).toBe(false);
+		expect(camera.orientationYaw).toBeCloseTo(yawAfterMouse, 6);
+	});
+
+	test('over-the-shoulder framing keeps the central aim ray aligned with yaw and pitch', () => {
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		const player = testPlayer(world);
+		const camera = new ThirdPersonCamera(1, world);
+		camera.setOrientation(Math.PI, 0.34);
+
+		for (let index = 0; index < 120; index += 1) {
+			camera.update(player, 1 / 60);
+		}
+
+		const forward = new Vector3(0, 0, -1).applyQuaternion(camera.camera.quaternion).normalize();
+		const yaw = camera.orientationYaw;
+		const pitch = camera.orientationPitch;
+		const expected = new Vector3(
+			Math.sin(yaw) * Math.cos(pitch),
+			-Math.sin(pitch),
+			Math.cos(yaw) * Math.cos(pitch)
+		).normalize();
+
+		expect(forward.dot(expected)).toBeGreaterThan(0.999);
+	});
+
+	test('build framing offsets the avatar further than exploration framing and settles without jitter', () => {
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+
+		const explore = new ThirdPersonCamera(1, world);
+		explore.setOrientation(Math.PI, 0.34);
+		explore.setShoulderFraming('explore');
+
+		const build = new ThirdPersonCamera(1, world);
+		build.setOrientation(Math.PI, 0.34);
+		build.setShoulderFraming('build');
+
+		for (let index = 0; index < 180; index += 1) {
+			explore.update(testPlayer(world), 1 / 60);
+			build.update(testPlayer(world), 1 / 60);
+		}
+
+		expect(build.shoulderFramingOffset).toBeGreaterThan(explore.shoulderFramingOffset + 0.1);
+
+		const settled = build.shoulderFramingOffset;
+		build.update(testPlayer(world), 1 / 60);
+		expect(Math.abs(build.shoulderFramingOffset - settled)).toBeLessThan(1e-4);
 	});
 });
 
@@ -1347,6 +1476,234 @@ describe('world saves', () => {
 		);
 
 		await expect(persistence.save(false)).resolves.toBe(false);
+	});
+});
+
+describe('rewritten locomotion, camera and avatar contracts', () => {
+	test('HumanoidAnimator never mutates the PlayerState it reads', () => {
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		const player = testPlayer(world, {
+			bodyYaw: 1,
+			yaw: 1,
+			desiredMovementYaw: 1,
+			cameraYaw: 2,
+			velocity: { x: WALK_SPEED, y: 0, z: 0 }
+		});
+		const before = JSON.parse(JSON.stringify(player));
+		const animator = new HumanoidAnimator();
+
+		for (let index = 0; index < 30; index += 1) {
+			animator.update({
+				cameraYaw: player.cameraYaw,
+				bodyYaw: player.bodyYaw,
+				desiredMovementYaw: player.desiredMovementYaw,
+				velocityX: player.velocity.x,
+				velocityY: player.velocity.y,
+				velocityZ: player.velocity.z,
+				grounded: player.onGround,
+				deltaSeconds: 1 / 60,
+				stepEvent: player.stepEvent
+			});
+		}
+
+		// The animator receives a read-only snapshot; the source state is untouched.
+		expect(player.bodyYaw).toBe(before.bodyYaw);
+		expect(player.yaw).toBe(before.yaw);
+		expect(player.desiredMovementYaw).toBe(before.desiredMovementYaw);
+		expect(player.cameraYaw).toBe(before.cameraYaw);
+	});
+
+	test('PlayerAvatar applies the pose without changing the real body yaw', async () => {
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		const spawn = world.findSafeSpawnPosition();
+		const avatar = new PlayerAvatar(DEFAULT_CHARACTER_APPEARANCE, { allowFallback: true });
+		await avatar.ready;
+		const player = testPlayer(world, {
+			position: spawn,
+			bodyYaw: 0.8,
+			yaw: 0.8,
+			desiredMovementYaw: 0.8,
+			cameraYaw: 2.5,
+			velocity: { x: WALK_SPEED, y: 0, z: 0 }
+		});
+
+		for (let index = 0; index < 30; index += 1) {
+			avatar.update(player, true, 1 / 60);
+		}
+
+		expect(player.bodyYaw).toBe(0.8);
+		expect(player.yaw).toBe(0.8);
+		expect(player.desiredMovementYaw).toBe(0.8);
+		// The avatar's visual rotation tracks the state's body yaw exactly.
+		expect(avatar.object.rotation.y).toBeCloseTo(0.8, 6);
+		avatar.dispose();
+	});
+
+	test('camera stays independent of the body during continuous mouse rotation', () => {
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		const controller = new PlayerController(world, 'p', 'w', world.spawnPosition(), 1);
+		const bodyYawBefore = controller.state.bodyYaw;
+
+		// Spin the camera every frame without any movement input.
+		for (let index = 0; index < 120; index += 1) {
+			controller.applyMouse({ x: 12, y: 0 });
+			controller.step(move(0, 0), 1 / 60);
+		}
+
+		// The camera has rotated a lot; the idle body follows only via the
+		// bounded turn-in-place, never spinning uncontrollably or oscillating.
+		expect(controller.camera.orientationYaw).not.toBeCloseTo(bodyYawBefore, 1);
+		expect(Number.isFinite(controller.state.bodyYaw)).toBe(true);
+		expect(controller.state.cameraRecentering).toBe(false);
+	});
+
+	test('camera does not jitter after 10 seconds of steady following', () => {
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		const controller = new PlayerController(world, 'p', 'w', world.spawnPosition(), 1);
+
+		for (let index = 0; index < 600; index += 1) {
+			controller.step(move(1, 0), 1 / 60);
+		}
+
+		const yawA = controller.camera.orientationYaw;
+		const distanceA = controller.camera.currentDistance;
+		controller.step(move(1, 0), 1 / 60);
+		const yawB = controller.camera.orientationYaw;
+		const distanceB = controller.camera.currentDistance;
+
+		expect(Math.abs(angleDelta(yawA, yawB))).toBeLessThan(1e-3);
+		expect(Math.abs(distanceA - distanceB)).toBeLessThan(1e-2);
+	});
+
+	test('rapid direction reversal never blocks and turns via the shortest path', () => {
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		const controller = new PlayerController(world, 'p', 'w', world.spawnPosition(), 1);
+		controller.camera.setOrientation(Math.PI, 0.34);
+
+		controller.step(move(1, 0), 1 / 60);
+		const forwardYaw = controller.state.desiredMovementYaw;
+		controller.step(move(-1, 0), 1 / 60);
+		const backwardYaw = controller.state.desiredMovementYaw;
+
+		// The desired direction flips immediately with the input.
+		expect(Math.abs(angleDelta(forwardYaw, backwardYaw))).toBeGreaterThan(Math.PI - 0.2);
+		expect(Number.isFinite(controller.state.bodyYaw)).toBe(true);
+	});
+
+	test('body turns in place toward the camera without moving', () => {
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		const controller = new PlayerController(world, 'p', 'w', world.spawnPosition(), 1);
+		const startPosition = { ...controller.state.position };
+
+		// Swing the camera ~120 degrees, then hold still and keep looking.
+		controller.applyMouse({ x: 900, y: 0 });
+		for (let index = 0; index < 60; index += 1) {
+			controller.applyMouse({ x: 1, y: 0 });
+			controller.step(move(0, 0), 1 / 60);
+		}
+
+		const bodyToCamera = Math.abs(angleDelta(controller.state.bodyYaw, controller.state.cameraYaw));
+		expect(bodyToCamera).toBeLessThan(0.62 + 0.05);
+		expect(controller.state.position.x).toBeCloseTo(startPosition.x, 3);
+		expect(controller.state.position.z).toBeCloseTo(startPosition.z, 3);
+	});
+
+	test('body rotation is stable at 30, 60, 120 and 144 FPS', () => {
+		const finalYaw = (fps: number): number => {
+			const world = new VoxelWorld(STARTER_WORLD_SEED);
+			const controller = new PlayerController(world, 'p', 'w', world.spawnPosition(), 1);
+			controller.camera.setOrientation(Math.PI, 0.34);
+
+			const seconds = 1;
+			for (let index = 0; index < fps * seconds; index += 1) {
+				controller.step(move(1, 1), 1 / fps);
+			}
+
+			return controller.state.bodyYaw;
+		};
+
+		const at30 = finalYaw(30);
+		const at60 = finalYaw(60);
+		const at120 = finalYaw(120);
+		const at144 = finalYaw(144);
+
+		expect(Math.abs(angleDelta(at30, at60))).toBeLessThan(0.05);
+		expect(Math.abs(angleDelta(at60, at120))).toBeLessThan(0.05);
+		expect(Math.abs(angleDelta(at120, at144))).toBeLessThan(0.05);
+	});
+
+	test('full jump arc is driven by velocityY and onGround', () => {
+		const animator = new HumanoidAnimator();
+		const base = {
+			cameraYaw: Math.PI,
+			bodyYaw: Math.PI,
+			desiredMovementYaw: Math.PI,
+			velocityX: 0,
+			velocityZ: 0,
+			deltaSeconds: 1 / 60,
+			stepEvent: null
+		};
+
+		const rising = animator.update({ ...base, velocityY: 5, grounded: false });
+		expect(animator.diagnostics.locomotionState).toBe('jump_start');
+
+		let falling = rising;
+		for (let index = 0; index < 4; index += 1) {
+			falling = animator.update({ ...base, velocityY: -6, grounded: false });
+		}
+		expect(animator.diagnostics.locomotionState).toBe('airborne');
+
+		const landing = animator.update({ ...base, velocityY: 0, grounded: true });
+		expect(animator.diagnostics.locomotionState).toBe('landing');
+		// Knees flex on landing to absorb the impact.
+		expect(landing.leftKneePitch).toBeGreaterThan(0.1);
+	});
+
+	test('idle is genuinely calm with almost no root motion', () => {
+		const animator = new HumanoidAnimator();
+		let pose = animator.pose;
+		let maxRootBob = 0;
+
+		for (let index = 0; index < 180; index += 1) {
+			pose = animator.update({
+				cameraYaw: Math.PI,
+				bodyYaw: Math.PI,
+				desiredMovementYaw: Math.PI,
+				velocityX: 0,
+				velocityY: 0,
+				velocityZ: 0,
+				grounded: true,
+				deltaSeconds: 1 / 60,
+				stepEvent: null
+			});
+			maxRootBob = Math.max(maxRootBob, Math.abs(pose.rootBob));
+		}
+
+		expect(animator.diagnostics.locomotionState).toBe('idle');
+		expect(maxRootBob).toBeLessThan(0.02);
+	});
+
+	test('build raycast ignores the avatar entirely', async () => {
+		const { BlockRaycaster } = await import('./interaction/BlockRaycaster');
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		const avatar = new PlayerAvatar(DEFAULT_CHARACTER_APPEARANCE, { allowFallback: true });
+		await avatar.ready;
+
+		const raycaster = new BlockRaycaster(6);
+		const camera = new ThirdPersonCamera(1, world);
+		const player = testPlayer(world);
+		camera.setOrientation(Math.PI, 0.2);
+		camera.update(player);
+
+		// The raycaster only ever receives world block lookups. The avatar object
+		// is never part of that set, so it can never be targeted.
+		const lookups: never[] = [];
+		const result = raycaster.raycast(camera.camera, lookups);
+		expect(result).toBeNull();
+
+		// And the avatar object graph is not a block lookup mesh.
+		expect(avatar.object.name).toBe('playerAvatar');
+		avatar.dispose();
 	});
 });
 

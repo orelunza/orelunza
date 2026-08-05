@@ -3,34 +3,65 @@ import type { MouseDelta } from '../input/MouseInput';
 import type { VoxelWorld } from '../world/VoxelWorld';
 import type { PlayerState } from './PlayerState';
 
+/**
+ * Independent third-person camera for Orelunza.
+ *
+ * This class owns only camera state:
+ * - orbit yaw and pitch;
+ * - zoom distance;
+ * - shoulder framing;
+ * - obstacle and terrain correction;
+ * - the rendered PerspectiveCamera.
+ *
+ * It reads the player's position as a follow target, but never reads or writes
+ * bodyYaw, yaw, desiredMovementYaw, velocity or any other player authority.
+ * PlayerController copies orientationYaw/orientationPitch into PlayerState.
+ */
+
 const SENSITIVITY = 0.0024;
 export const MIN_CAMERA_PITCH = -0.17;
 export const MAX_CAMERA_PITCH = 1.13;
 export const MIN_CAMERA_DISTANCE = 2.2;
 export const MAX_CAMERA_DISTANCE = 10;
+
 const DEFAULT_CAMERA_DISTANCE = 6.4;
+const DEFAULT_PITCH = 0.34;
 const TARGET_HEIGHT = 1.42;
 const CAMERA_MARGIN = 0.34;
 const ZOOM_STEP = 0.0018;
-const RECENTER_DELAY_SECONDS = 1.35;
-const RECENTER_SPEED = 2.2;
-const RECENTER_MIN_SPEED = 0.6;
+const MAX_DELTA = 0.05;
+
+const SHOULDER_OFFSET_EXPLORE = 0.55;
+const SHOULDER_OFFSET_BUILD = 0.95;
+const SHOULDER_RESPONSE = 8;
+
+const FOLLOW_RESPONSE = 14;
+const PULL_IN_RESPONSE = 26;
+const EASE_OUT_RESPONSE = 6;
 
 export class ThirdPersonCamera {
 	readonly camera: PerspectiveCamera;
+
 	private yaw = Math.PI;
-	private pitch = 0.34;
+	private pitch = DEFAULT_PITCH;
 	private distance = DEFAULT_CAMERA_DISTANCE;
 	private correctedDistance = DEFAULT_CAMERA_DISTANCE;
+
+	private shoulderTarget = SHOULDER_OFFSET_EXPLORE;
+	private shoulderCurrent = SHOULDER_OFFSET_EXPLORE;
+
+	private mouseActiveTimer = 0;
+	private updateMs = 0;
+	private initialized = false;
+
 	private readonly current = new Vector3();
 	private readonly target = new Vector3();
 	private readonly direction = new Vector3();
 	private readonly desired = new Vector3();
 	private readonly sample = new Vector3();
 	private readonly origin = new Vector3();
-	private updateMs = 0;
-	private mouseLookTimer = 0;
-	private recentering = false;
+	private readonly shoulder = new Vector3();
+	private readonly collisionRight = new Vector3();
 
 	constructor(
 		aspect: number,
@@ -60,26 +91,37 @@ export class ThirdPersonCamera {
 	}
 
 	get mouseLookActive(): boolean {
-		return this.mouseLookTimer > 0;
+		return this.mouseActiveTimer > 0;
 	}
 
 	get cameraRecentering(): boolean {
-		return this.recentering;
+		return false;
 	}
 
-	setOrientation(yaw: number, pitch = 0.34): void {
-		this.yaw = yaw;
+	get shoulderFramingOffset(): number {
+		return this.shoulderCurrent;
+	}
+
+	setOrientation(yaw: number, pitch = DEFAULT_PITCH): void {
+		this.yaw = normalizeAngle(yaw);
 		this.pitch = clamp(pitch, MIN_CAMERA_PITCH, MAX_CAMERA_PITCH);
-		this.mouseLookTimer = 0;
-		this.recentering = false;
+		this.mouseActiveTimer = 0;
 	}
 
-	applyMouse(_player: PlayerState, delta: MouseDelta): void {
-		if (Math.abs(delta.x) > 0 || Math.abs(delta.y) > 0) {
-			this.mouseLookTimer = RECENTER_DELAY_SECONDS;
-			this.recentering = false;
+	setShoulderFraming(mode: 'explore' | 'build'): void {
+		this.shoulderTarget = mode === 'build' ? SHOULDER_OFFSET_BUILD : SHOULDER_OFFSET_EXPLORE;
+	}
+
+	/**
+	 * The player parameter is retained for call-site compatibility only.
+	 * Camera mouse input never mutates PlayerState.
+	 */
+	applyMouse(_player: Readonly<PlayerState>, delta: MouseDelta): void {
+		if (delta.x !== 0 || delta.y !== 0) {
+			this.mouseActiveTimer = 0.12;
 		}
-		this.yaw -= delta.x * SENSITIVITY;
+
+		this.yaw = normalizeAngle(this.yaw - delta.x * SENSITIVITY);
 		this.pitch = clamp(this.pitch + delta.y * SENSITIVITY, MIN_CAMERA_PITCH, MAX_CAMERA_PITCH);
 	}
 
@@ -91,39 +133,53 @@ export class ThirdPersonCamera {
 		);
 	}
 
-	update(player: PlayerState, deltaSeconds = 1 / 60): void {
-		const startedAt = performance.now();
-		const delta = Math.min(deltaSeconds, 0.05);
-		const horizontalSpeed = Math.hypot(player.velocity.x, player.velocity.z);
+	update(player: Readonly<PlayerState>, deltaSeconds = 1 / 60): void {
+		const startedAt = now();
+		const delta = clamp(deltaSeconds, 0, MAX_DELTA);
 
-		if (this.mouseLookTimer > 0) {
-			this.mouseLookTimer = Math.max(0, this.mouseLookTimer - delta);
+		if (this.mouseActiveTimer > 0) {
+			this.mouseActiveTimer = Math.max(0, this.mouseActiveTimer - delta);
 		}
 
-		this.recentering = false;
-		if (this.mouseLookTimer <= 0 && horizontalSpeed > RECENTER_MIN_SPEED) {
-			const before = this.yaw;
-			this.yaw = dampAngle(this.yaw, player.bodyYaw, RECENTER_SPEED, delta);
-			this.recentering = Math.abs(angleDelta(before, this.yaw)) > 0.00001;
-		}
-		player.cameraYaw = this.yaw;
-		player.pitch = this.pitch;
-		player.mouseLookActive = this.mouseLookTimer > 0;
-		player.cameraRecentering = this.recentering;
-		this.target.set(player.position.x, player.position.y + TARGET_HEIGHT, player.position.z);
+		this.shoulderCurrent = damp(
+			this.shoulderCurrent,
+			this.shoulderTarget,
+			SHOULDER_RESPONSE,
+			delta
+		);
+
+		// Horizontal camera-right vector. Both the target and camera eye receive
+		// this offset, keeping the aiming line centred while moving the avatar away
+		// from the reticle.
+		this.shoulder
+			.set(-Math.cos(this.yaw), 0, Math.sin(this.yaw))
+			.multiplyScalar(this.shoulderCurrent);
+
+		this.target.set(
+			player.position.x + this.shoulder.x,
+			player.position.y + TARGET_HEIGHT,
+			player.position.z + this.shoulder.z
+		);
+
 		const horizontal = Math.cos(this.pitch);
 		this.direction
 			.set(-Math.sin(this.yaw) * horizontal, Math.sin(this.pitch), -Math.cos(this.yaw) * horizontal)
 			.normalize();
+
 		const safeDistance = this.safeDistance(this.target, this.direction, this.distance);
-		const distanceLerp = safeDistance < this.correctedDistance ? 0.55 : 0.12;
-		this.correctedDistance += (safeDistance - this.correctedDistance) * distanceLerp;
+		const distanceResponse =
+			safeDistance < this.correctedDistance ? PULL_IN_RESPONSE : EASE_OUT_RESPONSE;
+
+		this.correctedDistance = damp(this.correctedDistance, safeDistance, distanceResponse, delta);
+
 		this.desired.copy(this.direction).multiplyScalar(this.correctedDistance).add(this.target);
 
-		if (this.current.lengthSq() === 0) {
+		if (!this.initialized) {
 			this.current.copy(this.desired);
+			this.initialized = true;
 		} else {
-			this.current.lerp(this.desired, 0.2);
+			const follow = 1 - Math.exp(-FOLLOW_RESPONSE * delta);
+			this.current.lerp(this.desired, follow);
 		}
 
 		const floorY = this.world.terrainGenerator.heightAt(this.current.x, this.current.z) + 0.45;
@@ -134,7 +190,7 @@ export class ThirdPersonCamera {
 
 		this.camera.position.copy(this.current);
 		this.camera.lookAt(this.target);
-		this.updateMs = performance.now() - startedAt;
+		this.updateMs = now() - startedAt;
 	}
 
 	resize(width: number, height: number): void {
@@ -145,13 +201,17 @@ export class ThirdPersonCamera {
 	private safeDistance(target: Vector3, direction: Vector3, desiredDistance: number): number {
 		let safe = desiredDistance;
 
+		// Sample collision rays around the camera line in camera-local space,
+		// rather than using fixed world-X offsets.
+		this.collisionRight.set(-Math.cos(this.yaw), 0, Math.sin(this.yaw)).normalize();
+
 		for (let index = 0; index < 4; index += 1) {
 			this.origin.copy(target);
 
 			if (index === 1) {
-				this.origin.x += 0.22;
+				this.origin.addScaledVector(this.collisionRight, 0.22);
 			} else if (index === 2) {
-				this.origin.x -= 0.22;
+				this.origin.addScaledVector(this.collisionRight, -0.22);
 			} else if (index === 3) {
 				this.origin.y += 0.22;
 			}
@@ -191,7 +251,13 @@ export class ThirdPersonCamera {
 		for (let distance = MIN_CAMERA_DISTANCE; distance <= maxDistance; distance += step) {
 			this.sample.copy(direction).multiplyScalar(distance).add(origin);
 
-			if (this.world.isSolidLoadedAt({ x: this.sample.x, y: this.sample.y, z: this.sample.z })) {
+			if (
+				this.world.isSolidLoadedAt({
+					x: this.sample.x,
+					y: this.sample.y,
+					z: this.sample.z
+				})
+			) {
 				return distance;
 			}
 		}
@@ -202,6 +268,10 @@ export class ThirdPersonCamera {
 
 function clamp(value: number, min: number, max: number): number {
 	return Math.max(min, Math.min(max, value));
+}
+
+function damp(current: number, target: number, response: number, deltaSeconds: number): number {
+	return current + (target - current) * (1 - Math.exp(-response * deltaSeconds));
 }
 
 export function dampAngle(
@@ -221,4 +291,8 @@ export function angleDelta(current: number, target: number): number {
 
 function normalizeAngle(value: number): number {
 	return Math.atan2(Math.sin(value), Math.cos(value));
+}
+
+function now(): number {
+	return typeof performance !== 'undefined' ? performance.now() : Date.now();
 }
