@@ -40,6 +40,7 @@ export interface WorldSaveV3 {
 	removedBlocks: BlockCoordinate[];
 	changes: BlockChange[];
 	environment: EnvironmentSaveState;
+	removedVegetationIds?: string[];
 	updatedAt: number;
 }
 
@@ -105,6 +106,9 @@ export function isWorldSaveV3(value: unknown): value is WorldSaveV3 {
 		typeof candidate.seed === 'string' &&
 		!!candidate.character &&
 		!!candidate.environment &&
+		(candidate.removedVegetationIds === undefined ||
+			(Array.isArray(candidate.removedVegetationIds) &&
+				candidate.removedVegetationIds.every((id) => typeof id === 'string'))) &&
 		Array.isArray(candidate.placedBlocks) &&
 		Array.isArray(candidate.removedBlocks)
 	);

@@ -23,7 +23,9 @@ import {
 } from './build/build-workspace';
 import { BlockBreakingSystem } from './interaction/BlockBreakingSystem';
 import { BlockPlacementSystem } from './interaction/BlockPlacementSystem';
-import { BlockRaycaster } from './interaction/BlockRaycaster';
+import { CreationRaycaster } from './interaction/CreationRaycaster';
+import { CreationRemovalSystem } from './interaction/CreationRemovalSystem';
+import type { BuildTarget } from './interaction/BuildTarget';
 import { Hotbar } from './inventory/Hotbar';
 import { Inventory } from './inventory/Inventory';
 import { BuildCursor } from './input/BuildCursor';
@@ -37,6 +39,7 @@ import { PlayerController } from './player/PlayerController';
 import { GameRenderer } from './rendering/GameRenderer';
 import { Sky } from './rendering/Sky';
 import { BlockRegistry } from './world/BlockRegistry';
+import { VegetationRemovalState } from './vegetation/VegetationRemovalState';
 import { ChunkStreamingSystem } from './world/ChunkStreamingSystem';
 import { createStarterWorld } from './world/WorldGenerator';
 import {
@@ -65,9 +68,11 @@ export class GameEngine {
 	private readonly pointerLock: PointerLockController;
 	private readonly inventory = new Inventory();
 	private readonly hotbar = new Hotbar();
-	private readonly raycaster = new BlockRaycaster(8);
+	private readonly vegetationRemovals = new VegetationRemovalState();
+	private readonly raycaster: CreationRaycaster;
 	private readonly placementSystem: BlockPlacementSystem;
 	private readonly breakingSystem: BlockBreakingSystem;
+	private readonly removalSystem: CreationRemovalSystem;
 	private readonly loop: GameLoop;
 	private readonly persistence: GamePersistence;
 	private readonly avatar: PlayerAvatar;
@@ -84,7 +89,8 @@ export class GameEngine {
 
 	private status: GameStatus = 'booting';
 	private saveStatus: SaveStatus = 'idle';
-	private target: TargetedBlock | null = null;
+	private target: BuildTarget | null = null;
+	private blockTarget: TargetedBlock | null = null;
 	private message: string | null = null;
 	private error: string | null = null;
 	private needsWorldRebuild = true;
@@ -193,7 +199,8 @@ export class GameEngine {
 		});
 		const quality = options.quality ?? 'medium';
 
-		this.renderer = new GameRenderer(options.canvas, quality);
+		this.renderer = new GameRenderer(options.canvas, quality, this.vegetationRemovals);
+		this.raycaster = new CreationRaycaster(this.renderer.vegetationInteractions, 8);
 		this.sky = new Sky(this.renderer.scene, {
 			renderer: this.renderer.renderer,
 			seed: options.seed || STARTER_WORLD_SEED,
@@ -236,6 +243,17 @@ export class GameEngine {
 			(status) => {
 				this.saveStatus = status;
 				this.emitSnapshot();
+			}
+		);
+		this.persistence.setEnvironment(this.sky);
+		this.persistence.setVegetationRemovals(this.vegetationRemovals);
+		this.removalSystem = new CreationRemovalSystem(
+			this.world,
+			this.breakingSystem,
+			this.renderer,
+			() => {
+				this.diagnostics.chunkRefreshes += 1;
+				this.persistence.markDirty();
 			}
 		);
 		this.loop = new GameLoop({
@@ -362,9 +380,11 @@ export class GameEngine {
 
 		this.status = 'build-catalog';
 		this.target = null;
+		this.blockTarget = null;
 		this.renderer.setSelection(null);
+		this.renderer.setVegetationSelection(null);
 		this.renderer.setPlacementPreview(null);
-		this.updateBuildCursorElement(false, null);
+		this.updateBuildCursorElement(false, null, null);
 		this.pointerLock.exit();
 		this.message = 'Choose a block';
 		this.emitSnapshot();
@@ -396,7 +416,9 @@ export class GameEngine {
 		this.buildMode = true;
 		this.avatar.setBuildMode(true);
 		this.target = null;
+		this.blockTarget = null;
 		this.renderer.setSelection(null);
+		this.renderer.setVegetationSelection(null);
 		this.player.camera.setShoulderFraming('build');
 
 		// Choosing a block finishes catalog interaction.
@@ -420,10 +442,12 @@ export class GameEngine {
 		this.buildMode = false;
 		this.avatar.setBuildMode(false);
 		this.target = null;
+		this.blockTarget = null;
 		this.player.camera.setShoulderFraming('explore');
 		this.renderer.setSelection(null);
+		this.renderer.setVegetationSelection(null);
 		this.renderer.setPlacementPreview(null);
-		this.updateBuildCursorElement(false, null);
+		this.updateBuildCursorElement(false, null, null);
 
 		if (this.status === 'build-catalog') {
 			this.status = 'playing';
@@ -467,7 +491,7 @@ export class GameEngine {
 		this.keyboard.destroy();
 		this.mouse.destroy();
 		this.pointerLock.destroy();
-		this.updateBuildCursorElement(false, null);
+		this.updateBuildCursorElement(false, null, null);
 		this.avatar.dispose();
 		this.chunkStreaming.dispose();
 		this.sky.dispose();
@@ -581,30 +605,38 @@ export class GameEngine {
 			this.needsWorldRebuild = false;
 		}
 
-		const canTargetBlock = this.status === 'playing' && this.buildMode && this.pointerLock.isLocked;
-		this.target = canTargetBlock
+		const canTargetCreation =
+			this.status === 'playing' && this.buildMode && this.pointerLock.isLocked;
+		const raycastResult = canTargetCreation
 			? this.raycaster.raycast(
 					this.player.camera.camera,
 					this.world,
 					this.player.camera.currentDistance,
 					this.buildCursor.position
 				)
-			: null;
-		this.renderer.setSelection(canTargetBlock ? (this.target?.block ?? null) : null);
+			: { target: null, blockTarget: null };
+		this.target = raycastResult.target;
+		this.blockTarget = raycastResult.blockTarget;
+		this.renderer.setSelection(this.target?.kind === 'block' ? this.target.block.block : null);
+		this.renderer.setVegetationSelection(this.target?.kind === 'vegetation' ? this.target : null);
 
 		const selected = this.currentSelectedBlock();
-		const placementPreview = canTargetBlock
-			? this.placementSystem.preview(this.target, selected)
+		const placementPreview = canTargetCreation
+			? this.placementSystem.preview(this.blockTarget, selected)
 			: null;
 		this.renderer.setPlacementPreview(
 			placementPreview?.position ?? null,
 			placementPreview?.allowed ?? false
 		);
 		this.updateBuildCursorElement(
-			canTargetBlock,
+			canTargetCreation,
+			this.target,
 			placementPreview ? placementPreview.allowed : null
 		);
-		this.updateBuildPose(canTargetBlock, placementPreview?.position ?? this.target?.block ?? null);
+		this.updateBuildPose(
+			canTargetCreation,
+			this.resolveInteractionPoint(placementPreview?.position ?? null)
+		);
 
 		// When camera collision pulls the eye very close to the player, hide the
 		// avatar instead of rendering the camera inside the head or torso.
@@ -777,16 +809,21 @@ export class GameEngine {
 	}
 
 	private breakTarget(): void {
-		if (this.breakingSystem.break(this.target)) {
-			this.avatar.swingBuildTool();
-			this.message = 'Block collected';
+		const removed = this.removalSystem.remove(this.target);
+
+		if (!removed) {
+			return;
 		}
+
+		this.avatar.swingBuildTool();
+		this.target = null;
+		this.message = removed.kind === 'vegetation' ? `Removed ${removed.label}` : 'Block collected';
 	}
 
 	private placeSelectedBlock(): void {
 		const selected = this.currentSelectedBlock();
 
-		if (this.placementSystem.place(this.target, selected, this.creativeBuild)) {
+		if (this.placementSystem.place(this.blockTarget, selected, this.creativeBuild)) {
 			this.avatar.swingBuildTool();
 			this.message = `Placed ${selected ?? 'block'}`;
 		} else {
@@ -802,7 +839,11 @@ export class GameEngine {
 		return this.inventory.getSelectedStack(this.hotbar.selectedIndex)?.type ?? null;
 	}
 
-	private updateBuildCursorElement(visible: boolean, placementAllowed: boolean | null): void {
+	private updateBuildCursorElement(
+		visible: boolean,
+		target: BuildTarget | null,
+		placementAllowed: boolean | null
+	): void {
 		const element = this.options.buildCursorElement;
 
 		if (!element) {
@@ -812,17 +853,76 @@ export class GameEngine {
 		element.hidden = !visible;
 
 		if (!visible) {
+			element.dataset.target = 'none';
+			element.dataset.label = '';
 			return;
 		}
 
 		const cursor = this.buildCursor.position;
 		element.style.left = `${(cursor.x + 1) * 50}%`;
 		element.style.top = `${(1 - cursor.y) * 50}%`;
+
+		if (target?.kind === 'vegetation') {
+			element.dataset.target = 'vegetation';
+			element.dataset.state = 'valid';
+			element.dataset.label = `Remove ${target.label}`;
+			return;
+		}
+
+		if (target?.kind === 'block') {
+			const definition = BlockRegistry.get(target.block.type);
+
+			if (target.block.type === 'water') {
+				element.dataset.target = 'invalid';
+				element.dataset.state = 'invalid';
+				element.dataset.label = 'Water requires a terrain tool';
+			} else {
+				element.dataset.target = 'block';
+				element.dataset.state = 'valid';
+				element.dataset.label = `Break ${definition.label}`;
+			}
+
+			return;
+		}
+
+		element.dataset.target = placementAllowed === false ? 'invalid' : 'none';
 		element.dataset.state =
 			placementAllowed === true ? 'valid' : placementAllowed === false ? 'invalid' : 'idle';
+		element.dataset.label = placementAllowed === false ? 'Cannot place here' : '';
 	}
 
-	private updateBuildPose(active: boolean, block: BlockCoordinate | null): void {
+	private resolveInteractionPoint(placementPosition: BlockCoordinate | null): Vector3 | null {
+		if (this.target?.kind === 'vegetation') {
+			this.interactionPoint.set(
+				this.target.position.x,
+				this.target.position.y,
+				this.target.position.z
+			);
+			return this.interactionPoint;
+		}
+
+		if (placementPosition) {
+			this.interactionPoint.set(
+				placementPosition.x + 0.5,
+				placementPosition.y + 0.5,
+				placementPosition.z + 0.5
+			);
+			return this.interactionPoint;
+		}
+
+		if (this.target?.kind === 'block') {
+			this.interactionPoint.set(
+				this.target.block.block.x + 0.5,
+				this.target.block.block.y + 0.5,
+				this.target.block.block.z + 0.5
+			);
+			return this.interactionPoint;
+		}
+
+		return null;
+	}
+
+	private updateBuildPose(active: boolean, point: Vector3 | null): void {
 		if (!active) {
 			this.avatar.clearLookTarget();
 
@@ -835,15 +935,14 @@ export class GameEngine {
 			return;
 		}
 
-		if (!block) {
+		if (!point) {
 			this.avatar.setHandTarget();
 			this.avatar.clearLookTarget();
 			return;
 		}
 
-		this.interactionPoint.set(block.x + 0.5, block.y + 0.5, block.z + 0.5);
-		this.avatar.lookAtWorldPosition(this.interactionPoint);
-		this.avatar.setHandTarget(this.interactionPoint);
+		this.avatar.lookAtWorldPosition(point);
+		this.avatar.setHandTarget(point);
 	}
 
 	private restoreBuildWorkspace(): void {
@@ -984,9 +1083,11 @@ export class GameEngine {
 			this.pointerLock.isLocked ? 1 : 0,
 			this.saveStatus,
 			this.world.terrainGenerator.zoneAt(position.x, position.z),
-			this.target?.block
-				? `${this.target.block.x},${this.target.block.y},${this.target.block.z}`
-				: '',
+			this.target?.kind === 'block'
+				? `block:${this.target.block.block.x},${this.target.block.block.y},${this.target.block.block.z}`
+				: this.target?.kind === 'vegetation'
+					? `vegetation:${this.target.instanceId}`
+					: '',
 			this.buildMode ? 1 : 0,
 			this.status === 'build-catalog' ? 1 : 0,
 			this.selectedBuildBlock ?? '',
@@ -1023,7 +1124,7 @@ export class GameEngine {
 				this.player.state.position.x,
 				this.player.state.position.z
 			),
-			targetedBlock: this.target,
+			targetedBlock: this.target?.kind === 'block' ? this.target.block : null,
 			buildMode: this.buildMode,
 			buildCatalogOpen: this.status === 'build-catalog',
 			selectedBuildBlock: this.selectedBuildBlock,

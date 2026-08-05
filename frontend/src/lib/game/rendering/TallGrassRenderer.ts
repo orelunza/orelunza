@@ -19,6 +19,12 @@ import {
 import type { VoxelWorld } from '../world/VoxelWorld';
 import { CHUNK_SIZE, chunkKey, type ChunkCoordinate } from '../world/voxel-types';
 import type { QualitySettings } from './QualitySettings';
+import {
+	VegetationInteractionIndex,
+	type VegetationInteractionInstance
+} from '../vegetation/VegetationInteractionIndex';
+import { VegetationRemovalState } from '../vegetation/VegetationRemovalState';
+import { tallGrassInstanceId } from '../vegetation/VegetationInstanceId';
 
 export interface TallGrassProfile {
 	density: number;
@@ -28,8 +34,13 @@ export interface TallGrassProfile {
 
 interface TallGrassChunkEntry {
 	mesh: InstancedMesh;
+	chunk: ChunkCoordinate;
 	centerX: number;
 	centerZ: number;
+}
+
+interface IndexedTallGrassPlacement extends TallGrassPlacement {
+	instanceId: string;
 }
 
 interface UniformValue<T> {
@@ -91,7 +102,9 @@ export class TallGrassRenderer {
 
 	constructor(
 		private readonly scene: Scene,
-		quality: QualitySettings
+		quality: QualitySettings,
+		private readonly interactionIndex = new VegetationInteractionIndex(),
+		private readonly removalState = new VegetationRemovalState()
 	) {
 		this.object.name = 'orelunzaTallGrass';
 		this.profile = resolveTallGrassProfile(quality);
@@ -146,6 +159,25 @@ export class TallGrassRenderer {
 
 		this.removeChunk(chunk);
 		const placements = this.collectPlacements(world, chunk);
+		const interactions = placements.map((placement): VegetationInteractionInstance => ({
+			instanceId: placement.instanceId,
+			layer: 'tall-grass',
+			speciesId: 'tall_grass',
+			label: 'Tall grass',
+			family: 'grass',
+			chunk: { ...chunk },
+			position: {
+				x: placement.x,
+				y: placement.y + placement.height * 0.5,
+				z: placement.z
+			},
+			halfExtents: {
+				x: Math.max(0.22, placement.width * 0.42),
+				y: Math.max(0.3, placement.height * 0.52),
+				z: Math.max(0.22, placement.width * 0.42)
+			}
+		}));
+		this.interactionIndex.replaceChunk('tall-grass', chunk, interactions);
 
 		if (placements.length === 0) {
 			return;
@@ -182,6 +214,7 @@ export class TallGrassRenderer {
 
 		this.chunks.set(chunkKey(chunk), {
 			mesh,
+			chunk: { ...chunk },
 			centerX: chunk.x * CHUNK_SIZE + CHUNK_SIZE * 0.5,
 			centerZ: chunk.z * CHUNK_SIZE + CHUNK_SIZE * 0.5
 		});
@@ -190,6 +223,8 @@ export class TallGrassRenderer {
 	removeChunk(chunk: ChunkCoordinate): void {
 		const key = chunkKey(chunk);
 		const entry = this.chunks.get(key);
+
+		this.interactionIndex.removeChunk('tall-grass', chunk);
 
 		if (!entry) {
 			return;
@@ -204,6 +239,7 @@ export class TallGrassRenderer {
 		for (const entry of this.chunks.values()) {
 			this.object.remove(entry.mesh);
 			entry.mesh.dispose();
+			this.interactionIndex.removeChunk('tall-grass', entry.chunk);
 		}
 
 		this.chunks.clear();
@@ -257,8 +293,11 @@ export class TallGrassRenderer {
 		this.material.dispose();
 	}
 
-	private collectPlacements(world: VoxelWorld, chunk: ChunkCoordinate): TallGrassPlacement[] {
-		const placements: TallGrassPlacement[] = [];
+	private collectPlacements(
+		world: VoxelWorld,
+		chunk: ChunkCoordinate
+	): IndexedTallGrassPlacement[] {
+		const placements: IndexedTallGrassPlacement[] = [];
 		const seedValue = tallGrassSeedValue(world.seed);
 		const startX = chunk.x * CHUNK_SIZE;
 		const startZ = chunk.z * CHUNK_SIZE;
@@ -286,7 +325,11 @@ export class TallGrassRenderer {
 				);
 
 				if (placement) {
-					placements.push(placement);
+					const instanceId = tallGrassInstanceId(x, surfaceY, z);
+
+					if (!this.removalState.has(instanceId)) {
+						placements.push({ ...placement, instanceId });
+					}
 				}
 			}
 		}

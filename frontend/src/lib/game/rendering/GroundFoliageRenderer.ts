@@ -24,6 +24,12 @@ import { VegetationRegistry } from '../vegetation/VegetationRegistry';
 import type { VoxelWorld } from '../world/VoxelWorld';
 import { CHUNK_SIZE, chunkKey, type ChunkCoordinate } from '../world/voxel-types';
 import type { QualitySettings } from './QualitySettings';
+import {
+	VegetationInteractionIndex,
+	type VegetationInteractionInstance
+} from '../vegetation/VegetationInteractionIndex';
+import { VegetationRemovalState } from '../vegetation/VegetationRemovalState';
+import { groundVegetationInstanceId } from '../vegetation/VegetationInstanceId';
 
 export interface GroundFoliageProfile {
 	density: number;
@@ -37,8 +43,18 @@ interface UniformValue<T> {
 
 interface GroundFoliageChunkEntry {
 	meshes: InstancedMesh[];
+	chunk: ChunkCoordinate;
 	centerX: number;
 	centerZ: number;
+}
+
+interface IndexedGroundVegetationPlacement extends GroundVegetationPlacement {
+	instanceId: string;
+}
+
+interface CollectedGroundFoliage {
+	grouped: Map<GroundShape, IndexedGroundVegetationPlacement[]>;
+	interactions: VegetationInteractionInstance[];
 }
 
 export function resolveGroundFoliageProfile(quality: QualitySettings): GroundFoliageProfile {
@@ -76,7 +92,9 @@ export class GroundFoliageRenderer {
 
 	constructor(
 		private readonly scene: Scene,
-		quality: QualitySettings
+		quality: QualitySettings,
+		private readonly interactionIndex = new VegetationInteractionIndex(),
+		private readonly removalState = new VegetationRemovalState()
 	) {
 		this.object.name = 'orelunzaGroundFoliage';
 		this.profile = resolveGroundFoliageProfile(quality);
@@ -141,10 +159,11 @@ export class GroundFoliageRenderer {
 		}
 
 		this.removeChunk(chunk);
-		const grouped = this.collectPlacements(world, chunk);
+		const collected = this.collectPlacements(world, chunk);
+		this.interactionIndex.replaceChunk('ground-foliage', chunk, collected.interactions);
 		const meshes: InstancedMesh[] = [];
 
-		for (const [shape, placements] of grouped) {
+		for (const [shape, placements] of collected.grouped) {
 			if (placements.length === 0) {
 				continue;
 			}
@@ -187,6 +206,7 @@ export class GroundFoliageRenderer {
 
 		this.chunks.set(chunkKey(chunk), {
 			meshes,
+			chunk: { ...chunk },
 			centerX: chunk.x * CHUNK_SIZE + CHUNK_SIZE * 0.5,
 			centerZ: chunk.z * CHUNK_SIZE + CHUNK_SIZE * 0.5
 		});
@@ -195,6 +215,8 @@ export class GroundFoliageRenderer {
 	removeChunk(chunk: ChunkCoordinate): void {
 		const key = chunkKey(chunk);
 		const entry = this.chunks.get(key);
+
+		this.interactionIndex.removeChunk('ground-foliage', chunk);
 
 		if (!entry) {
 			return;
@@ -214,6 +236,8 @@ export class GroundFoliageRenderer {
 				this.object.remove(mesh);
 				mesh.dispose();
 			}
+
+			this.interactionIndex.removeChunk('ground-foliage', entry.chunk);
 		}
 
 		this.chunks.clear();
@@ -280,11 +304,9 @@ export class GroundFoliageRenderer {
 		this.materials.clear();
 	}
 
-	private collectPlacements(
-		world: VoxelWorld,
-		chunk: ChunkCoordinate
-	): Map<GroundShape, GroundVegetationPlacement[]> {
-		const grouped = new Map<GroundShape, GroundVegetationPlacement[]>();
+	private collectPlacements(world: VoxelWorld, chunk: ChunkCoordinate): CollectedGroundFoliage {
+		const grouped = new Map<GroundShape, IndexedGroundVegetationPlacement[]>();
+		const interactions: VegetationInteractionInstance[] = [];
 		const seedValue = vegetationSeedValue(world.seed);
 		const startX = chunk.x * CHUNK_SIZE;
 		const startZ = chunk.z * CHUNK_SIZE;
@@ -315,14 +337,30 @@ export class GroundFoliageRenderer {
 					continue;
 				}
 
-				const shape = VegetationRegistry.ground(placement.speciesId).shape;
-				const list = grouped.get(shape) ?? [];
-				list.push(placement);
-				grouped.set(shape, list);
+				const species = VegetationRegistry.ground(placement.speciesId);
+				const instanceId = groundVegetationInstanceId(placement.speciesId, x, surfaceY, z);
+
+				if (this.removalState.has(instanceId)) {
+					continue;
+				}
+
+				const indexedPlacement = { ...placement, instanceId };
+				const list = grouped.get(species.shape) ?? [];
+				list.push(indexedPlacement);
+				grouped.set(species.shape, list);
+				interactions.push(
+					interactionForGroundPlacement(
+						indexedPlacement,
+						species.label,
+						species.family,
+						species.shape,
+						chunk
+					)
+				);
 			}
 		}
 
-		return grouped;
+		return { grouped, interactions };
 	}
 
 	private geometryFor(shape: GroundShape): BufferGeometry {
@@ -425,6 +463,55 @@ export class GroundFoliageRenderer {
 				);
 		};
 		material.customProgramCacheKey = () => `orelunza-ground-foliage-v1:${shape}`;
+	}
+}
+
+function interactionForGroundPlacement(
+	placement: IndexedGroundVegetationPlacement,
+	label: string,
+	family: VegetationInteractionInstance['family'],
+	shape: GroundShape,
+	chunk: ChunkCoordinate
+): VegetationInteractionInstance {
+	const bounds = groundBounds(shape, placement.scale);
+
+	return {
+		instanceId: placement.instanceId,
+		layer: 'ground-foliage',
+		speciesId: placement.speciesId,
+		label,
+		family,
+		chunk: { ...chunk },
+		position: {
+			x: placement.x,
+			y: placement.y + bounds.height * 0.5,
+			z: placement.z
+		},
+		halfExtents: {
+			x: bounds.radius,
+			y: Math.max(0.04, bounds.height * 0.5),
+			z: bounds.radius
+		}
+	};
+}
+
+function groundBounds(shape: GroundShape, scale: number): { radius: number; height: number } {
+	const safeScale = Math.max(0.1, scale);
+
+	switch (shape) {
+		case 'moss':
+			return { radius: 0.48 * safeScale, height: 0.1 * safeScale };
+		case 'flower':
+			return { radius: 0.26 * safeScale, height: 0.92 * safeScale };
+		case 'fern':
+			return { radius: 0.5 * safeScale, height: 0.72 * safeScale };
+		case 'tropical-fern':
+			return { radius: 0.72 * safeScale, height: 1.15 * safeScale };
+		case 'shrub':
+			return { radius: 0.62 * safeScale, height: 0.85 * safeScale };
+		case 'short-grass':
+		default:
+			return { radius: 0.38 * safeScale, height: 0.46 * safeScale };
 	}
 }
 

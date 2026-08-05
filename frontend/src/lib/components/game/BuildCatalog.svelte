@@ -55,7 +55,7 @@
 	let searchInput = $state<HTMLInputElement | null>(null);
 	let storageReady = $state(false);
 	let workspace = $state<BuildWorkspaceState>(
-		createBuildWorkspaceState(inventory.hotbar.map((slot) => slot.stack?.type ?? null))
+		createBuildWorkspaceState((() => inventory.hotbar.map((slot) => slot.stack?.type ?? null))())
 	);
 
 	let quantities = $derived.by(() => {

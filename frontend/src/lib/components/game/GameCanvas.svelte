@@ -140,6 +140,8 @@
 		hidden
 		class="build-cursor pointer-events-none absolute z-30 size-6 -translate-x-1/2 -translate-y-1/2"
 		data-state="idle"
+		data-target="none"
+		data-label=""
 		aria-hidden="true"
 	>
 		<span class="horizontal"></span>
@@ -151,14 +153,42 @@
 <style>
 	.build-cursor {
 		--cursor-color: rgba(255, 255, 255, 0.9);
-		filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.8));
+		filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.82));
 	}
 
-	:global(.build-cursor[data-state='valid']) {
+	.build-cursor::after {
+		position: absolute;
+		top: 1.85rem;
+		left: 50%;
+		width: max-content;
+		max-width: 12rem;
+		transform: translateX(-50%);
+		border: 1px solid rgba(255, 255, 255, 0.12);
+		border-radius: 0.2rem;
+		background: rgba(18, 22, 18, 0.82);
+		padding: 0.22rem 0.42rem;
+		color: var(--cursor-color);
+		content: attr(data-label);
+		font-size: 0.68rem;
+		font-weight: 650;
+		line-height: 1;
+		white-space: nowrap;
+		backdrop-filter: blur(5px);
+	}
+
+	:global(.build-cursor[data-label=''])::after {
+		display: none;
+	}
+
+	:global(.build-cursor[data-target='block']) {
 		--cursor-color: #f97316;
 	}
 
-	:global(.build-cursor[data-state='invalid']) {
+	:global(.build-cursor[data-target='vegetation']) {
+		--cursor-color: #84cc16;
+	}
+
+	:global(.build-cursor[data-target='invalid']) {
 		--cursor-color: #ef4444;
 	}
 
@@ -166,6 +196,10 @@
 	.build-cursor .vertical {
 		position: absolute;
 		background: var(--cursor-color);
+		transition:
+			transform 80ms ease,
+			width 80ms ease,
+			height 80ms ease;
 	}
 
 	.build-cursor .horizontal {
@@ -190,5 +224,46 @@
 		height: 4px;
 		border-radius: 999px;
 		background: var(--cursor-color);
+	}
+
+	:global(.build-cursor[data-target='none']) .horizontal,
+	:global(.build-cursor[data-target='none']) .vertical {
+		display: none;
+	}
+
+	:global(.build-cursor[data-target='vegetation']) .horizontal,
+	:global(.build-cursor[data-target='vegetation']) .vertical {
+		top: 5px;
+		left: 2px;
+		display: block;
+		width: 13px;
+		height: 8px;
+		border-radius: 100% 0 100% 0;
+		transform: rotate(-32deg);
+		transform-origin: 100% 100%;
+	}
+
+	:global(.build-cursor[data-target='vegetation']) .vertical {
+		top: 10px;
+		left: 9px;
+		transform: rotate(148deg);
+	}
+
+	:global(.build-cursor[data-target='vegetation']) .dot {
+		top: 10px;
+		left: 11px;
+		width: 2px;
+		height: 11px;
+		border-radius: 1px;
+		transform: rotate(28deg);
+		transform-origin: top;
+	}
+
+	:global(.build-cursor[data-target='invalid']) .horizontal {
+		transform: rotate(45deg);
+	}
+
+	:global(.build-cursor[data-target='invalid']) .vertical {
+		transform: rotate(45deg);
 	}
 </style>

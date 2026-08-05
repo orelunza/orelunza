@@ -20,12 +20,20 @@ import { chunkKey, type BlockCoordinate, type ChunkCoordinate } from '../world/v
 import type { ChunkStreamingChanges } from '../world/ChunkStreamingSystem';
 import { TallGrassRenderer } from './TallGrassRenderer';
 import { GroundFoliageRenderer } from './GroundFoliageRenderer';
+import { VegetationSelectionOutline } from './VegetationSelectionOutline';
+import {
+	VegetationInteractionIndex,
+	type VegetationInteractionInstance
+} from '../vegetation/VegetationInteractionIndex';
+import { VegetationRemovalState } from '../vegetation/VegetationRemovalState';
 
 export class GameRenderer {
 	readonly scene = new Scene();
 	readonly renderer: WebGLRenderer;
 	readonly selection = new SelectionOutline();
 	readonly placementPreview = new PlacementPreview();
+	readonly vegetationSelection = new VegetationSelectionOutline();
+	readonly vegetationInteractions = new VegetationInteractionIndex();
 
 	readonly quality: QualitySettings;
 
@@ -37,7 +45,8 @@ export class GameRenderer {
 
 	constructor(
 		readonly canvas: HTMLCanvasElement,
-		quality: RenderQuality = 'medium'
+		quality: RenderQuality = 'medium',
+		private readonly vegetationRemovals = new VegetationRemovalState()
 	) {
 		this.quality = resolveQualitySettings(quality);
 		this.renderer = new WebGLRenderer({
@@ -59,12 +68,26 @@ export class GameRenderer {
 		// quality profile; configure the type once here.
 		this.renderer.shadowMap.enabled = this.quality.shadows;
 		this.renderer.shadowMap.type = PCFSoftShadowMap;
-		this.tallGrass = new TallGrassRenderer(this.scene, this.quality);
-		this.groundFoliage = new GroundFoliageRenderer(this.scene, this.quality);
+		this.tallGrass = new TallGrassRenderer(
+			this.scene,
+			this.quality,
+			this.vegetationInteractions,
+			this.vegetationRemovals
+		);
+		this.groundFoliage = new GroundFoliageRenderer(
+			this.scene,
+			this.quality,
+			this.vegetationInteractions,
+			this.vegetationRemovals
+		);
 
 		// Lighting is owned by EnvironmentLighting (dynamic sun/moon), so the
 		// renderer no longer adds static lights of its own.
-		this.scene.add(this.selection.object, this.placementPreview.object);
+		this.scene.add(
+			this.selection.object,
+			this.placementPreview.object,
+			this.vegetationSelection.object
+		);
 	}
 
 	get lookups(): BlockInstanceLookup[] {
@@ -155,6 +178,27 @@ export class GameRenderer {
 		this.placementPreview.setTarget(block, allowed);
 	}
 
+	setVegetationSelection(target: VegetationInteractionInstance | null): void {
+		this.vegetationSelection.setTarget(target);
+	}
+
+	removeVegetation(world: VoxelWorld, instanceId: string): VegetationInteractionInstance | null {
+		const instance = this.vegetationInteractions.get(instanceId);
+
+		if (!instance || !this.vegetationRemovals.markRemoved(instanceId)) {
+			return null;
+		}
+
+		if (instance.layer === 'tall-grass') {
+			this.tallGrass.replaceChunk(world, instance.chunk);
+		} else {
+			this.groundFoliage.replaceChunk(world, instance.chunk);
+		}
+
+		this.vegetationSelection.setTarget(null);
+		return instance;
+	}
+
 	updateVegetation(
 		cameraPosition: Readonly<Vector3>,
 		deltaSeconds: number,
@@ -174,6 +218,7 @@ export class GameRenderer {
 		this.blockMeshes = [];
 		this.selection.dispose();
 		this.placementPreview.dispose();
+		this.vegetationSelection.dispose();
 		this.tallGrass.dispose();
 		this.groundFoliage.dispose();
 		this.meshFactory.dispose();
