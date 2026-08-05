@@ -62,6 +62,7 @@ export interface GameSnapshot {
 
 export interface GameEngineOptions {
 	canvas: HTMLCanvasElement;
+	buildCursorElement?: HTMLElement;
 	worldId: string;
 	playerId: string;
 	regionName: string;

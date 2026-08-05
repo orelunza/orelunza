@@ -1,5 +1,6 @@
 import { Scene, WebGLRenderer, type Camera } from 'three';
 import { addWorldLighting } from './Lighting';
+import { PlacementPreview } from './PlacementPreview';
 import { SelectionOutline } from './SelectionOutline';
 import { BlockMeshFactory, type BlockInstanceLookup } from '../world/BlockMeshFactory';
 import type { VoxelWorld } from '../world/VoxelWorld';
@@ -10,6 +11,7 @@ export class GameRenderer {
 	readonly scene = new Scene();
 	readonly renderer: WebGLRenderer;
 	readonly selection = new SelectionOutline();
+	readonly placementPreview = new PlacementPreview();
 
 	private readonly meshFactory = new BlockMeshFactory();
 	private readonly meshesByChunk = new Map<string, BlockInstanceLookup[]>();
@@ -27,7 +29,7 @@ export class GameRenderer {
 		this.renderer.shadowMap.enabled = false;
 
 		addWorldLighting(this.scene);
-		this.scene.add(this.selection.object);
+		this.scene.add(this.selection.object, this.placementPreview.object);
 	}
 
 	get lookups(): BlockInstanceLookup[] {
@@ -112,6 +114,10 @@ export class GameRenderer {
 		this.selection.setTarget(block);
 	}
 
+	setPlacementPreview(block: BlockCoordinate | null, allowed = false): void {
+		this.placementPreview.setTarget(block, allowed);
+	}
+
 	render(camera: Camera): void {
 		this.renderer.render(this.scene, camera);
 	}
@@ -120,6 +126,7 @@ export class GameRenderer {
 		this.clearChunkMeshes();
 		this.blockMeshes = [];
 		this.selection.dispose();
+		this.placementPreview.dispose();
 		this.meshFactory.dispose();
 		this.renderer.dispose();
 	}

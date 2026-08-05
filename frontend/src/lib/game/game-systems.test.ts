@@ -4,6 +4,7 @@ import {
 	AnimationMixer,
 	Bone,
 	Box3,
+	PerspectiveCamera,
 	QuaternionKeyframeTrack,
 	Vector3,
 	VectorKeyframeTrack
@@ -20,6 +21,7 @@ import {
 import { BlockPlacementSystem } from './interaction/BlockPlacementSystem';
 import { Hotbar } from './inventory/Hotbar';
 import { Inventory } from './inventory/Inventory';
+import { BuildCursor } from './input/BuildCursor';
 import { KeyboardInput } from './input/KeyboardInput';
 import {
 	HUMANOID_ANIMATION_STATES,
@@ -1011,7 +1013,46 @@ describe('humanoid avatar rig and animation', () => {
 	});
 });
 
+test('shows a lightweight hammer only while build mode is active', async () => {
+	const world = new VoxelWorld(STARTER_WORLD_SEED);
+	const avatar = new PlayerAvatar(DEFAULT_CHARACTER_APPEARANCE, { allowFallback: true });
+	await avatar.ready;
+	const hammer = avatar.object.getObjectByName('buildHammer');
+
+	expect(hammer).toBeDefined();
+	expect(hammer?.visible).toBe(false);
+
+	avatar.setBuildMode(true);
+	expect(hammer?.visible).toBe(true);
+
+	avatar.swingBuildTool();
+	avatar.update(testPlayer(world), false, 1 / 60);
+	expect(Number.isFinite(hammer?.rotation.x ?? Number.NaN)).toBe(true);
+
+	avatar.setBuildMode(false);
+	expect(hammer?.visible).toBe(false);
+	avatar.dispose();
+});
+
 describe('player physics', () => {
+	test('moves the build cursor freely before forwarding overflow to the camera', () => {
+		const cursor = new BuildCursor();
+		const freeMove = cursor.move({ x: 100, y: 50 }, 1000, 500);
+
+		expect(freeMove.position.x).toBeCloseTo(0.2, 6);
+		expect(freeMove.position.y).toBeCloseTo(-0.2, 6);
+		expect(freeMove.cameraDelta).toEqual({ x: 0, y: 0 });
+
+		const edgeMove = cursor.move({ x: 1000, y: 1000 }, 1000, 500);
+		expect(edgeMove.position.x).toBeLessThanOrEqual(0.9);
+		expect(edgeMove.position.y).toBeGreaterThanOrEqual(-0.84);
+		expect(edgeMove.cameraDelta.x).toBeGreaterThan(0);
+		expect(edgeMove.cameraDelta.y).toBeGreaterThan(0);
+
+		cursor.reset();
+		expect(cursor.position).toEqual({ x: 0, y: 0 });
+	});
+
 	test('normalizes diagonal movement input', () => {
 		const windowTarget = new FakeWindow();
 		const input = new KeyboardInput(windowTarget as unknown as Window);
@@ -1046,6 +1087,18 @@ describe('player physics', () => {
 		expect(input.consumeCommands()).toMatchObject({
 			build: false,
 			catalog: true
+		});
+		input.destroy();
+	});
+
+	test('recenters the independent build cursor with R', () => {
+		const windowTarget = new FakeWindow();
+		const input = new KeyboardInput(windowTarget as unknown as Window);
+
+		windowTarget.press('KeyR');
+
+		expect(input.consumeCommands()).toMatchObject({
+			recenterBuildCursor: true
 		});
 		input.destroy();
 	});
@@ -1525,6 +1578,35 @@ describe('inventory and placement', () => {
 		expect(inventory.getSelectedStack(1)?.quantity).toBe(33);
 	});
 
+	test('previews the exact destination cell and whether placement is allowed', () => {
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		world.loadChunk({ x: 0, z: 0 });
+		world.setBlock({ x: 6, y: 20, z: 6 }, 'stone');
+		const controller = new PlayerController(world, 'p', 'w', { x: 10.5, y: 20, z: 10.5 }, 1);
+		const system = new BlockPlacementSystem(
+			world,
+			new Inventory(),
+			controller.state,
+			controller.physics.collider,
+			() => undefined
+		);
+
+		expect(
+			system.preview(
+				{
+					block: { x: 6, y: 20, z: 6 },
+					normal: { x: 0, y: 1, z: 0 },
+					type: 'stone'
+				},
+				'brick'
+			)
+		).toEqual({
+			position: { x: 6, y: 21, z: 6 },
+			allowed: true,
+			liftsPlayer: false
+		});
+	});
+
 	test('pillar-builds beneath the player and lifts them onto the new block', () => {
 		const world = new VoxelWorld(STARTER_WORLD_SEED);
 		world.loadChunk({ x: 0, z: 0 });
@@ -1950,6 +2032,31 @@ describe('rewritten locomotion, camera and avatar contracts', () => {
 
 		expect(animator.diagnostics.locomotionState).toBe('idle');
 		expect(maxRootBob).toBeLessThan(0.02);
+	});
+
+	test('casts through the independent build cursor position instead of only screen center', async () => {
+		const { BlockRaycaster } = await import('./interaction/BlockRaycaster');
+		const camera = new PerspectiveCamera(60, 1, 0.1, 100);
+		camera.position.set(5.5, 22.5, 10.5);
+		camera.lookAt(5.5, 22.5, 5.5);
+		camera.updateMatrixWorld(true);
+
+		const world = {
+			getLoadedBlock(position: { x: number; y: number; z: number }) {
+				return BlockRegistry.create(
+					position.x === 5 && position.y === 20 && position.z === 5 ? 'brick' : 'air',
+					position
+				);
+			}
+		} as VoxelWorld;
+		const raycaster = new BlockRaycaster(8);
+
+		expect(raycaster.raycast(camera, world, 0, { x: 0, y: 0 })).toBeNull();
+		expect(raycaster.raycast(camera, world, 0, { x: 0, y: -0.72 })?.block).toEqual({
+			x: 5,
+			y: 20,
+			z: 5
+		});
 	});
 
 	test('voxel raycast targets the exact cell face independently from rendered geometry', async () => {

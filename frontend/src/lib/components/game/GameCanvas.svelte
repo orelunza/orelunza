@@ -25,7 +25,7 @@
 				token: number;
 		  };
 
-	interface Props extends Omit<GameEngineOptions, 'canvas' | 'onSnapshot'> {
+	interface Props extends Omit<GameEngineOptions, 'canvas' | 'buildCursorElement' | 'onSnapshot'> {
 		onSnapshot?: (snapshot: GameSnapshot) => void;
 		command?: GameCommand;
 	}
@@ -43,16 +43,18 @@
 	}: Props = $props();
 
 	let canvas = $state<HTMLCanvasElement | null>(null);
+	let buildCursorElement = $state<HTMLDivElement | null>(null);
 	let engine: GameEngine | null = null;
 	let lastCommandToken = 0;
 
 	onMount(() => {
-		if (!canvas) {
+		if (!canvas || !buildCursorElement) {
 			return;
 		}
 
 		engine = new GameEngine({
 			canvas,
+			buildCursorElement,
 			worldId,
 			playerId,
 			regionName,
@@ -120,14 +122,73 @@
 	});
 </script>
 
-<canvas
-	bind:this={canvas}
-	class="h-full w-full bg-[#131619] outline-none"
-	tabindex="0"
-	aria-label="Orelunza voxel world"
-	data-testid="game-canvas"
-	data-engine="three"
-	data-camera="third-person"
-	data-terrain="natural-low-poly"
-	data-controls="camera-relative"
-></canvas>
+<div class="relative h-full w-full">
+	<canvas
+		bind:this={canvas}
+		class="absolute inset-0 h-full w-full bg-[#131619] outline-none"
+		tabindex="0"
+		aria-label="Orelunza voxel world"
+		data-testid="game-canvas"
+		data-engine="three"
+		data-camera="third-person"
+		data-terrain="natural-low-poly"
+		data-controls="camera-relative"
+	></canvas>
+
+	<div
+		bind:this={buildCursorElement}
+		hidden
+		class="build-cursor pointer-events-none absolute z-30 size-6 -translate-x-1/2 -translate-y-1/2"
+		data-state="idle"
+		aria-hidden="true"
+	>
+		<span class="horizontal"></span>
+		<span class="vertical"></span>
+		<span class="dot"></span>
+	</div>
+</div>
+
+<style>
+	.build-cursor {
+		--cursor-color: rgba(255, 255, 255, 0.9);
+		filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.8));
+	}
+
+	.build-cursor[data-state='valid'] {
+		--cursor-color: #f97316;
+	}
+
+	.build-cursor[data-state='invalid'] {
+		--cursor-color: #ef4444;
+	}
+
+	.build-cursor .horizontal,
+	.build-cursor .vertical {
+		position: absolute;
+		background: var(--cursor-color);
+	}
+
+	.build-cursor .horizontal {
+		top: calc(50% - 1px);
+		left: 0;
+		width: 100%;
+		height: 2px;
+	}
+
+	.build-cursor .vertical {
+		top: 0;
+		left: calc(50% - 1px);
+		width: 2px;
+		height: 100%;
+	}
+
+	.build-cursor .dot {
+		position: absolute;
+		top: calc(50% - 2px);
+		left: calc(50% - 2px);
+		width: 4px;
+		height: 4px;
+		border-radius: 999px;
+		background: var(--cursor-color);
+	}
+</style>

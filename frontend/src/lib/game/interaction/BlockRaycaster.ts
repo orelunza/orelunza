@@ -1,4 +1,4 @@
-import { Vector3, type Camera } from 'three';
+import { MathUtils, PerspectiveCamera, Quaternion, Vector3, type Camera } from 'three';
 import type { TargetedBlock } from '../game-types';
 import type { VoxelWorld } from '../world/VoxelWorld';
 import type { BlockCoordinate, VoxelBlock } from '../world/voxel-types';
@@ -17,13 +17,19 @@ export class BlockRaycaster {
 	private readonly origin = new Vector3();
 	private readonly direction = new Vector3();
 	private readonly start = new Vector3();
+	private readonly worldQuaternion = new Quaternion();
 
 	constructor(private readonly reachDistance = 6) {}
 
-	raycast(camera: Camera, world: VoxelWorld, cameraDistance = 0): TargetedBlock | null {
+	raycast(
+		camera: Camera,
+		world: VoxelWorld,
+		cameraDistance = 0,
+		screenPoint: Readonly<{ x: number; y: number }> = { x: 0, y: 0 }
+	): TargetedBlock | null {
 		camera.updateMatrixWorld(true);
 		camera.getWorldPosition(this.origin);
-		camera.getWorldDirection(this.direction).normalize();
+		this.directionFromScreenPoint(camera, screenPoint);
 
 		// In third person, the camera sits behind the player. Camera distance must
 		// not consume the player's actual building reach.
@@ -36,6 +42,24 @@ export class BlockRaycaster {
 			maxDistance,
 			Math.max(0, finiteOrZero(cameraDistance))
 		);
+	}
+
+	private directionFromScreenPoint(
+		camera: Camera,
+		screenPoint: Readonly<{ x: number; y: number }>
+	): void {
+		if (!(camera instanceof PerspectiveCamera)) {
+			camera.getWorldDirection(this.direction).normalize();
+			return;
+		}
+
+		const x = clamp(finiteOrZero(screenPoint.x), -1, 1);
+		const y = clamp(finiteOrZero(screenPoint.y), -1, 1);
+		const halfHeight = Math.tan(MathUtils.degToRad(camera.fov) * 0.5);
+
+		this.direction.set(x * halfHeight * camera.aspect, y * halfHeight, -1).normalize();
+		camera.getWorldQuaternion(this.worldQuaternion);
+		this.direction.applyQuaternion(this.worldQuaternion).normalize();
 	}
 
 	/**
@@ -180,4 +204,8 @@ function isFiniteVector(vector: Vector3): boolean {
 
 function finiteOrZero(value: number): number {
 	return Number.isFinite(value) ? value : 0;
+}
+
+function clamp(value: number, min: number, max: number): number {
+	return Math.max(min, Math.min(max, value));
 }

@@ -6,6 +6,12 @@ import type { TargetedBlock } from '../game-types';
 import type { PlayerCollider } from '../player/PlayerCollider';
 import type { PlayerState } from '../player/PlayerState';
 
+export interface BlockPlacementPreview {
+	position: BlockCoordinate;
+	allowed: boolean;
+	liftsPlayer: boolean;
+}
+
 export class BlockPlacementSystem {
 	constructor(
 		private readonly world: VoxelWorld,
@@ -15,20 +21,50 @@ export class BlockPlacementSystem {
 		private readonly onChanged: (position: BlockCoordinate) => void
 	) {}
 
-	place(target: TargetedBlock | null, selected: BlockType | null, creative = false): boolean {
+	preview(target: TargetedBlock | null, selected: BlockType | null): BlockPlacementPreview | null {
 		if (!target || !selected || selected === 'air') {
-			return false;
+			return null;
 		}
 
 		const definition = BlockRegistry.get(selected);
 
 		if (!definition.placeable || !isCardinalNormal(target.normal)) {
-			return false;
+			return null;
 		}
 
 		const targetedBlock = this.world.getLoadedBlock(target.block);
 
 		if (!targetedBlock || targetedBlock.type === 'air') {
+			return null;
+		}
+
+		const position = placementPosition(target);
+		const destination = this.world.getLoadedBlock(position);
+
+		if (!destination) {
+			return null;
+		}
+
+		let allowed = destination.type === 'air' || destination.type === 'water';
+		let pillarLiftPosition: { x: number; y: number; z: number } | null = null;
+
+		if (allowed && definition.solid && this.collider.intersectsPlayerBlock(this.player, position)) {
+			pillarLiftPosition = this.resolvePillarLiftPosition(target, position);
+			allowed =
+				pillarLiftPosition !== null && !this.collider.wouldCollide(this.player, pillarLiftPosition);
+		}
+
+		return {
+			position,
+			allowed,
+			liftsPlayer: pillarLiftPosition !== null && allowed
+		};
+	}
+
+	place(target: TargetedBlock | null, selected: BlockType | null, creative = false): boolean {
+		const preview = this.preview(target, selected);
+
+		if (!preview?.allowed || !target || !selected) {
 			return false;
 		}
 
@@ -42,39 +78,11 @@ export class BlockPlacementSystem {
 			}
 		}
 
-		const replacesTarget = target.type === 'water';
-		const position: BlockCoordinate = replacesTarget
-			? { ...target.block }
-			: {
-					x: target.block.x + target.normal.x,
-					y: target.block.y + target.normal.y,
-					z: target.block.z + target.normal.z
-				};
-
-		const destination = this.world.getLoadedBlock(position);
-
-		if (!destination || (destination.type !== 'air' && destination.type !== 'water')) {
-			this.refund(selected, consumed);
-			return false;
-		}
-
-		const intersectsPlayer =
-			definition.solid && this.collider.intersectsPlayerBlock(this.player, position);
-		const pillarLiftPosition = intersectsPlayer
-			? this.resolvePillarLiftPosition(target, position)
+		const pillarLiftPosition = preview.liftsPlayer
+			? this.resolvePillarLiftPosition(target, preview.position)
 			: null;
 
-		if (intersectsPlayer && !pillarLiftPosition) {
-			this.refund(selected, consumed);
-			return false;
-		}
-
-		if (pillarLiftPosition && this.collider.wouldCollide(this.player, pillarLiftPosition)) {
-			this.refund(selected, consumed);
-			return false;
-		}
-
-		if (!this.world.setBlock(position, selected)) {
+		if (!this.world.setBlock(preview.position, selected)) {
 			this.refund(selected, consumed);
 			return false;
 		}
@@ -89,7 +97,7 @@ export class BlockPlacementSystem {
 			this.player.stepEvent = null;
 		}
 
-		this.onChanged(position);
+		this.onChanged(preview.position);
 
 		return true;
 	}
@@ -129,6 +137,18 @@ export class BlockPlacementSystem {
 			this.inventory.addItem(type, 1);
 		}
 	}
+}
+
+export function placementPosition(target: TargetedBlock): BlockCoordinate {
+	if (target.type === 'water') {
+		return { ...target.block };
+	}
+
+	return {
+		x: target.block.x + target.normal.x,
+		y: target.block.y + target.normal.y,
+		z: target.block.z + target.normal.z
+	};
 }
 
 function isCardinalNormal(normal: BlockCoordinate): boolean {

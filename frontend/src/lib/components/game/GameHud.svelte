@@ -75,13 +75,15 @@
 		Menu
 	</button>
 
-	<div
-		class="absolute top-1/2 left-1/2 size-4 -translate-x-1/2 -translate-y-1/2"
-		aria-label="Crosshair"
-	>
-		<span class="absolute top-1/2 left-0 h-px w-full bg-white/78"></span>
-		<span class="absolute top-0 left-1/2 h-full w-px bg-white/78"></span>
-	</div>
+	{#if !snapshot.buildMode}
+		<div
+			class="absolute top-1/2 left-1/2 size-4 -translate-x-1/2 -translate-y-1/2"
+			aria-label="Crosshair"
+		>
+			<span class="absolute top-1/2 left-0 h-px w-full bg-white/78"></span>
+			<span class="absolute top-0 left-1/2 h-full w-px bg-white/78"></span>
+		</div>
+	{/if}
 
 	{#if snapshot.mobileLimited}
 		<div

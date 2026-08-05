@@ -13,6 +13,7 @@ import { BlockPlacementSystem } from './interaction/BlockPlacementSystem';
 import { BlockRaycaster } from './interaction/BlockRaycaster';
 import { Hotbar } from './inventory/Hotbar';
 import { Inventory } from './inventory/Inventory';
+import { BuildCursor } from './input/BuildCursor';
 import { KeyboardInput } from './input/KeyboardInput';
 import { MouseInput } from './input/MouseInput';
 import { PointerLockController } from './input/PointerLockController';
@@ -47,10 +48,13 @@ export class GameEngine {
 	private readonly player: PlayerController;
 	private readonly keyboard: KeyboardInput;
 	private readonly mouse: MouseInput;
+	private readonly buildCursor = new BuildCursor();
 	private readonly pointerLock: PointerLockController;
 	private readonly inventory = new Inventory();
 	private readonly hotbar = new Hotbar();
 	private readonly raycaster = new BlockRaycaster(8);
+	private readonly placementSystem: BlockPlacementSystem;
+	private readonly breakingSystem: BlockBreakingSystem;
 	private readonly loop: GameLoop;
 	private readonly persistence: GamePersistence;
 	private readonly avatar: PlayerAvatar;
@@ -85,6 +89,7 @@ export class GameEngine {
 	private selectedBuildBlock: BlockType | null = null;
 	private readonly creativeBuild = true;
 	private introVisible = true;
+	private readonly interactionPoint = new Vector3();
 	private diagnosticsWindowStartedAt = performance.now();
 	private diagnosticsFrameCount = 0;
 	private diagnosticsCallbacks = 0;
@@ -179,6 +184,16 @@ export class GameEngine {
 			options.worldId,
 			spawn,
 			Math.max(1, bounds.width) / Math.max(1, bounds.height)
+		);
+		this.placementSystem = new BlockPlacementSystem(
+			this.world,
+			this.inventory,
+			this.player.state,
+			this.player.physics.collider,
+			(position) => this.markBlockChanged(position)
+		);
+		this.breakingSystem = new BlockBreakingSystem(this.world, this.inventory, (position) =>
+			this.markBlockChanged(position)
 		);
 		this.avatar = new PlayerAvatar(options.appearance, {
 			groundHeightAt: (x, z) => this.world.terrainGenerator.heightAt(x, z)
@@ -297,11 +312,13 @@ export class GameEngine {
 		}
 
 		this.buildMode = true;
+		this.buildCursor.reset();
+		this.avatar.setBuildMode(true);
 		this.player.camera.setShoulderFraming('build');
 		this.selectBuildBlockFromHotbar();
 		this.message = this.selectedBuildBlock
-			? 'Build Mode — C: blocks · B: exit'
-			: 'Build Mode — C: choose a block · B: exit';
+			? 'Build Mode — C: blocks · R: center cursor · B: exit'
+			: 'Build Mode — C: choose a block · R: center cursor · B: exit';
 		this.emitSnapshot();
 	}
 
@@ -319,6 +336,8 @@ export class GameEngine {
 		this.status = 'build-catalog';
 		this.target = null;
 		this.renderer.setSelection(null);
+		this.renderer.setPlacementPreview(null);
+		this.updateBuildCursorElement(false, null);
 		this.pointerLock.exit();
 		this.message = 'Choose a block';
 		this.emitSnapshot();
@@ -331,7 +350,9 @@ export class GameEngine {
 
 		this.status = 'playing';
 		this.pointerLock.request();
-		this.message = this.buildMode ? 'Build Mode — C: blocks · B: exit' : 'Exploration Mode';
+		this.message = this.buildMode
+			? 'Build Mode — C: blocks · R: center cursor · B: exit'
+			: 'Exploration Mode';
 		this.emitSnapshot();
 	}
 
@@ -344,6 +365,7 @@ export class GameEngine {
 
 		this.selectedBuildBlock = type;
 		this.buildMode = true;
+		this.avatar.setBuildMode(true);
 		this.target = null;
 		this.renderer.setSelection(null);
 		this.player.camera.setShoulderFraming('build');
@@ -367,10 +389,13 @@ export class GameEngine {
 		}
 
 		this.buildMode = false;
+		this.avatar.setBuildMode(false);
 		this.selectedBuildBlock = null;
 		this.target = null;
 		this.player.camera.setShoulderFraming('explore');
 		this.renderer.setSelection(null);
+		this.renderer.setPlacementPreview(null);
+		this.updateBuildCursorElement(false, null);
 
 		if (this.status === 'build-catalog') {
 			this.status = 'playing';
@@ -412,6 +437,7 @@ export class GameEngine {
 		this.keyboard.destroy();
 		this.mouse.destroy();
 		this.pointerLock.destroy();
+		this.updateBuildCursorElement(false, null);
 		this.avatar.dispose();
 		this.chunkStreaming.dispose();
 		this.sky.dispose();
@@ -458,6 +484,10 @@ export class GameEngine {
 			}
 		}
 
+		if (commands.recenterBuildCursor && this.status === 'playing' && this.buildMode) {
+			this.buildCursor.reset();
+		}
+
 		if (commands.hotbarIndex !== null) {
 			this.hotbar.select(commands.hotbarIndex);
 
@@ -478,7 +508,16 @@ export class GameEngine {
 		}
 
 		if (this.status === 'playing' && this.pointerLock.isLocked) {
-			this.player.applyMouse(this.mouse.consumeDelta());
+			const mouseDelta = this.mouse.consumeDelta();
+			const cameraDelta = this.buildMode
+				? this.buildCursor.move(
+						mouseDelta,
+						this.options.canvas.clientWidth,
+						this.options.canvas.clientHeight
+					).cameraDelta
+				: mouseDelta;
+
+			this.player.applyMouse(cameraDelta);
 			const physicsStartedAt = performance.now();
 			this.player.step(this.keyboard.getMovement(), deltaSeconds);
 			this.diagnostics.physicsMs = performance.now() - physicsStartedAt;
@@ -513,10 +552,34 @@ export class GameEngine {
 			this.needsWorldRebuild = false;
 		}
 
+		const canTargetBlock = this.status === 'playing' && this.buildMode && this.pointerLock.isLocked;
+		this.target = canTargetBlock
+			? this.raycaster.raycast(
+					this.player.camera.camera,
+					this.world,
+					this.player.camera.currentDistance,
+					this.buildCursor.position
+				)
+			: null;
+		this.renderer.setSelection(canTargetBlock ? (this.target?.block ?? null) : null);
+
+		const selected = this.currentSelectedBlock();
+		const placementPreview = canTargetBlock
+			? this.placementSystem.preview(this.target, selected)
+			: null;
+		this.renderer.setPlacementPreview(
+			placementPreview?.position ?? null,
+			placementPreview?.allowed ?? false
+		);
+		this.updateBuildCursorElement(
+			canTargetBlock,
+			placementPreview ? placementPreview.allowed : null
+		);
+		this.updateBuildPose(canTargetBlock, placementPreview?.position ?? this.target?.block ?? null);
+
 		// When camera collision pulls the eye very close to the player, hide the
 		// avatar instead of rendering the camera inside the head or torso.
 		this.avatar.object.visible = this.player.camera.currentDistance >= AVATAR_HIDE_CAMERA_DISTANCE;
-
 		this.avatar.update(
 			this.player.state,
 			Math.hypot(this.player.state.velocity.x, this.player.state.velocity.z) > 0.1,
@@ -524,16 +587,6 @@ export class GameEngine {
 		);
 		this.sky.update(this.player.camera.camera.position, deltaSeconds);
 		this.recordAvatarMetricsThrottled(frameStartedAt);
-
-		const canTargetBlock = this.status === 'playing' && this.buildMode;
-		this.target = canTargetBlock
-			? this.raycaster.raycast(
-					this.player.camera.camera,
-					this.world,
-					this.player.camera.currentDistance
-				)
-			: null;
-		this.renderer.setSelection(canTargetBlock ? (this.target?.block ?? null) : null);
 
 		const action = this.mouse.consumeAction();
 
@@ -689,31 +742,70 @@ export class GameEngine {
 	}
 
 	private breakTarget(): void {
-		const system = new BlockBreakingSystem(this.world, this.inventory, (position) =>
-			this.markBlockChanged(position)
-		);
-
-		if (system.break(this.target)) {
+		if (this.breakingSystem.break(this.target)) {
+			this.avatar.swingBuildTool();
 			this.message = 'Block collected';
 		}
 	}
 
 	private placeSelectedBlock(): void {
-		const stack = this.inventory.getSelectedStack(this.hotbar.selectedIndex);
-		const selected = this.selectedBuildBlock ?? stack?.type ?? null;
-		const system = new BlockPlacementSystem(
-			this.world,
-			this.inventory,
-			this.player.state,
-			this.player.physics.collider,
-			(position) => this.markBlockChanged(position)
-		);
+		const selected = this.currentSelectedBlock();
 
-		if (system.place(this.target, selected, this.creativeBuild)) {
+		if (this.placementSystem.place(this.target, selected, this.creativeBuild)) {
+			this.avatar.swingBuildTool();
 			this.message = `Placed ${selected ?? 'block'}`;
 		} else {
 			this.message = 'Cannot place here';
 		}
+	}
+
+	private currentSelectedBlock(): BlockType | null {
+		const stack = this.inventory.getSelectedStack(this.hotbar.selectedIndex);
+		return this.selectedBuildBlock ?? stack?.type ?? null;
+	}
+
+	private updateBuildCursorElement(visible: boolean, placementAllowed: boolean | null): void {
+		const element = this.options.buildCursorElement;
+
+		if (!element) {
+			return;
+		}
+
+		element.hidden = !visible;
+
+		if (!visible) {
+			return;
+		}
+
+		const cursor = this.buildCursor.position;
+		element.style.left = `${(cursor.x + 1) * 50}%`;
+		element.style.top = `${(1 - cursor.y) * 50}%`;
+		element.dataset.state =
+			placementAllowed === true ? 'valid' : placementAllowed === false ? 'invalid' : 'idle';
+	}
+
+	private updateBuildPose(active: boolean, block: BlockCoordinate | null): void {
+		if (!active) {
+			this.avatar.clearLookTarget();
+
+			if (this.buildMode) {
+				this.avatar.setHandTarget();
+			} else {
+				this.avatar.clearHandTarget();
+			}
+
+			return;
+		}
+
+		if (!block) {
+			this.avatar.setHandTarget();
+			this.avatar.clearLookTarget();
+			return;
+		}
+
+		this.interactionPoint.set(block.x + 0.5, block.y + 0.5, block.z + 0.5);
+		this.avatar.lookAtWorldPosition(this.interactionPoint);
+		this.avatar.setHandTarget(this.interactionPoint);
 	}
 
 	private selectBuildBlockFromHotbar(): void {
