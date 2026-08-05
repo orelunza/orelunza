@@ -40,6 +40,14 @@ export class Sky {
 		this.environment.update(cameraPosition, deltaSeconds);
 	}
 
+	get windDirection(): number {
+		return this.environment.currentState.windDirection;
+	}
+
+	get windStrength(): number {
+		return this.environment.currentState.windStrength;
+	}
+
 	setQuality(quality: RenderQuality): void {
 		this.environment.setQuality(quality);
 	}

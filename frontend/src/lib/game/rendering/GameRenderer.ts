@@ -4,7 +4,8 @@ import {
 	SRGBColorSpace,
 	Scene,
 	WebGLRenderer,
-	type Camera
+	type Camera,
+	type Vector3
 } from 'three';
 import { PlacementPreview } from './PlacementPreview';
 import { SelectionOutline } from './SelectionOutline';
@@ -17,6 +18,8 @@ import { BlockMeshFactory, type BlockInstanceLookup } from '../world/BlockMeshFa
 import type { VoxelWorld } from '../world/VoxelWorld';
 import { chunkKey, type BlockCoordinate, type ChunkCoordinate } from '../world/voxel-types';
 import type { ChunkStreamingChanges } from '../world/ChunkStreamingSystem';
+import { TallGrassRenderer } from './TallGrassRenderer';
+import { GroundFoliageRenderer } from './GroundFoliageRenderer';
 
 export class GameRenderer {
 	readonly scene = new Scene();
@@ -26,6 +29,8 @@ export class GameRenderer {
 
 	readonly quality: QualitySettings;
 
+	private readonly tallGrass: TallGrassRenderer;
+	private readonly groundFoliage: GroundFoliageRenderer;
 	private readonly meshFactory = new BlockMeshFactory();
 	private readonly meshesByChunk = new Map<string, BlockInstanceLookup[]>();
 	private blockMeshes: BlockInstanceLookup[] = [];
@@ -54,6 +59,8 @@ export class GameRenderer {
 		// quality profile; configure the type once here.
 		this.renderer.shadowMap.enabled = this.quality.shadows;
 		this.renderer.shadowMap.type = PCFSoftShadowMap;
+		this.tallGrass = new TallGrassRenderer(this.scene, this.quality);
+		this.groundFoliage = new GroundFoliageRenderer(this.scene, this.quality);
 
 		// Lighting is owned by EnvironmentLighting (dynamic sun/moon), so the
 		// renderer no longer adds static lights of its own.
@@ -73,6 +80,8 @@ export class GameRenderer {
 	 */
 	rebuildWorld(world: VoxelWorld): void {
 		this.clearChunkMeshes();
+		this.tallGrass.clear();
+		this.groundFoliage.clear();
 
 		for (const chunk of world.getLoadedChunks()) {
 			this.replaceChunk(world, chunk);
@@ -146,6 +155,16 @@ export class GameRenderer {
 		this.placementPreview.setTarget(block, allowed);
 	}
 
+	updateVegetation(
+		cameraPosition: Readonly<Vector3>,
+		deltaSeconds: number,
+		windDirection = 0,
+		windStrength = 0.15
+	): void {
+		this.tallGrass.update(cameraPosition, deltaSeconds, windDirection, windStrength);
+		this.groundFoliage.update(cameraPosition, deltaSeconds, windDirection, windStrength);
+	}
+
 	render(camera: Camera): void {
 		this.renderer.render(this.scene, camera);
 	}
@@ -155,6 +174,8 @@ export class GameRenderer {
 		this.blockMeshes = [];
 		this.selection.dispose();
 		this.placementPreview.dispose();
+		this.tallGrass.dispose();
+		this.groundFoliage.dispose();
 		this.meshFactory.dispose();
 		this.renderer.dispose();
 	}
@@ -163,6 +184,8 @@ export class GameRenderer {
 		this.removeChunkInternal(chunk);
 
 		const lookups = this.meshFactory.createMeshes(world.getVisibleBlocksInChunk(chunk), world);
+		this.tallGrass.replaceChunk(world, chunk);
+		this.groundFoliage.replaceChunk(world, chunk);
 		this.meshesByChunk.set(chunkKey(chunk), lookups);
 
 		for (const lookup of lookups) {
@@ -173,6 +196,9 @@ export class GameRenderer {
 	private removeChunkInternal(chunk: ChunkCoordinate): void {
 		const key = chunkKey(chunk);
 		const lookups = this.meshesByChunk.get(key);
+
+		this.tallGrass.removeChunk(chunk);
+		this.groundFoliage.removeChunk(chunk);
 
 		if (!lookups) {
 			return;

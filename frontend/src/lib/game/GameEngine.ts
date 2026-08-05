@@ -592,6 +592,12 @@ export class GameEngine {
 			deltaSeconds
 		);
 		this.sky.update(this.player.camera.camera.position, deltaSeconds);
+		this.renderer.updateVegetation(
+			this.player.camera.camera.position,
+			deltaSeconds,
+			this.sky.windDirection,
+			this.sky.windStrength
+		);
 		this.recordAvatarMetricsThrottled(frameStartedAt);
 
 		const action = this.mouse.consumeAction();
