@@ -200,6 +200,26 @@ export class VoxelWorld {
 		});
 	}
 
+	/**
+	 * Reads a voxel only when its chunk is already loaded.
+	 *
+	 * Unlike getBlock(), this method never generates a chunk and is therefore
+	 * safe for per-frame raycasts, camera collision and interaction previews.
+	 */
+	getLoadedBlock(position: BlockCoordinate): VoxelBlock | null {
+		const normalized = normalizeBlock(position);
+
+		if (!this.isLoadedBlock(normalized)) {
+			return null;
+		}
+
+		if (normalized.y < WORLD_MIN_Y || normalized.y > WORLD_MAX_Y) {
+			return BlockRegistry.create('air', normalized);
+		}
+
+		return this.peekLoadedBlock(normalized);
+	}
+
 	getBlock(position: BlockCoordinate): VoxelBlock {
 		const normalized = normalizeBlock(position);
 
@@ -284,9 +304,9 @@ export class VoxelWorld {
 	}
 
 	isSolidLoadedAt(position: BlockCoordinate): boolean {
-		const block = this.peekLoadedBlock(position);
+		const block = this.getLoadedBlock(position);
 
-		return block.solid && !block.passable;
+		return block !== null && block.solid && !block.passable;
 	}
 
 	safeRestorePosition(position: { x: number; y: number; z: number }): {

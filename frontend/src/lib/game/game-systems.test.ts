@@ -1386,6 +1386,8 @@ describe('inventory and placement', () => {
 
 	test('does not place a block inside the player', () => {
 		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		world.loadChunk({ x: 0, z: 0 });
+		world.setBlock({ x: 10, y: 19, z: 10 }, 'stone');
 		const controller = new PlayerController(world, 'p', 'w', { x: 10.5, y: 20, z: 10.5 }, 1);
 		const inventory = new Inventory();
 		const system = new BlockPlacementSystem(
@@ -1402,7 +1404,8 @@ describe('inventory and placement', () => {
 				normal: { x: 0, y: 1, z: 0 },
 				type: 'stone'
 			},
-			'brick'
+			'brick',
+			true
 		);
 
 		expect(placed).toBe(false);
@@ -1683,25 +1686,141 @@ describe('rewritten locomotion, camera and avatar contracts', () => {
 		expect(maxRootBob).toBeLessThan(0.02);
 	});
 
+	test('voxel raycast targets the exact cell face independently from rendered geometry', async () => {
+		const { BlockRaycaster } = await import('./interaction/BlockRaycaster');
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		world.loadChunk({ x: 0, z: 0 });
+		world.setBlock({ x: 5, y: 20, z: 5 }, 'wood');
+
+		const raycaster = new BlockRaycaster(6);
+		const result = raycaster.raycastFrom(new Vector3(2.5, 20.5, 5.5), new Vector3(1, 0, 0), world);
+
+		expect(result).toEqual({
+			block: { x: 5, y: 20, z: 5 },
+			normal: { x: -1, y: 0, z: 0 },
+			type: 'wood'
+		});
+	});
+
+	test('third-person camera distance does not consume the build reach', async () => {
+		const { BlockRaycaster } = await import('./interaction/BlockRaycaster');
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		world.loadChunk({ x: 0, z: 0 });
+		world.setBlock({ x: 10, y: 20, z: 5 }, 'brick');
+
+		const raycaster = new BlockRaycaster(6);
+		const origin = new Vector3(0.5, 20.5, 5.5);
+		const direction = new Vector3(1, 0, 0);
+
+		expect(raycaster.raycastFrom(origin, direction, world)).toBeNull();
+		expect(raycaster.raycastFrom(origin, direction, world, 12)?.block).toEqual({
+			x: 10,
+			y: 20,
+			z: 5
+		});
+	});
+
+	test('voxel raycast keeps correct cells and normals at negative world coordinates', async () => {
+		const { BlockRaycaster } = await import('./interaction/BlockRaycaster');
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		world.loadChunk({ x: -1, z: -1 });
+		world.setBlock({ x: -3, y: 20, z: -2 }, 'stone');
+
+		const result = new BlockRaycaster(6).raycastFrom(
+			new Vector3(-0.5, 20.5, -1.5),
+			new Vector3(-1, 0, 0),
+			world
+		);
+
+		expect(result).toEqual({
+			block: { x: -3, y: 20, z: -2 },
+			normal: { x: 1, y: 0, z: 0 },
+			type: 'stone'
+		});
+	});
+
+	test('voxel raycast crosses water and targets the solid block behind it', async () => {
+		const { BlockRaycaster } = await import('./interaction/BlockRaycaster');
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		world.loadChunk({ x: 0, z: 0 });
+		world.setBlock({ x: 4, y: 20, z: 5 }, 'water');
+		world.setBlock({ x: 5, y: 20, z: 5 }, 'brick');
+
+		const result = new BlockRaycaster(6).raycastFrom(
+			new Vector3(2.5, 20.5, 5.5),
+			new Vector3(1, 0, 0),
+			world
+		);
+
+		expect(result?.block).toEqual({ x: 5, y: 20, z: 5 });
+		expect(result?.normal).toEqual({ x: -1, y: 0, z: 0 });
+		expect(result?.type).toBe('brick');
+	});
+
+	test('voxel raycast never loads an unseen chunk', async () => {
+		const { BlockRaycaster } = await import('./interaction/BlockRaycaster');
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		world.loadChunk({ x: 0, z: 0 });
+		const loadedBefore = world.getLoadedChunks();
+
+		const result = new BlockRaycaster(6).raycastFrom(
+			new Vector3(14.5, 20.5, 8.5),
+			new Vector3(1, 0, 0),
+			world
+		);
+
+		expect(result).toBeNull();
+		expect(world.getLoadedChunks()).toEqual(loadedBefore);
+	});
+
+	test('places across a chunk boundary using the cardinal voxel face', () => {
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		world.loadChunk({ x: 0, z: 0 });
+		world.loadChunk({ x: 1, z: 0 });
+		world.setBlock({ x: 15, y: 20, z: 8 }, 'brick');
+
+		const controller = new PlayerController(world, 'p', 'w', { x: 8.5, y: 20, z: 8.5 }, 1);
+		const inventory = new Inventory();
+		let changedPosition: { x: number; y: number; z: number } | null = null;
+		const system = new BlockPlacementSystem(
+			world,
+			inventory,
+			controller.state,
+			controller.physics.collider,
+			(position) => {
+				changedPosition = { ...position };
+			}
+		);
+
+		const placed = system.place(
+			{
+				block: { x: 15, y: 20, z: 8 },
+				normal: { x: 1, y: 0, z: 0 },
+				type: 'brick'
+			},
+			'stone',
+			true
+		);
+
+		expect(placed).toBe(true);
+		expect(changedPosition).toEqual({ x: 16, y: 20, z: 8 });
+		expect(world.getLoadedBlock({ x: 16, y: 20, z: 8 })?.type).toBe('stone');
+	});
+
 	test('build raycast ignores the avatar entirely', async () => {
 		const { BlockRaycaster } = await import('./interaction/BlockRaycaster');
 		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		world.loadChunk({ x: 0, z: 0 });
 		const avatar = new PlayerAvatar(DEFAULT_CHARACTER_APPEARANCE, { allowFallback: true });
 		await avatar.ready;
 
-		const raycaster = new BlockRaycaster(6);
-		const camera = new ThirdPersonCamera(1, world);
-		const player = testPlayer(world);
-		camera.setOrientation(Math.PI, 0.2);
-		camera.update(player);
+		const result = new BlockRaycaster(6).raycastFrom(
+			new Vector3(2.5, 20.5, 2.5),
+			new Vector3(1, 0, 0),
+			world
+		);
 
-		// The raycaster only ever receives world block lookups. The avatar object
-		// is never part of that set, so it can never be targeted.
-		const lookups: never[] = [];
-		const result = raycaster.raycast(camera.camera, lookups);
 		expect(result).toBeNull();
-
-		// And the avatar object graph is not a block lookup mesh.
 		expect(avatar.object.name).toBe('playerAvatar');
 		avatar.dispose();
 	});

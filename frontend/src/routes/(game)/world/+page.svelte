@@ -274,6 +274,7 @@
 
 			{#if snapshot.status === 'build-catalog'}
 				<BuildCatalogOverlay
+					inventory={snapshot.inventory}
 					selectedBlock={snapshot.selectedBuildBlock}
 					onSelect={sendBuildBlockCommand}
 					onClose={() => {

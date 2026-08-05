@@ -12,7 +12,7 @@ export class BlockPlacementSystem {
 		private readonly inventory: Inventory,
 		private readonly player: PlayerState,
 		private readonly collider: PlayerCollider,
-		private readonly onChanged: () => void
+		private readonly onChanged: (position: BlockCoordinate) => void
 	) {}
 
 	place(target: TargetedBlock | null, selected: BlockType | null, creative = false): boolean {
@@ -22,7 +22,13 @@ export class BlockPlacementSystem {
 
 		const definition = BlockRegistry.get(selected);
 
-		if (!definition.placeable) {
+		if (!definition.placeable || !isCardinalNormal(target.normal)) {
+			return false;
+		}
+
+		const targetedBlock = this.world.getLoadedBlock(target.block);
+
+		if (!targetedBlock || targetedBlock.type === 'air') {
 			return false;
 		}
 
@@ -42,7 +48,9 @@ export class BlockPlacementSystem {
 			z: target.block.z + target.normal.z
 		};
 
-		if (this.world.getBlock(position).type !== 'air') {
+		const destination = this.world.getLoadedBlock(position);
+
+		if (!destination || destination.type !== 'air') {
 			this.refund(selected, consumed);
 			return false;
 		}
@@ -57,7 +65,7 @@ export class BlockPlacementSystem {
 			return false;
 		}
 
-		this.onChanged();
+		this.onChanged(position);
 
 		return true;
 	}
@@ -67,4 +75,12 @@ export class BlockPlacementSystem {
 			this.inventory.addItem(type, 1);
 		}
 	}
+}
+
+function isCardinalNormal(normal: BlockCoordinate): boolean {
+	if (!Number.isInteger(normal.x) || !Number.isInteger(normal.y) || !Number.isInteger(normal.z)) {
+		return false;
+	}
+
+	return Math.abs(normal.x) + Math.abs(normal.y) + Math.abs(normal.z) === 1;
 }

@@ -112,7 +112,9 @@
 				break;
 
 			case 'select-build-block':
-				engine.selectBuildBlock(command.blockType);
+				if (engine.selectBuildBlock(command.blockType)) {
+					engine.closeBuildCatalog();
+				}
 				break;
 		}
 	});

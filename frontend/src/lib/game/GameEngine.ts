@@ -25,7 +25,12 @@ import { Sky } from './rendering/Sky';
 import { BlockRegistry } from './world/BlockRegistry';
 import { ChunkStreamingSystem } from './world/ChunkStreamingSystem';
 import { createStarterWorld } from './world/WorldGenerator';
-import { STARTER_WORLD_SEED, type BlockType, worldToChunk } from './world/voxel-types';
+import {
+	STARTER_WORLD_SEED,
+	type BlockCoordinate,
+	type BlockType,
+	worldToChunk
+} from './world/voxel-types';
 
 const CHUNK_RENDER_INTERVAL_MS = 120;
 const SNAPSHOT_INTERVAL_MS = 100;
@@ -318,8 +323,18 @@ export class GameEngine {
 
 		this.selectedBuildBlock = type;
 		this.buildMode = true;
+		this.target = null;
+		this.renderer.setSelection(null);
 		this.player.camera.setShoulderFraming('build');
-		this.message = `Selected ${definition.label}`;
+
+		// Choosing a block finishes catalog interaction.
+		// The next click must happen in the world and place the selected block.
+		if (this.status === 'build-catalog') {
+			this.status = 'playing';
+			this.pointerLock.request();
+		}
+
+		this.message = `Selected ${definition.label} — click the world to place`;
 		this.emitSnapshot();
 
 		return true;
@@ -474,7 +489,11 @@ export class GameEngine {
 
 		const canTargetBlock = this.status === 'playing' && this.buildMode;
 		this.target = canTargetBlock
-			? this.raycaster.raycast(this.player.camera.camera, this.renderer.lookups)
+			? this.raycaster.raycast(
+					this.player.camera.camera,
+					this.world,
+					this.player.camera.currentDistance
+				)
 			: null;
 		this.renderer.setSelection(canTargetBlock ? (this.target?.block ?? null) : null);
 
@@ -632,8 +651,8 @@ export class GameEngine {
 	}
 
 	private breakTarget(): void {
-		const system = new BlockBreakingSystem(this.world, this.inventory, () =>
-			this.markWorldChanged()
+		const system = new BlockBreakingSystem(this.world, this.inventory, (position) =>
+			this.markBlockChanged(position)
 		);
 
 		if (system.break(this.target)) {
@@ -649,7 +668,7 @@ export class GameEngine {
 			this.inventory,
 			this.player.state,
 			this.player.physics.collider,
-			() => this.markWorldChanged()
+			(position) => this.markBlockChanged(position)
 		);
 
 		if (system.place(this.target, selected, this.creativeBuild)) {
@@ -673,8 +692,9 @@ export class GameEngine {
 		}
 	}
 
-	private markWorldChanged(): void {
-		this.needsWorldRebuild = true;
+	private markBlockChanged(position: BlockCoordinate): void {
+		this.renderer.refreshChunk(this.world, worldToChunk(position));
+		this.diagnostics.chunkRefreshes += 1;
 		this.persistence.markDirty();
 	}
 
