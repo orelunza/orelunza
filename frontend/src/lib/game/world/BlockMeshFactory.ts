@@ -4,7 +4,6 @@ import {
 	Color,
 	ConeGeometry,
 	CylinderGeometry,
-	DodecahedronGeometry,
 	InstancedMesh,
 	Matrix4,
 	MeshLambertMaterial,
@@ -13,6 +12,7 @@ import {
 	type Material
 } from 'three';
 import { BlockRegistry } from './BlockRegistry';
+import { createLeafClusterGeometry } from './LeafClusterGeometry';
 import { vegetationRandom01, vegetationTintAt } from './VegetationPalette';
 import type { VoxelWorld } from './VoxelWorld';
 import type { BlockCoordinate, BlockType, VoxelBlock } from './voxel-types';
@@ -27,7 +27,7 @@ const FLOWER_GEOMETRY = new ConeGeometry(0.18, 0.52, 5);
 const BLOCK_GEOMETRY = new BoxGeometry(1, 1, 1);
 const GRASS_GEOMETRY = createGrassGeometry();
 const TRUNK_GEOMETRY = new CylinderGeometry(0.22, 0.3, 1, 6);
-const LEAVES_GEOMETRY = createLeavesGeometry();
+const LEAVES_GEOMETRY = createLeafClusterGeometry();
 const INSTANCE_COLOR_TYPES = new Set<BlockType>(['grass', 'leaves']);
 
 export class BlockMeshFactory {
@@ -72,19 +72,36 @@ export class BlockMeshFactory {
 					helper.rotation.y = pseudoRandom(block.position.x, block.position.z) * Math.PI;
 				} else if (type === 'leaves') {
 					const width =
-						0.92 +
-						vegetationRandom01(block.position.x, block.position.y, block.position.z, 0x51) * 0.34;
+						0.88 +
+						vegetationRandom01(block.position.x, block.position.y, block.position.z, 0x51) * 0.3;
 					const height =
-						0.78 +
-						vegetationRandom01(block.position.z, block.position.y, block.position.x, 0x93) * 0.22;
-					helper.scale.set(width, height, width * 0.94);
+						0.86 +
+						vegetationRandom01(block.position.z, block.position.y, block.position.x, 0x93) * 0.26;
+					const depth =
+						0.88 +
+						vegetationRandom01(block.position.y, block.position.x, block.position.z, 0xb7) * 0.28;
+					const jitterX =
+						(vegetationRandom01(block.position.x, block.position.y, block.position.z, 0xc1) - 0.5) *
+						0.1;
+					const jitterY =
+						(vegetationRandom01(block.position.z, block.position.x, block.position.y, 0xd3) - 0.5) *
+						0.08;
+					const jitterZ =
+						(vegetationRandom01(block.position.y, block.position.z, block.position.x, 0xe5) - 0.5) *
+						0.1;
+
+					helper.position.x += jitterX;
+					helper.position.y += jitterY;
+					helper.position.z += jitterZ;
+					helper.scale.set(width, height, depth);
 					helper.rotation.set(
 						(vegetationRandom01(block.position.x, block.position.y, block.position.z, 0x13) - 0.5) *
-							0.22,
+							0.18,
 						vegetationRandom01(block.position.z, block.position.y, block.position.x, 0x27) *
-							Math.PI,
+							Math.PI *
+							2,
 						(vegetationRandom01(block.position.x, block.position.z, block.position.y, 0x39) - 0.5) *
-							0.18
+							0.16
 					);
 				}
 
@@ -182,29 +199,6 @@ function createGrassGeometry(): BoxGeometry {
 		top: 0xffffff,
 		side: 0xb5b79a,
 		bottom: 0x72745b
-	});
-
-	return geometry;
-}
-
-function createLeavesGeometry(): DodecahedronGeometry {
-	const geometry = new DodecahedronGeometry(0.62, 0);
-	const positions = geometry.getAttribute('position');
-
-	for (let index = 0; index < positions.count; index += 1) {
-		const x = positions.getX(index);
-		const y = positions.getY(index);
-		const z = positions.getZ(index);
-		const irregularity = 0.93 + pseudoRandom(index * 7 + 3, index * 13 - 5) * 0.14;
-		positions.setXYZ(index, x * irregularity, y * (0.95 + irregularity * 0.05), z * irregularity);
-	}
-
-	positions.needsUpdate = true;
-	geometry.computeVertexNormals();
-	applyDirectionalColors(geometry, {
-		top: 0xf3f6d8,
-		side: 0xb8c5a2,
-		bottom: 0x68745b
 	});
 
 	return geometry;
