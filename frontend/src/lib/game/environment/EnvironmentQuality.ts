@@ -18,6 +18,10 @@ export interface EnvironmentQuality {
 	readonly starCount: number;
 	/** Enable the sun/moon glow halo billboards. */
 	readonly celestialGlow: boolean;
+	/** Procedural cloud shell tessellation. */
+	readonly cloudSegments: number;
+	/** Number of procedural noise octaves evaluated by the cloud shader. */
+	readonly cloudDetail: number;
 	/** Whether the sun should drive real-time shadows. */
 	readonly sunShadows: boolean;
 	/** Shadow map resolution when shadows are enabled. */
@@ -30,6 +34,8 @@ const LOW: EnvironmentQuality = {
 	richAtmosphere: false,
 	starCount: 420,
 	celestialGlow: false,
+	cloudSegments: 16,
+	cloudDetail: 2,
 	sunShadows: false,
 	shadowMapSize: 512
 };
@@ -40,6 +46,8 @@ const MEDIUM: EnvironmentQuality = {
 	richAtmosphere: true,
 	starCount: 900,
 	celestialGlow: true,
+	cloudSegments: 28,
+	cloudDetail: 4,
 	sunShadows: true,
 	shadowMapSize: 1024
 };
@@ -50,6 +58,8 @@ const HIGH: EnvironmentQuality = {
 	richAtmosphere: true,
 	starCount: 1600,
 	celestialGlow: true,
+	cloudSegments: 40,
+	cloudDetail: 5,
 	sunShadows: true,
 	shadowMapSize: 2048
 };

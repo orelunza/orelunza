@@ -88,7 +88,8 @@ export class CelestialBodyRenderer {
 		this.placeAlong(this.moon, state.moonDirection, cameraPosition);
 
 		// The sun fades out below the horizon.
-		const sunOpacity = clamp01(smoothstep(-0.06, 0.08, state.sunAltitude));
+		const sunOpacity =
+			clamp01(smoothstep(-0.06, 0.08, state.sunAltitude)) * (1 - state.cloudSunOcclusion * 0.94);
 		this.sunMaterial.opacity = sunOpacity;
 		this.sun.visible = sunOpacity > 0.01;
 		this.sunMaterial.color.copy(state.sunTint).lerp(WHITE, 0.4);
@@ -98,7 +99,8 @@ export class CelestialBodyRenderer {
 		const moonOpacity =
 			clamp01(smoothstep(-0.06, 0.08, state.moonDirection.y)) *
 			(0.3 + state.lunarIllumination * 0.7) *
-			(0.35 + state.night * 0.65);
+			(0.35 + state.night * 0.65) *
+			(1 - state.cloudMoonOcclusion * 0.9);
 		this.moonMaterial.opacity = moonOpacity;
 		this.moon.visible = moonOpacity > 0.01;
 

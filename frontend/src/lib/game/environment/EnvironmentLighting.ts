@@ -94,6 +94,7 @@ export class EnvironmentLighting {
 		const colorEase = 1 - Math.pow(0.002, deltaSeconds);
 		this.sun.color.lerp(state.lightColor, colorEase);
 		this.sun.intensity = lerp(this.sun.intensity, state.lightIntensity, colorEase);
+		this.sun.shadow.radius = lerp(1, 5, state.shadowSoftness);
 
 		this.ambient.color.lerp(state.ambientColor, colorEase);
 		this.ambient.intensity = lerp(this.ambient.intensity, state.ambientIntensity, colorEase);
@@ -122,6 +123,7 @@ export class EnvironmentLighting {
 
 		this.sun.color.copy(state.lightColor);
 		this.sun.intensity = state.lightIntensity;
+		this.sun.shadow.radius = lerp(1, 5, state.shadowSoftness);
 		this.ambient.color.copy(state.ambientColor);
 		this.ambient.intensity = state.ambientIntensity;
 		this.fog.color.copy(state.fogColor);

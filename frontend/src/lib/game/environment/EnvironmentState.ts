@@ -1,102 +1,61 @@
 import { Color, Vector3 } from 'three';
 import { clamp01, lerp, smoothstep } from './EnvironmentMath';
 import type { CelestialClock } from './CelestialClock';
+import type { CloudFrameState } from './clouds/CloudState';
+import { isWeatherKind } from './weather/WeatherState';
+import type { WeatherFrameState, WeatherKind, WeatherSaveState } from './weather/WeatherState';
+import type { WindFrameState } from './wind/WindState';
 
-/**
- * Discrete weather kinds. Only `clear` is driven in Phase 1; the rest are part
- * of the stable interface so later phases can populate them without changing
- * the type or any consumer. Keeping the full set here now is what lets the save
- * format and the debug API stay unchanged across phases.
- */
-export type WeatherKind =
-	| 'clear'
-	| 'partly_cloudy'
-	| 'overcast'
-	| 'mist'
-	| 'fog'
-	| 'light_rain'
-	| 'heavy_rain'
-	| 'storm'
-	| 'snow';
+export type { WeatherFrameState, WeatherKind, WeatherSaveState } from './weather/WeatherState';
 
-/** Serializable weather portion of the environment, embedded in the save. */
-export interface WeatherSaveState {
-	current: WeatherKind;
-	next: WeatherKind;
-	/** Progress of the transition from `current` toward `next`, in [0, 1]. */
-	transition: number;
-	/** Seed used for deterministic weather scheduling in later phases. */
-	seed: number;
-}
-
-/**
- * The fully-derived environment snapshot for the current frame.
- *
- * This is a plain data object updated in place every frame; nothing here is
- * allocated during {@link EnvironmentState.update}. Renderers and the lighting
- * controller read from it rather than each recomputing the same values, which
- * keeps a single source of truth and avoids duplicated trig in hot paths.
- */
+/** Shared, allocation-free environment snapshot for the current frame. */
 export class EnvironmentState {
-	/** Normalized time of day in [0, 1). */
 	timeOfDay = 0;
-	/** Day counter since world creation. */
 	dayNumber = 0;
 
-	/** Sun altitude in [-1, 1]; 1 = zenith. */
 	sunAltitude = 1;
-	/** 0 while the sun is below the horizon, ramping to 1 in daylight. */
 	daylight = 1;
-	/** 1 only during the sunrise/sunset band around the horizon. */
 	goldenHour = 0;
-	/** 1 during civil twilight just after sunset / before sunrise. */
 	twilight = 0;
-	/** 1 in full night. */
 	night = 0;
 
-	/** Lunar phase in [0, 1); 0.5 = full. */
 	lunarPhase = 0;
-	/** Illuminated fraction in [0, 1]; drives moon brightness. */
 	lunarIllumination = 0;
-
-	/** How visible the star field should be, in [0, 1]. */
 	starVisibility = 0;
 
-	/**
-	 * Weather-derived scalars. In Phase 1 these stay at their clear-sky values;
-	 * later phases animate them. They live here so lighting, fog and cloud code
-	 * can already consume a stable shape.
-	 */
 	cloudCoverage = 0;
+	cloudDensity = 0;
+	cloudDarkness = 0;
+	cloudOpacity = 0;
+	cloudSunOcclusion = 0;
+	cloudMoonOcclusion = 0;
+	cloudShadowStrength = 0;
+
+	humidity = 0.28;
 	fogDensity = 0;
 	windDirection = 0;
 	windStrength = 0.15;
+	windGust = 0;
+	weatherWindStrength = 0.15;
 	precipitation = 0;
+	temperatureOffset = 0;
+	lightningProbability = 0;
 	overcast = 0;
 
-	/** Unit direction toward the sun (shared reference, do not retain). */
 	readonly sunDirection = new Vector3(0, 1, 0);
-	/** Unit direction toward the moon (shared reference, do not retain). */
 	readonly moonDirection = new Vector3(0, -1, 0);
 
-	/** Zenith and horizon colours for the atmosphere, updated in place. */
 	readonly zenithColor = new Color('#3f6fb0');
 	readonly horizonColor = new Color('#cfe0ec');
-	/** Warm tint injected near the horizon at golden hour. */
 	readonly sunTint = new Color('#ffd9a0');
-	/** Directional (sun/moon) light colour for this frame. */
 	readonly lightColor = new Color('#fff3e0');
-	/** Ambient light colour for this frame. */
 	readonly ambientColor = new Color('#b9c6d4');
-	/** Scene fog colour for this frame. */
 	readonly fogColor = new Color('#cfe0ec');
 
-	/** Directional light intensity for this frame. */
 	lightIntensity = 1;
-	/** Ambient light intensity for this frame. */
 	ambientIntensity = 0.6;
-	/** Global tone-mapping exposure for this frame. */
 	exposure = 1;
+	shadowSoftness = 0;
 
 	readonly weather: WeatherSaveState = {
 		current: 'clear',
@@ -105,15 +64,28 @@ export class EnvironmentState {
 		seed: 0
 	};
 
-	// Scratch colours reused across updates to avoid per-frame allocation.
 	private readonly scratchDay = new Color();
 	private readonly scratchNight = new Color();
+	private readonly scratchCloud = new Color();
 
-	/**
-	 * Recomputes every derived value from the clock. Pure with respect to
-	 * allocation: only mutates existing fields and the shared scratch colours.
-	 */
-	update(clock: CelestialClock): void {
+	update(
+		clock: CelestialClock,
+		weather?: Readonly<WeatherFrameState>,
+		wind?: Readonly<WindFrameState>,
+		clouds?: Readonly<CloudFrameState>
+	): void {
+		if (weather) {
+			this.applyWeather(weather);
+		}
+
+		if (wind) {
+			this.applyWind(wind);
+		}
+
+		if (clouds) {
+			this.applyClouds(clouds);
+		}
+
 		this.timeOfDay = clock.normalizedTimeOfDay;
 		this.dayNumber = clock.currentDayNumber;
 		this.sunAltitude = clock.sunAltitude;
@@ -123,60 +95,95 @@ export class EnvironmentState {
 		this.moonDirection.copy(clock.moonDirectionRef);
 
 		const altitude = this.sunAltitude;
-
-		// Daylight ramps in as the sun climbs above the horizon.
 		this.daylight = smoothstep(-0.08, 0.22, altitude);
-		// Golden hour peaks when the sun sits right on the horizon.
-		this.goldenHour = 1 - smoothstep(0.0, 0.22, Math.abs(altitude));
-		// Twilight is the band just below the horizon.
+		this.goldenHour = 1 - smoothstep(0, 0.22, Math.abs(altitude));
 		this.twilight = smoothstep(-0.25, -0.02, altitude) * (1 - this.daylight);
-		// Night is the complement of any daylight/twilight glow.
 		this.night = clamp01(1 - smoothstep(-0.18, 0.04, altitude));
-
-		// Stars appear as the sky darkens; clouds later suppress them.
-		this.starVisibility = clamp01(this.night * (1 - this.cloudCoverage * 0.85));
+		this.starVisibility = clamp01(this.night * (1 - this.cloudMoonOcclusion * 0.96));
 
 		this.updateAtmosphereColors();
 		this.updateLighting();
 	}
 
-	/** Applies restored weather state (called during save restore). */
+	applyWeather(frame: Readonly<WeatherFrameState>): void {
+		this.weather.current = frame.current;
+		this.weather.next = frame.next;
+		this.weather.transition = clamp01(frame.transition);
+		this.weather.seed = frame.seed >>> 0;
+		this.weather.phase = frame.phase;
+		this.weather.phaseElapsedSeconds = frame.phaseElapsedSeconds;
+		this.weather.phaseDurationSeconds = frame.phaseDurationSeconds;
+		this.weather.scheduleIndex = frame.scheduleIndex;
+		this.weather.paused = frame.paused;
+
+		const parameters = frame.parameters;
+		this.cloudCoverage = clamp01(parameters.cloudCoverage);
+		this.cloudDensity = clamp01(parameters.cloudDensity);
+		this.cloudDarkness = clamp01(parameters.cloudDarkness);
+		this.humidity = clamp01(parameters.humidity);
+		this.precipitation = clamp01(parameters.precipitation);
+		this.fogDensity = clamp01(parameters.fogDensity);
+		this.weatherWindStrength = clamp01(parameters.windStrength);
+		this.windStrength = this.weatherWindStrength;
+		this.temperatureOffset = finiteOr(parameters.temperatureOffset, 0);
+		this.lightningProbability = clamp01(parameters.lightningProbability);
+		this.overcast = clamp01(parameters.overcast);
+	}
+
+	applyWind(frame: Readonly<WindFrameState>): void {
+		this.windDirection = finiteOr(frame.directionRadians, 0);
+		this.windStrength = clamp01(frame.strength);
+		this.windGust = clamp01(frame.gust);
+	}
+
+	applyClouds(frame: Readonly<CloudFrameState>): void {
+		this.cloudCoverage = clamp01(frame.coverage);
+		this.cloudDensity = clamp01(frame.density);
+		this.cloudDarkness = clamp01(frame.darkness);
+		this.cloudOpacity = clamp01(frame.opacity);
+		this.cloudSunOcclusion = clamp01(frame.sunOcclusion);
+		this.cloudMoonOcclusion = clamp01(frame.moonOcclusion);
+		this.cloudShadowStrength = clamp01(frame.shadowStrength);
+	}
+
 	restoreWeather(state: WeatherSaveState): void {
-		this.weather.current = state.current;
-		this.weather.next = state.next;
+		this.weather.current = validWeatherKind(state.current, 'clear');
+		this.weather.next = validWeatherKind(state.next, this.weather.current);
 		this.weather.transition = clamp01(state.transition);
 		this.weather.seed = state.seed >>> 0;
+		this.weather.phase = state.phase;
+		this.weather.phaseElapsedSeconds = state.phaseElapsedSeconds;
+		this.weather.phaseDurationSeconds = state.phaseDurationSeconds;
+		this.weather.scheduleIndex = state.scheduleIndex;
+		this.weather.paused = state.paused;
 	}
 
 	private updateAtmosphereColors(): void {
 		const daylight = this.daylight;
 		const golden = this.goldenHour;
 
-		// Daytime palette: deep blue zenith, pale blue horizon.
 		this.scratchDay.setRGB(
 			lerp(0.16, 0.28, daylight),
 			lerp(0.26, 0.45, daylight),
 			lerp(0.42, 0.72, daylight)
 		);
-		// Night palette: near-black navy.
 		this.scratchNight.setRGB(0.02, 0.03, 0.07);
-
 		this.zenithColor.copy(this.scratchNight).lerp(this.scratchDay, daylight);
 
-		// Horizon is lighter than zenith and warms up at golden hour.
 		this.horizonColor.setRGB(
 			lerp(0.05, 0.82, daylight),
 			lerp(0.06, 0.88, daylight),
 			lerp(0.12, 0.95, daylight)
 		);
-		this.sunTint.setRGB(1.0, lerp(0.55, 0.85, 1 - golden), lerp(0.3, 0.62, 1 - golden));
+		this.sunTint.setRGB(1, lerp(0.55, 0.85, 1 - golden), lerp(0.3, 0.62, 1 - golden));
 		this.horizonColor.lerp(this.sunTint, golden * 0.6 * daylight);
 
-		// Overcast desaturates and greys the sky; unused (0) in Phase 1.
-		if (this.overcast > 0) {
-			const grey = lerp(0.5, 0.62, daylight);
-			this.zenithColor.lerp(this.scratchDay.setRGB(grey, grey, grey), this.overcast * 0.7);
-			this.horizonColor.lerp(this.scratchDay.setRGB(grey, grey, grey), this.overcast * 0.7);
+		const cloudInfluence = clamp01(this.overcast * 0.75 + this.cloudDarkness * 0.18);
+		if (cloudInfluence > 0) {
+			const grey = lerp(0.34, 0.62, daylight);
+			this.scratchCloud.setRGB(grey * 0.92, grey * 0.96, grey);
+			this.zenithColor.lerp(this.scratchCloud, cloudInfluence);
+			this.horizonColor.lerp(this.scratchCloud, cloudInfluence * 0.86);
 		}
 	}
 
@@ -184,24 +191,19 @@ export class EnvironmentState {
 		const daylight = this.daylight;
 		const golden = this.goldenHour;
 
-		// Sun light: warm and bright by day, warmer at golden hour.
 		this.lightColor.setRGB(
-			1.0,
+			1,
 			lerp(0.86, 0.97, 1 - golden),
 			lerp(0.68, 0.92, 1 - golden * (1 - daylight * 0.4))
 		);
 
-		// At night the directional light becomes cool, dim moonlight scaled by
-		// the illuminated fraction so a new moon is genuinely dark.
 		const moonStrength = this.night * (0.05 + this.lunarIllumination * 0.22);
 		this.lightIntensity = lerp(moonStrength, 1.35, daylight);
 
 		if (daylight < 0.5) {
-			// Blend the light colour toward cool moonlight after dusk.
 			this.lightColor.lerp(this.scratchNight.setRGB(0.55, 0.62, 0.85), (0.5 - daylight) * 2);
 		}
 
-		// Ambient follows the sky: cool-blue and dim at night, brighter by day.
 		this.ambientColor.setRGB(
 			lerp(0.12, 0.72, daylight),
 			lerp(0.16, 0.78, daylight),
@@ -209,11 +211,23 @@ export class EnvironmentState {
 		);
 		this.ambientIntensity = lerp(0.18, 0.62, daylight);
 
-		// Fog colour tracks the horizon so distant geometry melts into the sky.
-		this.fogColor.copy(this.horizonColor);
+		const directionalOcclusion = daylight > 0.05 ? this.cloudSunOcclusion : this.cloudMoonOcclusion;
+		this.lightIntensity *= lerp(1, 0.3, directionalOcclusion);
+		this.ambientIntensity *= lerp(1, 0.76, this.overcast);
+		this.scratchCloud.setRGB(0.58, 0.64, 0.72);
+		this.lightColor.lerp(this.scratchCloud, directionalOcclusion * 0.36);
+		this.ambientColor.lerp(this.scratchCloud, this.overcast * 0.24);
 
-		// Exposure lifts slightly at night so the scene is readable without
-		// washing out the day. Overcast pulls it down a touch.
-		this.exposure = lerp(1.18, 1.0, daylight) - this.overcast * 0.12;
+		this.fogColor.copy(this.horizonColor);
+		this.exposure = lerp(1.18, 1, daylight) - this.overcast * 0.13 - this.cloudDarkness * 0.04;
+		this.shadowSoftness = clamp01(this.cloudShadowStrength * daylight);
 	}
+}
+
+function finiteOr(value: number, fallback: number): number {
+	return Number.isFinite(value) ? value : fallback;
+}
+
+function validWeatherKind(value: unknown, fallback: WeatherKind): WeatherKind {
+	return isWeatherKind(value) ? value : fallback;
 }

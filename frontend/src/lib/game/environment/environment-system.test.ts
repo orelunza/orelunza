@@ -4,6 +4,9 @@ import { Vector3 } from 'three';
 import { CelestialClock, DEFAULT_DAY_LENGTH_SECONDS, LUNAR_CYCLE_DAYS } from './CelestialClock';
 import { EnvironmentState } from './EnvironmentState';
 import { resolveEnvironmentQuality } from './EnvironmentQuality';
+import { CloudSystem } from './clouds/CloudSystem';
+import { WeatherScheduler } from './weather/WeatherScheduler';
+import { WindSystem } from './wind/WindSystem';
 import {
 	DeterministicRandom,
 	clamp,
@@ -265,6 +268,38 @@ describe('environment state derivation', () => {
 		expect(state.starVisibility).toBeGreaterThan(0.8);
 	});
 
+	test('dense clouds dim celestial light, soften shadows and hide stars', () => {
+		const clock = new CelestialClock({ dayLengthSeconds: 1000 });
+		const weather = new WeatherScheduler({ seed: 9 });
+		const wind = new WindSystem({ seed: 10 });
+		const clouds = new CloudSystem();
+		const clearState = new EnvironmentState();
+		const stormState = new EnvironmentState();
+
+		clock.setDayFraction(0.5);
+		weather.forceWeather('clear');
+		wind.update(0, weather.currentState.parameters.windStrength);
+		clouds.update(weather.currentState.parameters, wind.currentState, 0);
+		clearState.update(clock, weather.currentState, wind.currentState, clouds.currentState);
+
+		weather.forceWeather('storm');
+		wind.update(0, weather.currentState.parameters.windStrength);
+		clouds.update(weather.currentState.parameters, wind.currentState, 0);
+		stormState.update(clock, weather.currentState, wind.currentState, clouds.currentState);
+
+		expect(stormState.lightIntensity).toBeLessThan(clearState.lightIntensity);
+		expect(stormState.exposure).toBeLessThan(clearState.exposure);
+		expect(stormState.shadowSoftness).toBeGreaterThan(clearState.shadowSoftness);
+
+		clock.setDayFraction(0);
+		clearState.update(clock, weather.currentState, wind.currentState, {
+			...clouds.currentState,
+			moonOcclusion: 0
+		});
+		stormState.update(clock, weather.currentState, wind.currentState, clouds.currentState);
+		expect(stormState.starVisibility).toBeLessThan(clearState.starVisibility);
+	});
+
 	test('every derived scalar stays within its documented bounds all day', () => {
 		const state = new EnvironmentState();
 		const clock = new CelestialClock({ dayLengthSeconds: 300 });
@@ -363,6 +398,11 @@ describe('environment quality profiles', () => {
 
 		expect(low.richAtmosphere).toBe(false);
 		expect(medium.richAtmosphere).toBe(true);
+
+		expect(low.cloudSegments).toBeLessThan(medium.cloudSegments);
+		expect(medium.cloudSegments).toBeLessThan(high.cloudSegments);
+		expect(low.cloudDetail).toBeLessThan(medium.cloudDetail);
+		expect(medium.cloudDetail).toBeLessThanOrEqual(high.cloudDetail);
 
 		expect(low.sunShadows).toBe(false);
 		expect(medium.sunShadows).toBe(true);
