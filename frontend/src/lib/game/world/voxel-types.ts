@@ -63,7 +63,9 @@ export interface BlockChange {
 
 export const CHUNK_SIZE = 16;
 export const WORLD_MIN_Y = 0;
-export const WORLD_MAX_Y = 32;
+// Sparse voxel storage keeps tall player constructions affordable.
+// 512 removes the former two-block wall cap while retaining a finite safety bound.
+export const WORLD_MAX_Y = 512;
 export const WATER_LEVEL = 7;
 export const STARTER_WORLD_SEED = 'orelunza-world-v2';
 export const WORLD_SPAWN = { x: 0.5, y: 0, z: 0.5 };

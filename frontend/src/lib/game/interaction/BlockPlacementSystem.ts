@@ -42,15 +42,18 @@ export class BlockPlacementSystem {
 			}
 		}
 
-		const position: BlockCoordinate = {
-			x: target.block.x + target.normal.x,
-			y: target.block.y + target.normal.y,
-			z: target.block.z + target.normal.z
-		};
+		const replacesTarget = target.type === 'water';
+		const position: BlockCoordinate = replacesTarget
+			? { ...target.block }
+			: {
+					x: target.block.x + target.normal.x,
+					y: target.block.y + target.normal.y,
+					z: target.block.z + target.normal.z
+				};
 
 		const destination = this.world.getLoadedBlock(position);
 
-		if (!destination || destination.type !== 'air') {
+		if (!destination || (destination.type !== 'air' && destination.type !== 'water')) {
 			this.refund(selected, consumed);
 			return false;
 		}

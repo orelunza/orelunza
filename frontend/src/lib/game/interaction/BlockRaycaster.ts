@@ -29,7 +29,13 @@ export class BlockRaycaster {
 		// not consume the player's actual building reach.
 		const maxDistance = this.reachDistance + Math.max(0, finiteOrZero(cameraDistance));
 
-		return this.raycastFrom(this.origin, this.direction, world, maxDistance);
+		return this.raycastFrom(
+			this.origin,
+			this.direction,
+			world,
+			maxDistance,
+			Math.max(0, finiteOrZero(cameraDistance))
+		);
 	}
 
 	/**
@@ -39,7 +45,8 @@ export class BlockRaycaster {
 		origin: Vector3,
 		direction: Vector3,
 		world: VoxelWorld,
-		maxDistance = this.reachDistance
+		maxDistance = this.reachDistance,
+		minimumReplaceableDistance = 0
 	): TargetedBlock | null {
 		if (
 			!isFiniteVector(origin) ||
@@ -71,6 +78,7 @@ export class BlockRaycaster {
 		let maxZ = firstBoundaryDistance(this.start.z, this.direction.z);
 		let travelled = 0;
 		let normal = initialNormal(this.direction);
+		let replaceableFallback: TargetedBlock | null = null;
 
 		while (travelled <= maxDistance) {
 			const position = { x, y, z };
@@ -79,7 +87,19 @@ export class BlockRaycaster {
 			// Never generate or interact with a chunk merely because the reticle
 			// points towards it. Streaming remains the only chunk owner.
 			if (block === null) {
-				return null;
+				return replaceableFallback;
+			}
+
+			if (
+				block.type === 'water' &&
+				replaceableFallback === null &&
+				travelled >= Math.max(0, finiteOrZero(minimumReplaceableDistance))
+			) {
+				replaceableFallback = {
+					block: position,
+					normal: { ...normal },
+					type: block.type
+				};
 			}
 
 			if (isTargetable(block)) {
@@ -108,7 +128,7 @@ export class BlockRaycaster {
 			}
 		}
 
-		return null;
+		return replaceableFallback;
 	}
 }
 

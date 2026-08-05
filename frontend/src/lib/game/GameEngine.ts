@@ -37,6 +37,7 @@ const SNAPSHOT_INTERVAL_MS = 100;
 const AVATAR_METRICS_INTERVAL_MS = 250;
 const AUTO_SAVE_INTERVAL_MS = 1500;
 const BACKEND_SYNC_INTERVAL_MS = 5000;
+const AVATAR_HIDE_CAMERA_DISTANCE = 0.55;
 
 export class GameEngine {
 	private readonly renderer: GameRenderer;
@@ -49,7 +50,7 @@ export class GameEngine {
 	private readonly pointerLock: PointerLockController;
 	private readonly inventory = new Inventory();
 	private readonly hotbar = new Hotbar();
-	private readonly raycaster = new BlockRaycaster(6);
+	private readonly raycaster = new BlockRaycaster(8);
 	private readonly loop: GameLoop;
 	private readonly persistence: GamePersistence;
 	private readonly avatar: PlayerAvatar;
@@ -290,8 +291,28 @@ export class GameEngine {
 		this.emitSnapshot();
 	}
 
+	enterBuildMode(): void {
+		if (this.status !== 'playing' || this.buildMode) {
+			return;
+		}
+
+		this.buildMode = true;
+		this.player.camera.setShoulderFraming('build');
+		this.selectBuildBlockFromHotbar();
+		this.message = this.selectedBuildBlock
+			? 'Build Mode — C: blocks · B: exit'
+			: 'Build Mode — C: choose a block · B: exit';
+		this.emitSnapshot();
+	}
+
 	openBuildCatalog(): void {
 		if (this.status !== 'playing') {
+			return;
+		}
+
+		if (!this.buildMode) {
+			this.message = 'Press B to enter Build Mode';
+			this.emitSnapshot();
 			return;
 		}
 
@@ -310,7 +331,7 @@ export class GameEngine {
 
 		this.status = 'playing';
 		this.pointerLock.request();
-		this.message = this.buildMode ? 'Build Mode' : 'Exploration Mode';
+		this.message = this.buildMode ? 'Build Mode — C: blocks · B: exit' : 'Exploration Mode';
 		this.emitSnapshot();
 	}
 
@@ -417,10 +438,23 @@ export class GameEngine {
 		}
 
 		if (commands.build) {
-			if (this.status === 'playing') {
-				this.openBuildCatalog();
-			} else if (this.status === 'build-catalog') {
+			if (this.status === 'build-catalog') {
 				this.closeBuildCatalog();
+				this.exitBuildMode();
+			} else if (this.status === 'playing') {
+				if (this.buildMode) {
+					this.exitBuildMode();
+				} else {
+					this.enterBuildMode();
+				}
+			}
+		}
+
+		if (commands.catalog) {
+			if (this.status === 'build-catalog') {
+				this.closeBuildCatalog();
+			} else if (this.status === 'playing') {
+				this.openBuildCatalog();
 			}
 		}
 
@@ -478,6 +512,10 @@ export class GameEngine {
 			this.lastWorldRebuildAt = frameStartedAt;
 			this.needsWorldRebuild = false;
 		}
+
+		// When camera collision pulls the eye very close to the player, hide the
+		// avatar instead of rendering the camera inside the head or torso.
+		this.avatar.object.visible = this.player.camera.currentDistance >= AVATAR_HIDE_CAMERA_DISTANCE;
 
 		this.avatar.update(
 			this.player.state,
