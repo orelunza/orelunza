@@ -171,8 +171,14 @@ export class GameEngine {
 			loadChunk: (chunk) => this.world.loadChunk(chunk),
 			unloadChunk: (chunk) => this.world.unloadChunk(chunk)
 		});
-		this.renderer = new GameRenderer(options.canvas);
-		this.sky = new Sky(this.renderer.scene);
+		const quality = options.quality ?? 'medium';
+
+		this.renderer = new GameRenderer(options.canvas, quality);
+		this.sky = new Sky(this.renderer.scene, {
+			renderer: this.renderer.renderer,
+			seed: options.seed || STARTER_WORLD_SEED,
+			quality
+		});
 		this.keyboard = new KeyboardInput(window);
 		this.mouse = new MouseInput(options.canvas);
 		this.pointerLock = new PointerLockController(options.canvas, () => this.emitSnapshot());

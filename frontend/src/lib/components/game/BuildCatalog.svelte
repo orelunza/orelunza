@@ -80,13 +80,9 @@
 	}
 </script>
 
-<div
-	class="catalog"
-	role="region"
-	aria-label="Available build blocks"
-	onkeydown={handlePanelKeydown}
-	tabindex="-1"
->
+<svelte:window onkeydown={handlePanelKeydown} />
+
+<div class="catalog" role="region" aria-label="Available build blocks">
 	<header class="header">
 		<div class="titles">
 			<h2 class="title">Available blocks</h2>

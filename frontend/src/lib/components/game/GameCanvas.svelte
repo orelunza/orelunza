@@ -154,11 +154,11 @@
 		filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.8));
 	}
 
-	.build-cursor[data-state='valid'] {
+	:global(.build-cursor[data-state='valid']) {
 		--cursor-color: #f97316;
 	}
 
-	.build-cursor[data-state='invalid'] {
+	:global(.build-cursor[data-state='invalid']) {
 		--cursor-color: #ef4444;
 	}
 

@@ -1,7 +1,18 @@
-import { Scene, WebGLRenderer, type Camera } from 'three';
-import { addWorldLighting } from './Lighting';
+import {
+	ACESFilmicToneMapping,
+	PCFSoftShadowMap,
+	SRGBColorSpace,
+	Scene,
+	WebGLRenderer,
+	type Camera
+} from 'three';
 import { PlacementPreview } from './PlacementPreview';
 import { SelectionOutline } from './SelectionOutline';
+import {
+	resolveQualitySettings,
+	type QualitySettings,
+	type RenderQuality
+} from './QualitySettings';
 import { BlockMeshFactory, type BlockInstanceLookup } from '../world/BlockMeshFactory';
 import type { VoxelWorld } from '../world/VoxelWorld';
 import { chunkKey, type BlockCoordinate, type ChunkCoordinate } from '../world/voxel-types';
@@ -13,11 +24,17 @@ export class GameRenderer {
 	readonly selection = new SelectionOutline();
 	readonly placementPreview = new PlacementPreview();
 
+	readonly quality: QualitySettings;
+
 	private readonly meshFactory = new BlockMeshFactory();
 	private readonly meshesByChunk = new Map<string, BlockInstanceLookup[]>();
 	private blockMeshes: BlockInstanceLookup[] = [];
 
-	constructor(readonly canvas: HTMLCanvasElement) {
+	constructor(
+		readonly canvas: HTMLCanvasElement,
+		quality: RenderQuality = 'medium'
+	) {
+		this.quality = resolveQualitySettings(quality);
 		this.renderer = new WebGLRenderer({
 			canvas,
 			antialias: true,
@@ -25,10 +42,21 @@ export class GameRenderer {
 			powerPreference: 'high-performance'
 		});
 
-		this.renderer.setPixelRatio(1);
-		this.renderer.shadowMap.enabled = false;
+		this.renderer.setPixelRatio(this.quality.pixelRatio);
 
-		addWorldLighting(this.scene);
+		// Tone mapping and colour space give the atmospheric sky its dynamic
+		// range; exposure is then driven per frame by the environment system.
+		this.renderer.outputColorSpace = SRGBColorSpace;
+		this.renderer.toneMapping = ACESFilmicToneMapping;
+		this.renderer.toneMappingExposure = 1;
+
+		// Shadow casting is toggled by the environment lighting according to the
+		// quality profile; configure the type once here.
+		this.renderer.shadowMap.enabled = this.quality.shadows;
+		this.renderer.shadowMap.type = PCFSoftShadowMap;
+
+		// Lighting is owned by EnvironmentLighting (dynamic sun/moon), so the
+		// renderer no longer adds static lights of its own.
 		this.scene.add(this.selection.object, this.placementPreview.object);
 	}
 

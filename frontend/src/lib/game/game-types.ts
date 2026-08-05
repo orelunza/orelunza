@@ -8,6 +8,7 @@ import type { InventorySnapshot } from './inventory/Inventory';
 import type { CharacterAppearanceV1 } from './character/CharacterAppearance';
 import type { PerformanceSnapshot } from './debug/PerformanceMonitor';
 import type { HumanoidAnimationSnapshot } from './player/HumanoidPose';
+import type { RenderQuality } from './rendering/QualitySettings';
 
 export type GameStatus =
 	| 'booting'
@@ -67,6 +68,7 @@ export interface GameEngineOptions {
 	playerId: string;
 	regionName: string;
 	seed: string;
+	quality?: RenderQuality;
 	appearance: CharacterAppearanceV1;
 	onSnapshot?: (snapshot: GameSnapshot) => void;
 	onError?: (error: Error) => void;
