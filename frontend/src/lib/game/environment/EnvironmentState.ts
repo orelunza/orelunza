@@ -10,6 +10,7 @@ import type { WeatherFogFrameState } from './weather/FogController';
 import type { LightningFrameState } from './weather/LightningState';
 import type { ClimateFrameState } from './climate/ClimateState';
 import type { SurfaceWeatherFrameState } from './surface/SurfaceWeatherState';
+import type { RegionalWeatherInspect } from './regions/RegionalWeatherSystem';
 
 export type { WeatherFrameState, WeatherKind, WeatherSaveState } from './weather/WeatherState';
 
@@ -66,6 +67,15 @@ export class EnvironmentState {
 	snowCoverage = 0;
 	frost = 0;
 
+	climateRegionId = 'spawn_meadow';
+	climateBoundaryBlend = 0;
+	localWeather: WeatherKind = 'clear';
+	weatherCellCount = 0;
+	dominantWeatherCellId: number | null = null;
+	dominantWeatherCellKind: WeatherKind | null = null;
+	weatherCellCloudInfluence = 0;
+	weatherCellCoreInfluence = 0;
+
 	readonly sunDirection = new Vector3(0, 1, 0);
 	readonly moonDirection = new Vector3(0, -1, 0);
 
@@ -101,7 +111,8 @@ export class EnvironmentState {
 		fog?: Readonly<WeatherFogFrameState>,
 		lightning?: Readonly<LightningFrameState>,
 		climate?: Readonly<ClimateFrameState>,
-		surface?: Readonly<SurfaceWeatherFrameState>
+		surface?: Readonly<SurfaceWeatherFrameState>,
+		regional?: Readonly<RegionalWeatherInspect>
 	): void {
 		if (weather) {
 			this.applyWeather(weather);
@@ -133,6 +144,10 @@ export class EnvironmentState {
 
 		if (surface) {
 			this.applySurfaceWeather(surface);
+		}
+
+		if (regional) {
+			this.applyRegionalWeather(regional);
 		}
 
 		this.timeOfDay = clock.normalizedTimeOfDay;
@@ -228,6 +243,17 @@ export class EnvironmentState {
 		this.wetness = clamp01(frame.wetness);
 		this.snowCoverage = clamp01(frame.snowCoverage);
 		this.frost = clamp01(frame.frost);
+	}
+
+	applyRegionalWeather(frame: Readonly<RegionalWeatherInspect>): void {
+		this.climateRegionId = frame.regionId;
+		this.climateBoundaryBlend = clamp01(frame.boundaryBlend);
+		this.localWeather = frame.localWeather;
+		this.weatherCellCount = Math.max(0, Math.floor(frame.activeCellCount));
+		this.dominantWeatherCellId = frame.dominantCellId;
+		this.dominantWeatherCellKind = frame.dominantCellKind;
+		this.weatherCellCloudInfluence = clamp01(frame.cellCloudInfluence);
+		this.weatherCellCoreInfluence = clamp01(frame.cellCoreInfluence);
 	}
 
 	restoreWeather(state: WeatherSaveState): void {

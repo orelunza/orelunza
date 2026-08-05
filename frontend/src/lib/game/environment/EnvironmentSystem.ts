@@ -34,6 +34,11 @@ import { ClimateSystem } from './climate/ClimateSystem';
 import type { ClimateSaveState } from './climate/ClimateState';
 import { SurfaceWeatherController } from './surface/SurfaceWeatherController';
 import type { SurfaceWeatherSaveState } from './surface/SurfaceWeatherState';
+import { ClimateRegionResolver } from './regions/ClimateRegionResolver';
+import type { ClimateRegionSaveState } from './regions/ClimateRegion';
+import { RegionalWeatherSystem } from './regions/RegionalWeatherSystem';
+import { WeatherCellManager } from './cells/WeatherCellManager';
+import { isWeatherCellKind, type WeatherCellManagerSaveState } from './cells/WeatherCellState';
 
 export interface EnvironmentSaveState {
 	version: 1;
@@ -52,6 +57,10 @@ export interface EnvironmentSaveState {
 	climate?: ClimateSaveState;
 	/** Added in climate Lot 3; optional for older saves. */
 	surfaceWeather?: SurfaceWeatherSaveState;
+	/** Added in regional weather Lot 4; optional for older saves. */
+	climateRegion?: ClimateRegionSaveState;
+	/** Added in regional weather Lot 4; optional for older saves. */
+	weatherCells?: WeatherCellManagerSaveState;
 }
 
 export interface EnvironmentSystemOptions {
@@ -73,6 +82,8 @@ export interface EnvironmentDebugApi {
 	setWeather(weather: WeatherKind): void;
 	setCloudCoverage(coverage: number): void;
 	triggerLightning(): void;
+	spawnWeatherCell(weather: WeatherKind): boolean;
+	clearWeatherCells(): void;
 	getState(): EnvironmentInspect;
 }
 
@@ -104,6 +115,14 @@ export interface EnvironmentInspect {
 	windGust: number;
 	temperatureOffset: number;
 	climateZone: string;
+	climateRegionId: string;
+	climateBoundaryBlend: number;
+	localWeather: WeatherKind;
+	weatherCellCount: number;
+	dominantWeatherCellId: number | null;
+	dominantWeatherCellKind: WeatherKind | null;
+	weatherCellCloudInfluence: number;
+	weatherCellCoreInfluence: number;
 	temperatureCelsius: number;
 	windChillCelsius: number;
 	precipitationType: string;
@@ -132,6 +151,9 @@ export class EnvironmentSystem {
 	private readonly climateSystem = new ClimateSystem();
 	private readonly precipitationSystem = new PrecipitationSystem();
 	private readonly surfaceWeather = new SurfaceWeatherController();
+	private readonly climateRegion = new ClimateRegionResolver();
+	private readonly regionalWeather = new RegionalWeatherSystem();
+	private readonly weatherCells: WeatherCellManager;
 	private readonly fogController = new FogController();
 	private readonly lightningSystem: LightningSystem;
 	private readonly rainOcclusion: RainOcclusionSystem;
@@ -149,6 +171,7 @@ export class EnvironmentSystem {
 	private readonly splashes: RainSplashRenderer;
 	private readonly lightning: LightningRenderer;
 
+	private readonly lastCameraPosition = new Vector3();
 	private disposed = false;
 
 	constructor(options: EnvironmentSystemOptions) {
@@ -162,6 +185,7 @@ export class EnvironmentSystem {
 		});
 		this.weatherScheduler = new WeatherScheduler({ seed: this.seedValue });
 		this.windSystem = new WindSystem({ seed: this.seedValue ^ 0x7a4f3c19 });
+		this.weatherCells = new WeatherCellManager({ seed: this.seedValue ^ 0x43454c4c });
 		this.lightningSystem = new LightningSystem(this.seedValue ^ 0x4c544e47);
 		this.worldQuery = options.worldQuery;
 		this.rainOcclusion = new RainOcclusionSystem(options.worldQuery);
@@ -191,6 +215,7 @@ export class EnvironmentSystem {
 			return;
 		}
 
+		this.lastCameraPosition.copy(cameraPosition);
 		this.clock.advance(deltaSeconds);
 		this.weatherScheduler.update(deltaSeconds);
 		this.rainOcclusion.update(cameraPosition, deltaSeconds);
@@ -244,7 +269,9 @@ export class EnvironmentSystem {
 			precipitation: this.precipitationSystem.serialize(),
 			lightning: this.lightningSystem.serialize(),
 			climate: this.climateSystem.serialize(),
-			surfaceWeather: this.surfaceWeather.serialize()
+			surfaceWeather: this.surfaceWeather.serialize(),
+			climateRegion: this.climateRegion.serialize(),
+			weatherCells: this.weatherCells.serialize()
 		};
 	}
 
@@ -262,6 +289,8 @@ export class EnvironmentSystem {
 		this.lightningSystem.restore(save.lightning);
 		this.climateSystem.restore(save.climate);
 		this.surfaceWeather.restore(save.surfaceWeather);
+		this.climateRegion.restore(save.climateRegion);
+		this.weatherCells.restore(save.weatherCells);
 		this.refreshState(0, ORIGIN);
 		this.lighting.snapTo(this.state, ORIGIN);
 	}
@@ -283,6 +312,8 @@ export class EnvironmentSystem {
 				this.climateSystem.pause();
 				this.precipitationSystem.pause();
 				this.surfaceWeather.pause();
+				this.climateRegion.pause();
+				this.weatherCells.pause();
 				this.lightningSystem.pause();
 			},
 			resumeCycle: () => {
@@ -292,19 +323,41 @@ export class EnvironmentSystem {
 				this.climateSystem.resume();
 				this.precipitationSystem.resume();
 				this.surfaceWeather.resume();
+				this.climateRegion.resume();
+				this.weatherCells.resume();
 				this.lightningSystem.resume();
 			},
 			setWeather: (weather) => {
+				this.weatherCells.clear();
 				this.weatherScheduler.forceWeather(weather);
-				this.refreshState(0, ORIGIN);
+				this.refreshState(0, this.lastCameraPosition);
 			},
 			setCloudCoverage: (coverage) => {
 				this.weatherScheduler.setCloudCoverageOverride(coverage);
-				this.refreshState(0, ORIGIN);
+				this.refreshState(0, this.lastCameraPosition);
 			},
 			triggerLightning: () => {
 				this.lightningSystem.trigger();
-				this.refreshState(0, ORIGIN);
+				this.refreshState(0, this.lastCameraPosition);
+			},
+			spawnWeatherCell: (weather) => {
+				if (!isWeatherCellKind(weather)) {
+					return false;
+				}
+				this.weatherCells.spawnAt(
+					weather,
+					this.lastCameraPosition.x,
+					this.lastCameraPosition.z,
+					145,
+					1,
+					this.windSystem.currentState
+				);
+				this.refreshState(0, this.lastCameraPosition);
+				return true;
+			},
+			clearWeatherCells: () => {
+				this.weatherCells.clear();
+				this.refreshState(0, this.lastCameraPosition);
 			},
 			getState: () => ({
 				timeOfDay: this.state.timeOfDay,
@@ -334,6 +387,14 @@ export class EnvironmentSystem {
 				windGust: this.state.windGust,
 				temperatureOffset: this.state.temperatureOffset,
 				climateZone: this.state.climateZone,
+				climateRegionId: this.state.climateRegionId,
+				climateBoundaryBlend: this.state.climateBoundaryBlend,
+				localWeather: this.state.localWeather,
+				weatherCellCount: this.state.weatherCellCount,
+				dominantWeatherCellId: this.state.dominantWeatherCellId,
+				dominantWeatherCellKind: this.state.dominantWeatherCellKind,
+				weatherCellCloudInfluence: this.state.weatherCellCloudInfluence,
+				weatherCellCoreInfluence: this.state.weatherCellCoreInfluence,
 				temperatureCelsius: this.state.temperatureCelsius,
 				windChillCelsius: this.state.windChillCelsius,
 				precipitationType: this.state.precipitationType,
@@ -369,7 +430,20 @@ export class EnvironmentSystem {
 	}
 
 	private refreshState(deltaSeconds: number, cameraPosition: Readonly<Vector3>): void {
-		const weather = this.weatherScheduler.currentState;
+		const baseWeather = this.weatherScheduler.currentState;
+		this.climateRegion.update(deltaSeconds, cameraPosition, this.worldQuery);
+		this.weatherCells.update(
+			deltaSeconds,
+			cameraPosition,
+			this.windSystem.currentState,
+			this.climateRegion.currentProfile
+		);
+		this.regionalWeather.update(
+			baseWeather,
+			this.climateRegion.currentState,
+			this.weatherCells.currentState
+		);
+		const weather = this.regionalWeather.currentState;
 		this.windSystem.update(deltaSeconds, weather.parameters.windStrength);
 		this.cloudSystem.update(weather.parameters, this.windSystem.currentState, deltaSeconds);
 		this.climateSystem.update(
@@ -378,7 +452,8 @@ export class EnvironmentSystem {
 			this.clock.normalizedTimeOfDay,
 			weather,
 			this.windSystem.currentState,
-			this.worldQuery
+			this.worldQuery,
+			this.climateRegion.currentState
 		);
 		this.precipitationSystem.update(
 			deltaSeconds,
@@ -405,7 +480,8 @@ export class EnvironmentSystem {
 			this.fogController.currentState,
 			this.lightningSystem.currentState,
 			this.climateSystem.currentState,
-			this.surfaceWeather.currentState
+			this.surfaceWeather.currentState,
+			this.regionalWeather.currentInspect
 		);
 	}
 }

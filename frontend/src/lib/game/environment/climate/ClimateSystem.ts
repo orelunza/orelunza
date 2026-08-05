@@ -4,6 +4,7 @@ import type { WeatherFrameState } from '../weather/WeatherState';
 import type { WeatherWorldQuery } from '../weather/WeatherWorldQuery';
 import type { WindFrameState } from '../wind/WindState';
 import { resolveBiomeClimateProfile } from './BiomeClimateProfile';
+import type { ClimateRegionFrameState } from '../regions/ClimateRegion';
 import {
 	createClimateFrameState,
 	type ClimateFrameState,
@@ -29,7 +30,8 @@ export class ClimateSystem {
 		timeOfDay: number,
 		weather: Readonly<WeatherFrameState>,
 		wind: Readonly<WindFrameState>,
-		worldQuery?: WeatherWorldQuery
+		worldQuery?: WeatherWorldQuery,
+		region?: Readonly<ClimateRegionFrameState>
 	): void {
 		if (!this.frame.paused && Number.isFinite(deltaSeconds) && deltaSeconds > 0) {
 			this.frame.elapsedSeconds += deltaSeconds;
@@ -38,16 +40,22 @@ export class ClimateSystem {
 		const x = finiteOr(cameraPosition.x, 0);
 		const y = finiteOr(cameraPosition.y, REFERENCE_ALTITUDE);
 		const z = finiteOr(cameraPosition.z, 0);
-		const zone = worldQuery?.climateZoneAt?.(x, z) ?? 'Spawn Meadow';
+		const zone = region?.zone ?? worldQuery?.climateZoneAt?.(x, z) ?? 'Spawn Meadow';
 		const profile = resolveBiomeClimateProfile(zone);
+		const baseTemperatureCelsius = region?.baseTemperatureCelsius ?? profile.baseTemperatureCelsius;
+		const dailyRangeCelsius = region?.dailyRangeCelsius ?? profile.dailyRangeCelsius;
+		const lapseRateCelsiusPerMeter =
+			region?.lapseRateCelsiusPerMeter ?? profile.lapseRateCelsiusPerMeter;
+		const regionalHumidity = region?.humidity ?? profile.humidity;
 		const dayFraction = wrap01(finiteOr(timeOfDay, 0.5));
 		// Warmest around 14:00, coldest around 02:00.
 		const dailyWave = Math.cos((dayFraction - 0.58) * TWO_PI);
-		const altitudeCooling = Math.max(0, y - REFERENCE_ALTITUDE) * profile.lapseRateCelsiusPerMeter;
+		const altitudeCooling = Math.max(0, y - REFERENCE_ALTITUDE) * lapseRateCelsiusPerMeter;
 		const baseTemperature =
-			profile.baseTemperatureCelsius + dailyWave * profile.dailyRangeCelsius - altitudeCooling;
+			baseTemperatureCelsius + dailyWave * dailyRangeCelsius - altitudeCooling;
 		const temperature = clamp(baseTemperature + weather.parameters.temperatureOffset, -45, 55);
-		const humidity = clamp01(lerp(profile.humidity, weather.parameters.humidity, 0.68));
+		// The biome remains the primary humidity authority; weather modulates it.
+		const humidity = clamp01(lerp(regionalHumidity, weather.parameters.humidity, 0.4));
 		const windSpeed = clamp01(wind.strength + wind.gust * 0.45);
 		const windCooling =
 			temperature < 12 ? windSpeed * lerp(1.4, 7.2, clamp01((12 - temperature) / 22)) : 0;
