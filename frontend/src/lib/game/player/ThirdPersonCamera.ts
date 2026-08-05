@@ -43,10 +43,10 @@ const SHOULDER_SWEEP_STEP = 0.08;
 
 const EASE_OUT_RESPONSE = 7;
 
-// Altitude framing is activated only while building, only when the player is
-// meaningfully above the terrain, and only while looking downward. It preserves
-// real perspective instead of auto-fitting the complete tower: the ground must
-// look farther and smaller at high altitude, then become larger as the player
+// Altitude framing is active in every camera mode when the player is
+// meaningfully above the terrain and looks downward. It preserves real
+// perspective instead of auto-fitting the complete tower: the ground looks
+// farther and smaller at high altitude, then becomes larger as the player
 // descends, like an aircraft approaching the ground.
 const ALTITUDE_FRAME_START = 5;
 const ALTITUDE_FRAME_FULL = 24;
@@ -69,7 +69,6 @@ export class ThirdPersonCamera {
 
 	private shoulderTarget = SHOULDER_OFFSET_EXPLORE;
 	private shoulderCurrent = SHOULDER_OFFSET_EXPLORE;
-	private framingMode: 'explore' | 'build' = 'explore';
 	private altitudeFrameCurrent = 0;
 	private framedDistance = DEFAULT_CAMERA_DISTANCE;
 
@@ -135,7 +134,6 @@ export class ThirdPersonCamera {
 	}
 
 	setShoulderFraming(mode: 'explore' | 'build'): void {
-		this.framingMode = mode;
 		this.shoulderTarget = mode === 'build' ? SHOULDER_OFFSET_BUILD : SHOULDER_OFFSET_EXPLORE;
 	}
 
@@ -187,7 +185,7 @@ export class ThirdPersonCamera {
 		const altitude = Math.max(0, player.position.y - (terrainHeight + 1.04));
 		const altitudeFactor = smoothstep(ALTITUDE_FRAME_START, ALTITUDE_FRAME_FULL, altitude);
 		const pitchFactor = smoothstep(ALTITUDE_PITCH_START, ALTITUDE_PITCH_FULL, this.pitch);
-		const desiredAltitudeFrame = this.framingMode === 'build' ? altitudeFactor * pitchFactor : 0;
+		const desiredAltitudeFrame = altitudeFactor * pitchFactor;
 
 		this.altitudeFrameCurrent = damp(
 			this.altitudeFrameCurrent,
@@ -207,9 +205,9 @@ export class ThirdPersonCamera {
 		this.target.copy(this.baseTarget).addScaledVector(this.shoulder, shoulderScale);
 
 		// On the ground the boom keeps a stable elevation, which prevents looking
-		// upward from dragging the eye into water. While building high above the
-		// terrain and looking down, the boom progressively becomes a drone-like
-		// orbit so both the avatar and the construction origin remain frameable.
+		// upward from dragging the eye into water. High above the terrain and
+		// while looking down, the boom progressively becomes a drone-like orbit
+		// in both exploration and construction modes.
 		const altitudeFrame = this.altitudeFrameCurrent;
 		const boomPitch = lerp(CAMERA_BOOM_PITCH, ALTITUDE_BOOM_PITCH, altitudeFrame);
 		const boomHorizontal = Math.cos(boomPitch);
