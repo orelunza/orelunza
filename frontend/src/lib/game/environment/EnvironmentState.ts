@@ -5,6 +5,9 @@ import type { CloudFrameState } from './clouds/CloudState';
 import { isWeatherKind } from './weather/WeatherState';
 import type { WeatherFrameState, WeatherKind, WeatherSaveState } from './weather/WeatherState';
 import type { WindFrameState } from './wind/WindState';
+import type { PrecipitationFrameState } from './weather/PrecipitationState';
+import type { WeatherFogFrameState } from './weather/FogController';
+import type { LightningFrameState } from './weather/LightningState';
 
 export type { WeatherFrameState, WeatherKind, WeatherSaveState } from './weather/WeatherState';
 
@@ -41,6 +44,13 @@ export class EnvironmentState {
 	temperatureOffset = 0;
 	lightningProbability = 0;
 	overcast = 0;
+	rainIntensity = 0;
+	rainVisibleIntensity = 0;
+	rainShelter = 0;
+	rainHaze = 0;
+	visibility = 1;
+	lightningFlash = 0;
+	lightningStrikeId = 0;
 
 	readonly sunDirection = new Vector3(0, 1, 0);
 	readonly moonDirection = new Vector3(0, -1, 0);
@@ -72,7 +82,10 @@ export class EnvironmentState {
 		clock: CelestialClock,
 		weather?: Readonly<WeatherFrameState>,
 		wind?: Readonly<WindFrameState>,
-		clouds?: Readonly<CloudFrameState>
+		clouds?: Readonly<CloudFrameState>,
+		precipitation?: Readonly<PrecipitationFrameState>,
+		fog?: Readonly<WeatherFogFrameState>,
+		lightning?: Readonly<LightningFrameState>
 	): void {
 		if (weather) {
 			this.applyWeather(weather);
@@ -84,6 +97,18 @@ export class EnvironmentState {
 
 		if (clouds) {
 			this.applyClouds(clouds);
+		}
+
+		if (precipitation) {
+			this.applyPrecipitation(precipitation);
+		}
+
+		if (fog) {
+			this.applyFog(fog);
+		}
+
+		if (lightning) {
+			this.applyLightning(lightning);
 		}
 
 		this.timeOfDay = clock.normalizedTimeOfDay;
@@ -146,6 +171,23 @@ export class EnvironmentState {
 		this.cloudShadowStrength = clamp01(frame.shadowStrength);
 	}
 
+	applyPrecipitation(frame: Readonly<PrecipitationFrameState>): void {
+		this.rainIntensity = clamp01(frame.intensity);
+		this.rainVisibleIntensity = clamp01(frame.visibleIntensity);
+		this.rainShelter = clamp01(frame.shelter);
+	}
+
+	applyFog(frame: Readonly<WeatherFogFrameState>): void {
+		this.fogDensity = clamp01(frame.density);
+		this.rainHaze = clamp01(frame.rainHaze);
+		this.visibility = clamp01(frame.visibility);
+	}
+
+	applyLightning(frame: Readonly<LightningFrameState>): void {
+		this.lightningFlash = clamp01(frame.flashIntensity);
+		this.lightningStrikeId = frame.strikeId >>> 0;
+	}
+
 	restoreWeather(state: WeatherSaveState): void {
 		this.weather.current = validWeatherKind(state.current, 'clear');
 		this.weather.next = validWeatherKind(state.next, this.weather.current);
@@ -185,6 +227,12 @@ export class EnvironmentState {
 			this.zenithColor.lerp(this.scratchCloud, cloudInfluence);
 			this.horizonColor.lerp(this.scratchCloud, cloudInfluence * 0.86);
 		}
+
+		if (this.lightningFlash > 0) {
+			this.scratchCloud.setRGB(0.72, 0.82, 1);
+			this.zenithColor.lerp(this.scratchCloud, this.lightningFlash * 0.72);
+			this.horizonColor.lerp(this.scratchCloud, this.lightningFlash * 0.86);
+		}
 	}
 
 	private updateLighting(): void {
@@ -219,8 +267,28 @@ export class EnvironmentState {
 		this.ambientColor.lerp(this.scratchCloud, this.overcast * 0.24);
 
 		this.fogColor.copy(this.horizonColor);
-		this.exposure = lerp(1.18, 1, daylight) - this.overcast * 0.13 - this.cloudDarkness * 0.04;
-		this.shadowSoftness = clamp01(this.cloudShadowStrength * daylight);
+		if (this.rainHaze > 0) {
+			this.scratchCloud.setRGB(0.48, 0.55, 0.62);
+			this.fogColor.lerp(this.scratchCloud, this.rainHaze * 0.62);
+		}
+
+		const flash = this.lightningFlash;
+		if (flash > 0) {
+			this.scratchCloud.setRGB(0.82, 0.9, 1);
+			this.lightColor.lerp(this.scratchCloud, flash * 0.92);
+			this.ambientColor.lerp(this.scratchCloud, flash * 0.84);
+			this.lightIntensity += flash * 2.8;
+			this.ambientIntensity += flash * 1.55;
+			this.fogColor.lerp(this.scratchCloud, flash * 0.72);
+		}
+
+		this.exposure =
+			lerp(1.18, 1, daylight) -
+			this.overcast * 0.13 -
+			this.cloudDarkness * 0.04 -
+			this.rainHaze * 0.08 +
+			flash * 0.32;
+		this.shadowSoftness = clamp01(this.cloudShadowStrength * daylight + this.rainHaze * 0.18);
 	}
 }
 

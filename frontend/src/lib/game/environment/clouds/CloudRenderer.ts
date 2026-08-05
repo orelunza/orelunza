@@ -25,6 +25,7 @@ interface CloudUniforms {
 	uDetail: IUniform<number>;
 	uWindOffset: IUniform<Vector2>;
 	uSunDirection: IUniform<Vector3>;
+	uLightningFlash: IUniform<number>;
 	[key: string]: IUniform;
 }
 
@@ -50,7 +51,8 @@ export class CloudRenderer {
 			uNight: { value: 0 },
 			uDetail: { value: quality.cloudDetail },
 			uWindOffset: { value: new Vector2() },
-			uSunDirection: { value: new Vector3(0, 1, 0) }
+			uSunDirection: { value: new Vector3(0, 1, 0) },
+			uLightningFlash: { value: 0 }
 		};
 		this.material = new ShaderMaterial({
 			side: BackSide,
@@ -107,6 +109,7 @@ export class CloudRenderer {
 		this.uniforms.uNight.value = state.night;
 		this.uniforms.uWindOffset.value.set(clouds.windOffsetX, clouds.windOffsetZ);
 		this.uniforms.uSunDirection.value.copy(state.sunDirection);
+		this.uniforms.uLightningFlash.value = state.lightningFlash;
 		this.mesh.visible = clouds.opacity > 0.01;
 	}
 

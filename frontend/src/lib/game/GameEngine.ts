@@ -44,6 +44,8 @@ import { ChunkStreamingSystem } from './world/ChunkStreamingSystem';
 import { createStarterWorld } from './world/WorldGenerator';
 import {
 	STARTER_WORLD_SEED,
+	WORLD_MAX_Y,
+	WORLD_MIN_Y,
 	type BlockCoordinate,
 	type BlockType,
 	worldToChunk
@@ -204,8 +206,19 @@ export class GameEngine {
 		this.sky = new Sky(this.renderer.scene, {
 			renderer: this.renderer.renderer,
 			seed: options.seed || STARTER_WORLD_SEED,
-			quality
+			quality,
+			worldQuery: {
+				surfaceHeightAt: (x, z, maxY) => this.weatherSurfaceHeightAt(x, z, maxY),
+				rainOcclusionAt: (x, y, z) => this.weatherRainOcclusionAt(x, y, z)
+			}
 		});
+		if (import.meta.env.DEV || import.meta.env.MODE === 'test') {
+			(
+				globalThis as typeof globalThis & {
+					__ORELUNZA_WEATHER__?: ReturnType<Sky['createDebugApi']>;
+				}
+			).__ORELUNZA_WEATHER__ = this.sky.createDebugApi();
+		}
 		this.keyboard = new KeyboardInput(window);
 		this.mouse = new MouseInput(options.canvas);
 		this.pointerLock = new PointerLockController(options.canvas, () => this.emitSnapshot());
@@ -494,6 +507,13 @@ export class GameEngine {
 		this.updateBuildCursorElement(false, null, null);
 		this.avatar.dispose();
 		this.chunkStreaming.dispose();
+		if (import.meta.env.DEV || import.meta.env.MODE === 'test') {
+			delete (
+				globalThis as typeof globalThis & {
+					__ORELUNZA_WEATHER__?: ReturnType<Sky['createDebugApi']>;
+				}
+			).__ORELUNZA_WEATHER__;
+		}
 		this.sky.dispose();
 		this.renderer.dispose();
 		this.emitSnapshot();
@@ -987,6 +1007,42 @@ export class GameEngine {
 		this.renderer.refreshChunk(this.world, worldToChunk(position));
 		this.diagnostics.chunkRefreshes += 1;
 		this.persistence.markDirty();
+	}
+
+	private weatherSurfaceHeightAt(x: number, z: number, maxY: number): number | null {
+		const blockX = Math.floor(x);
+		const blockZ = Math.floor(z);
+		const terrainFloor = Math.floor(this.world.terrainGenerator.heightAt(x, z));
+		const startY = Math.min(WORLD_MAX_Y, Math.max(WORLD_MIN_Y, Math.floor(maxY)));
+		const endY = Math.max(WORLD_MIN_Y, terrainFloor - 2);
+
+		for (let y = startY; y >= endY; y -= 1) {
+			const block = this.world.getLoadedBlock({ x: blockX, y, z: blockZ });
+			if (block?.solid && !block.passable) {
+				return y;
+			}
+		}
+
+		return Number.isFinite(terrainFloor) ? terrainFloor : null;
+	}
+
+	private weatherRainOcclusionAt(x: number, y: number, z: number): number {
+		const blockX = Math.floor(x);
+		const blockZ = Math.floor(z);
+		const startY = Math.max(WORLD_MIN_Y, Math.floor(y) + 1);
+		const endY = Math.min(WORLD_MAX_Y, startY + 52);
+
+		for (let sampleY = startY; sampleY <= endY; sampleY += 1) {
+			const block = this.world.getLoadedBlock({ x: blockX, y: sampleY, z: blockZ });
+			if (!block || !block.solid || block.passable) {
+				continue;
+			}
+
+			// Foliage filters rain but does not behave like a sealed roof.
+			return block.type === 'leaves' ? 0.42 : 1;
+		}
+
+		return 0;
 	}
 
 	private resize(): void {

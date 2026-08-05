@@ -5,12 +5,14 @@ import {
 	type EnvironmentSaveState
 } from '../environment/EnvironmentSystem';
 import type { RenderQuality } from './QualitySettings';
+import type { WeatherWorldQuery } from '../environment/weather/WeatherWorldQuery';
 
 export interface SkyOptions {
 	renderer: WebGLRenderer;
 	seed: string;
 	quality: RenderQuality;
 	dayLengthSeconds?: number;
+	worldQuery?: WeatherWorldQuery;
 }
 
 /**
@@ -32,7 +34,8 @@ export class Sky {
 			renderer: options.renderer,
 			seed: options.seed,
 			quality: options.quality,
-			dayLengthSeconds: options.dayLengthSeconds
+			dayLengthSeconds: options.dayLengthSeconds,
+			worldQuery: options.worldQuery
 		});
 	}
 

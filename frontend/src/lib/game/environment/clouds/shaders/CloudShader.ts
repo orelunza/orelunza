@@ -19,6 +19,7 @@ export const CLOUD_FRAGMENT_SHADER = /* glsl */ `
 	uniform float uDetail;
 	uniform vec2 uWindOffset;
 	uniform vec3 uSunDirection;
+	uniform float uLightningFlash;
 
 	varying vec3 vCloudDirection;
 
@@ -100,6 +101,7 @@ export const CLOUD_FRAGMENT_SHADER = /* glsl */ `
 		vec3 cloudColor = mix(nightColor, dayColor, uDaylight);
 		cloudColor += vec3(1.0, 0.78, 0.52) * pow(sunFacing, 12.0) * (1.0 - uDarkness) * 0.18;
 		cloudColor *= mix(0.82, 1.05, clamp(direction.y, 0.0, 1.0));
+		cloudColor = mix(cloudColor, vec3(0.78, 0.87, 1.0), clamp(uLightningFlash * 0.92, 0.0, 1.0));
 
 		float alpha = cloud * uOpacity * horizon;
 		alpha *= mix(0.8, 1.0, uNight);

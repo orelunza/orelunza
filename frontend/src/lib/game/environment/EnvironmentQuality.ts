@@ -22,6 +22,10 @@ export interface EnvironmentQuality {
 	readonly cloudSegments: number;
 	/** Number of procedural noise octaves evaluated by the cloud shader. */
 	readonly cloudDetail: number;
+	/** Maximum pooled rain streaks. */
+	readonly rainDropCount: number;
+	/** Maximum pooled ground splash points. */
+	readonly rainSplashCount: number;
 	/** Whether the sun should drive real-time shadows. */
 	readonly sunShadows: boolean;
 	/** Shadow map resolution when shadows are enabled. */
@@ -36,6 +40,8 @@ const LOW: EnvironmentQuality = {
 	celestialGlow: false,
 	cloudSegments: 16,
 	cloudDetail: 2,
+	rainDropCount: 180,
+	rainSplashCount: 18,
 	sunShadows: false,
 	shadowMapSize: 512
 };
@@ -48,6 +54,8 @@ const MEDIUM: EnvironmentQuality = {
 	celestialGlow: true,
 	cloudSegments: 28,
 	cloudDetail: 4,
+	rainDropCount: 420,
+	rainSplashCount: 36,
 	sunShadows: true,
 	shadowMapSize: 1024
 };
@@ -60,6 +68,8 @@ const HIGH: EnvironmentQuality = {
 	celestialGlow: true,
 	cloudSegments: 40,
 	cloudDetail: 5,
+	rainDropCount: 760,
+	rainSplashCount: 64,
 	sunShadows: true,
 	shadowMapSize: 2048
 };

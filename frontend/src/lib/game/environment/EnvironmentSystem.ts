@@ -19,6 +19,16 @@ import { CelestialBodyRenderer } from './CelestialBodyRenderer';
 import { StarFieldRenderer } from './StarFieldRenderer';
 import { EnvironmentLighting } from './EnvironmentLighting';
 import type { RenderQuality } from '../rendering/QualitySettings';
+import { PrecipitationSystem } from './weather/PrecipitationSystem';
+import type { PrecipitationSaveState } from './weather/PrecipitationState';
+import { FogController } from './weather/FogController';
+import { LightningSystem } from './weather/LightningSystem';
+import type { LightningSaveState } from './weather/LightningState';
+import type { WeatherWorldQuery } from './weather/WeatherWorldQuery';
+import { RainOcclusionSystem } from './weather/rendering/RainOcclusionSystem';
+import { RainRenderer } from './weather/rendering/RainRenderer';
+import { RainSplashRenderer } from './weather/rendering/RainSplashRenderer';
+import { LightningRenderer } from './weather/rendering/LightningRenderer';
 
 export interface EnvironmentSaveState {
 	version: 1;
@@ -29,6 +39,10 @@ export interface EnvironmentSaveState {
 	wind?: WindSaveState;
 	/** Added in weather Phase 2C; optional for older saves. */
 	clouds?: CloudSaveState;
+	/** Added in weather Lot 2; optional for older saves. */
+	precipitation?: PrecipitationSaveState;
+	/** Added in weather Lot 2; optional for older saves. */
+	lightning?: LightningSaveState;
 }
 
 export interface EnvironmentSystemOptions {
@@ -37,6 +51,7 @@ export interface EnvironmentSystemOptions {
 	seed: string;
 	quality: RenderQuality;
 	dayLengthSeconds?: number;
+	worldQuery?: WeatherWorldQuery;
 }
 
 export interface EnvironmentDebugApi {
@@ -70,11 +85,18 @@ export interface EnvironmentInspect {
 	cloudSunOcclusion: number;
 	humidity: number;
 	precipitation: number;
+	rainIntensity: number;
+	rainVisibleIntensity: number;
+	rainShelter: number;
 	fogDensity: number;
+	visibility: number;
 	windDirection: number;
 	windStrength: number;
 	windGust: number;
 	temperatureOffset: number;
+	lightningFlash: number;
+	lightningStrikeId: number;
+	lastThunderDelay: number | null;
 	paused: boolean;
 }
 
@@ -88,6 +110,10 @@ export class EnvironmentSystem {
 	private readonly weatherScheduler: WeatherScheduler;
 	private readonly windSystem: WindSystem;
 	private readonly cloudSystem = new CloudSystem();
+	private readonly precipitationSystem = new PrecipitationSystem();
+	private readonly fogController = new FogController();
+	private readonly lightningSystem: LightningSystem;
+	private readonly rainOcclusion: RainOcclusionSystem;
 	private readonly state = new EnvironmentState();
 	private quality: EnvironmentQuality;
 
@@ -96,6 +122,9 @@ export class EnvironmentSystem {
 	private stars: StarFieldRenderer;
 	private clouds: CloudRenderer;
 	private readonly lighting: EnvironmentLighting;
+	private readonly rain: RainRenderer;
+	private readonly splashes: RainSplashRenderer;
+	private readonly lightning: LightningRenderer;
 
 	private disposed = false;
 
@@ -110,15 +139,25 @@ export class EnvironmentSystem {
 		});
 		this.weatherScheduler = new WeatherScheduler({ seed: this.seedValue });
 		this.windSystem = new WindSystem({ seed: this.seedValue ^ 0x7a4f3c19 });
+		this.lightningSystem = new LightningSystem(this.seedValue ^ 0x4c544e47);
+		this.rainOcclusion = new RainOcclusionSystem(options.worldQuery);
 
 		this.atmosphere = new AtmosphereRenderer(this.scene, this.quality);
 		this.bodies = new CelestialBodyRenderer(this.scene, this.quality);
 		this.stars = new StarFieldRenderer(this.scene, this.quality, this.seedValue);
 		this.clouds = new CloudRenderer(this.scene, this.quality);
 		this.lighting = new EnvironmentLighting(this.scene, this.quality);
+		this.rain = new RainRenderer(this.scene, this.quality, this.seedValue);
+		this.splashes = new RainSplashRenderer(
+			this.scene,
+			this.quality,
+			this.seedValue,
+			this.rainOcclusion
+		);
+		this.lightning = new LightningRenderer(this.scene);
 
 		this.renderer.shadowMap.enabled = this.quality.sunShadows;
-		this.refreshState(0);
+		this.refreshState(0, ORIGIN);
 		this.lighting.snapTo(this.state, ORIGIN);
 	}
 
@@ -129,14 +168,18 @@ export class EnvironmentSystem {
 
 		this.clock.advance(deltaSeconds);
 		this.weatherScheduler.update(deltaSeconds);
-		this.refreshState(deltaSeconds);
+		this.rainOcclusion.update(cameraPosition, deltaSeconds);
+		this.refreshState(deltaSeconds, cameraPosition);
 
 		this.atmosphere.update(this.state, cameraPosition);
 		this.bodies.update(this.state, cameraPosition);
 		this.stars.update(this.state, cameraPosition);
 		this.clouds.update(this.state, this.cloudSystem.currentState, cameraPosition);
+		this.rain.update(this.precipitationSystem.currentState, cameraPosition);
+		this.splashes.update(this.precipitationSystem.currentState, cameraPosition, deltaSeconds);
+		this.lightning.update(this.lightningSystem.currentState, cameraPosition);
 		this.lighting.update(this.state, cameraPosition, deltaSeconds);
-		this.renderer.toneMappingExposure = this.state.exposure;
+		this.renderer.toneMappingExposure = Math.max(0.25, this.state.exposure);
 	}
 
 	setQuality(quality: RenderQuality): void {
@@ -152,6 +195,8 @@ export class EnvironmentSystem {
 		this.quality = resolved;
 		this.atmosphere.applyQuality(resolved);
 		this.clouds.applyQuality(resolved);
+		this.rain.applyQuality(resolved);
+		this.splashes.applyQuality(resolved);
 		this.lighting.applyQuality(resolved, this.renderer);
 		this.renderer.shadowMap.enabled = resolved.sunShadows;
 
@@ -168,7 +213,9 @@ export class EnvironmentSystem {
 			dayLengthSeconds: this.clock.dayLength,
 			weather: this.weatherScheduler.serialize(),
 			wind: this.windSystem.serialize(),
-			clouds: this.cloudSystem.serialize()
+			clouds: this.cloudSystem.serialize(),
+			precipitation: this.precipitationSystem.serialize(),
+			lightning: this.lightningSystem.serialize()
 		};
 	}
 
@@ -182,7 +229,9 @@ export class EnvironmentSystem {
 		this.weatherScheduler.restore(save.weather);
 		this.windSystem.restore(save.wind);
 		this.cloudSystem.restore(save.clouds);
-		this.refreshState(0);
+		this.precipitationSystem.restore(save.precipitation);
+		this.lightningSystem.restore(save.lightning);
+		this.refreshState(0, ORIGIN);
 		this.lighting.snapTo(this.state, ORIGIN);
 	}
 
@@ -200,22 +249,27 @@ export class EnvironmentSystem {
 				this.clock.pause();
 				this.weatherScheduler.pause();
 				this.windSystem.pause();
+				this.precipitationSystem.pause();
+				this.lightningSystem.pause();
 			},
 			resumeCycle: () => {
 				this.clock.resume();
 				this.weatherScheduler.resume();
 				this.windSystem.resume();
+				this.precipitationSystem.resume();
+				this.lightningSystem.resume();
 			},
 			setWeather: (weather) => {
 				this.weatherScheduler.forceWeather(weather);
-				this.refreshState(0);
+				this.refreshState(0, ORIGIN);
 			},
 			setCloudCoverage: (coverage) => {
 				this.weatherScheduler.setCloudCoverageOverride(coverage);
-				this.refreshState(0);
+				this.refreshState(0, ORIGIN);
 			},
 			triggerLightning: () => {
-				// Stable hook reserved for Lot 2's lightning system.
+				this.lightningSystem.trigger();
+				this.refreshState(0, ORIGIN);
 			},
 			getState: () => ({
 				timeOfDay: this.state.timeOfDay,
@@ -235,11 +289,18 @@ export class EnvironmentSystem {
 				cloudSunOcclusion: this.state.cloudSunOcclusion,
 				humidity: this.state.humidity,
 				precipitation: this.state.precipitation,
+				rainIntensity: this.state.rainIntensity,
+				rainVisibleIntensity: this.state.rainVisibleIntensity,
+				rainShelter: this.state.rainShelter,
 				fogDensity: this.state.fogDensity,
+				visibility: this.state.visibility,
 				windDirection: this.state.windDirection,
 				windStrength: this.state.windStrength,
 				windGust: this.state.windGust,
 				temperatureOffset: this.state.temperatureOffset,
+				lightningFlash: this.state.lightningFlash,
+				lightningStrikeId: this.state.lightningStrikeId,
+				lastThunderDelay: this.lightningSystem.currentState.lastThunder?.delaySeconds ?? null,
 				paused: this.clock.isPaused
 			})
 		};
@@ -255,19 +316,37 @@ export class EnvironmentSystem {
 		this.bodies.dispose();
 		this.stars.dispose();
 		this.clouds.dispose();
+		this.rain.dispose();
+		this.splashes.dispose();
+		this.lightning.dispose();
 		this.lighting.dispose();
 	}
 
-	private refreshState(deltaSeconds: number): void {
+	private refreshState(deltaSeconds: number, cameraPosition: Readonly<Vector3>): void {
 		const weather = this.weatherScheduler.currentState;
 		this.windSystem.update(deltaSeconds, weather.parameters.windStrength);
 		this.cloudSystem.update(weather.parameters, this.windSystem.currentState, deltaSeconds);
+		this.precipitationSystem.update(
+			deltaSeconds,
+			weather,
+			this.windSystem.currentState,
+			this.rainOcclusion.shelterFactor
+		);
+		this.fogController.update(weather, this.precipitationSystem.currentState);
+		this.lightningSystem.update(deltaSeconds, weather);
 		this.state.update(
 			this.clock,
 			weather,
 			this.windSystem.currentState,
-			this.cloudSystem.currentState
+			this.cloudSystem.currentState,
+			this.precipitationSystem.currentState,
+			this.fogController.currentState,
+			this.lightningSystem.currentState
 		);
+
+		// Keep the argument in the deterministic core signature for future regional
+		// weather without allocating or sampling position-dependent state yet.
+		void cameraPosition;
 	}
 }
 
