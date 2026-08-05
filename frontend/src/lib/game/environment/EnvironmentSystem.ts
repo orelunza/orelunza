@@ -49,6 +49,19 @@ import type { AuroraSaveState } from './rare/AuroraState';
 import { RainbowRenderer } from './rare/rendering/RainbowRenderer';
 import { ShootingStarRenderer } from './rare/rendering/ShootingStarRenderer';
 import { AuroraRenderer } from './rare/rendering/AuroraRenderer';
+import { SpecialWeatherSystem } from './special/SpecialWeatherSystem';
+import {
+	isSpecialWeatherKind,
+	type SpecialWeatherKind,
+	type SpecialWeatherSaveState
+} from './special/SpecialWeatherState';
+import { AshRenderer } from './special/rendering/AshRenderer';
+import { DustStormRenderer } from './special/rendering/DustStormRenderer';
+import { HotHazeRenderer } from './special/rendering/HotHazeRenderer';
+import {
+	EnvironmentDiagnostics,
+	type EnvironmentDiagnosticsSnapshot
+} from './diagnostics/EnvironmentDiagnostics';
 
 export interface EnvironmentSaveState {
 	version: 1;
@@ -77,6 +90,8 @@ export interface EnvironmentSaveState {
 	shootingStars?: ShootingStarSaveState;
 	/** Added in environment Lot 5; optional for older saves. */
 	aurora?: AuroraSaveState;
+	/** Added in environment Lot 6; optional for all older saves. */
+	specialWeather?: SpecialWeatherSaveState;
 }
 
 export interface EnvironmentSystemOptions {
@@ -101,11 +116,14 @@ export interface EnvironmentDebugApi {
 	triggerRainbow(): void;
 	triggerShootingStar(): void;
 	triggerAurora(): void;
+	setSpecialWeather(weather: SpecialWeatherKind): void;
+	clearSpecialWeather(): void;
 	enableAudio(): Promise<boolean>;
 	setAudioMuted(muted: boolean): void;
 	spawnWeatherCell(weather: WeatherKind): boolean;
 	clearWeatherCells(): void;
 	getState(): EnvironmentInspect;
+	getDiagnostics(): EnvironmentDiagnosticsSnapshot;
 }
 
 export interface EnvironmentInspect {
@@ -163,6 +181,14 @@ export interface EnvironmentInspect {
 	audioMuted: boolean;
 	audioWind: number;
 	audioRain: number;
+	specialWeather: SpecialWeatherKind;
+	specialWeatherTarget: SpecialWeatherKind;
+	specialWeatherIntensity: number;
+	ashIntensity: number;
+	dustIntensity: number;
+	hotHazeIntensity: number;
+	smokeIntensity: number;
+	specialVisibilityLoss: number;
 	paused: boolean;
 }
 
@@ -187,7 +213,9 @@ export class EnvironmentSystem {
 	private readonly rainbowSystem: RainbowSystem;
 	private readonly shootingStarSystem: ShootingStarSystem;
 	private readonly auroraSystem: AuroraSystem;
+	private readonly specialWeatherSystem: SpecialWeatherSystem;
 	private readonly audio: WeatherAudioController;
+	private readonly diagnostics = new EnvironmentDiagnostics();
 	private readonly rainOcclusion: RainOcclusionSystem;
 	private readonly worldQuery?: WeatherWorldQuery;
 	private readonly state = new EnvironmentState();
@@ -205,6 +233,9 @@ export class EnvironmentSystem {
 	private readonly rainbow: RainbowRenderer;
 	private readonly shootingStars: ShootingStarRenderer;
 	private readonly aurora: AuroraRenderer;
+	private readonly ash: AshRenderer;
+	private readonly dust: DustStormRenderer;
+	private readonly hotHaze: HotHazeRenderer;
 
 	private readonly lastCameraPosition = new Vector3();
 	private disposed = false;
@@ -225,6 +256,7 @@ export class EnvironmentSystem {
 		this.rainbowSystem = new RainbowSystem(this.seedValue ^ 0x5241494e);
 		this.shootingStarSystem = new ShootingStarSystem(this.seedValue ^ 0x53544152);
 		this.auroraSystem = new AuroraSystem(this.seedValue ^ 0x41555241);
+		this.specialWeatherSystem = new SpecialWeatherSystem(this.seedValue ^ 0x53504543);
 		this.audio = new WeatherAudioController(this.seedValue ^ 0x41554449);
 		this.worldQuery = options.worldQuery;
 		this.rainOcclusion = new RainOcclusionSystem(options.worldQuery);
@@ -246,6 +278,9 @@ export class EnvironmentSystem {
 		this.rainbow = new RainbowRenderer(this.scene, this.quality);
 		this.shootingStars = new ShootingStarRenderer(this.scene, this.quality);
 		this.aurora = new AuroraRenderer(this.scene, this.quality);
+		this.ash = new AshRenderer(this.scene, this.quality, this.seedValue);
+		this.dust = new DustStormRenderer(this.scene, this.quality, this.seedValue);
+		this.hotHaze = new HotHazeRenderer(this.scene, this.quality);
 
 		this.renderer.shadowMap.enabled = this.quality.sunShadows;
 		this.refreshState(0, ORIGIN);
@@ -257,6 +292,7 @@ export class EnvironmentSystem {
 			return;
 		}
 
+		const updateStartedAt = nowMilliseconds();
 		this.lastCameraPosition.copy(cameraPosition);
 		this.clock.advance(deltaSeconds);
 		this.weatherScheduler.update(deltaSeconds);
@@ -274,9 +310,19 @@ export class EnvironmentSystem {
 		this.rainbow.update(this.rainbowSystem.currentState, this.state, cameraPosition);
 		this.shootingStars.update(this.shootingStarSystem.currentState, cameraPosition);
 		this.aurora.update(this.auroraSystem.currentState, this.state, cameraPosition);
+		this.ash.update(this.specialWeatherSystem.currentState, cameraPosition);
+		this.dust.update(this.specialWeatherSystem.currentState, this.state, cameraPosition);
+		this.hotHaze.update(this.specialWeatherSystem.currentState, cameraPosition);
 		this.audio.update(deltaSeconds, this.state, this.lightningSystem.currentState.lastThunder);
 		this.lighting.update(this.state, cameraPosition, deltaSeconds);
 		this.renderer.toneMappingExposure = Math.max(0.25, this.state.exposure);
+		this.diagnostics.record(
+			deltaSeconds,
+			nowMilliseconds() - updateStartedAt,
+			this.state,
+			this.specialWeatherSystem.currentState,
+			this.quality
+		);
 	}
 
 	setQuality(quality: RenderQuality): void {
@@ -298,6 +344,10 @@ export class EnvironmentSystem {
 		this.rainbow.applyQuality(resolved);
 		this.shootingStars.applyQuality(resolved);
 		this.aurora.applyQuality(resolved);
+		this.ash.applyQuality(resolved);
+		this.dust.applyQuality(resolved);
+		this.hotHaze.applyQuality(resolved);
+		this.diagnostics.recordQualityRebuild();
 		this.lighting.applyQuality(resolved, this.renderer);
 		this.renderer.shadowMap.enabled = resolved.sunShadows;
 
@@ -323,7 +373,8 @@ export class EnvironmentSystem {
 			weatherCells: this.weatherCells.serialize(),
 			rainbow: this.rainbowSystem.serialize(),
 			shootingStars: this.shootingStarSystem.serialize(),
-			aurora: this.auroraSystem.serialize()
+			aurora: this.auroraSystem.serialize(),
+			specialWeather: this.specialWeatherSystem.serialize()
 		};
 	}
 
@@ -346,6 +397,7 @@ export class EnvironmentSystem {
 		this.rainbowSystem.restore(save.rainbow);
 		this.shootingStarSystem.restore(save.shootingStars);
 		this.auroraSystem.restore(save.aurora);
+		this.specialWeatherSystem.restore(save.specialWeather);
 		this.refreshState(0, ORIGIN);
 		this.lighting.snapTo(this.state, ORIGIN);
 	}
@@ -373,6 +425,7 @@ export class EnvironmentSystem {
 				this.rainbowSystem.pause();
 				this.shootingStarSystem.pause();
 				this.auroraSystem.pause();
+				this.specialWeatherSystem.pause();
 				this.audio.setPaused(true);
 			},
 			resumeCycle: () => {
@@ -388,6 +441,7 @@ export class EnvironmentSystem {
 				this.rainbowSystem.resume();
 				this.shootingStarSystem.resume();
 				this.auroraSystem.resume();
+				this.specialWeatherSystem.resume();
 				this.audio.setPaused(false);
 			},
 			setWeather: (weather) => {
@@ -412,6 +466,17 @@ export class EnvironmentSystem {
 			},
 			triggerAurora: () => {
 				this.auroraSystem.trigger();
+				this.refreshState(0, this.lastCameraPosition);
+			},
+			setSpecialWeather: (weather) => {
+				if (!isSpecialWeatherKind(weather)) {
+					return;
+				}
+				this.specialWeatherSystem.set(weather);
+				this.refreshState(0, this.lastCameraPosition);
+			},
+			clearSpecialWeather: () => {
+				this.specialWeatherSystem.clear();
 				this.refreshState(0, this.lastCameraPosition);
 			},
 			enableAudio: () => this.audio.enable(),
@@ -490,8 +555,17 @@ export class EnvironmentSystem {
 				audioMuted: this.audio.isMuted,
 				audioWind: this.audio.levels.wind,
 				audioRain: this.audio.levels.rain,
+				specialWeather: this.state.specialWeather,
+				specialWeatherTarget: this.state.specialWeatherTarget,
+				specialWeatherIntensity: this.state.specialWeatherIntensity,
+				ashIntensity: this.state.ashIntensity,
+				dustIntensity: this.state.dustIntensity,
+				hotHazeIntensity: this.state.hotHazeIntensity,
+				smokeIntensity: this.state.smokeIntensity,
+				specialVisibilityLoss: this.state.specialVisibilityLoss,
 				paused: this.clock.isPaused
-			})
+			}),
+			getDiagnostics: () => this.diagnostics.snapshot(this.quality)
 		};
 	}
 
@@ -512,7 +586,11 @@ export class EnvironmentSystem {
 		this.rainbow.dispose();
 		this.shootingStars.dispose();
 		this.aurora.dispose();
+		this.ash.dispose();
+		this.dust.dispose();
+		this.hotHaze.dispose();
 		this.audio.dispose();
+		this.diagnostics.dispose();
 		this.lighting.dispose();
 	}
 
@@ -558,6 +636,15 @@ export class EnvironmentSystem {
 			this.clock.sunAltitude,
 			this.windSystem.currentState
 		);
+		this.specialWeatherSystem.update(deltaSeconds, {
+			regionId: this.climateRegion.currentState.regionId,
+			dayNumber: this.clock.currentDayNumber,
+			daylight: this.state.daylight,
+			temperatureCelsius: this.climateSystem.currentState.temperatureCelsius,
+			humidity: this.climateSystem.currentState.humidity,
+			precipitation: this.precipitationSystem.currentState.intensity,
+			windStrength: this.windSystem.currentState.strength
+		});
 		this.state.update(
 			this.clock,
 			weather,
@@ -568,12 +655,17 @@ export class EnvironmentSystem {
 			this.lightningSystem.currentState,
 			this.climateSystem.currentState,
 			this.surfaceWeather.currentState,
-			this.regionalWeather.currentInspect
+			this.regionalWeather.currentInspect,
+			this.specialWeatherSystem.currentState
 		);
 		this.rainbowSystem.update(deltaSeconds, this.state);
 		this.shootingStarSystem.update(deltaSeconds, this.state);
 		this.auroraSystem.update(deltaSeconds, this.state);
 	}
+}
+
+function nowMilliseconds(): number {
+	return typeof performance !== 'undefined' ? performance.now() : Date.now();
 }
 
 const ORIGIN = new Vector3(0, 0, 0);

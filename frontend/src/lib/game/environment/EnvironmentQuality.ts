@@ -28,6 +28,10 @@ export interface EnvironmentQuality {
 	readonly rainSplashCount: number;
 	/** Maximum pooled snow flakes. */
 	readonly snowFlakeCount: number;
+	/** Maximum pooled volcanic ash / smoke particles. */
+	readonly ashParticleCount: number;
+	/** Maximum pooled dust-storm particles. */
+	readonly dustParticleCount: number;
 	/** Whether the sun should drive real-time shadows. */
 	readonly sunShadows: boolean;
 	/** Shadow map resolution when shadows are enabled. */
@@ -45,6 +49,8 @@ const LOW: EnvironmentQuality = {
 	rainDropCount: 180,
 	rainSplashCount: 18,
 	snowFlakeCount: 120,
+	ashParticleCount: 100,
+	dustParticleCount: 140,
 	sunShadows: false,
 	shadowMapSize: 512
 };
@@ -60,6 +66,8 @@ const MEDIUM: EnvironmentQuality = {
 	rainDropCount: 420,
 	rainSplashCount: 36,
 	snowFlakeCount: 300,
+	ashParticleCount: 260,
+	dustParticleCount: 360,
 	sunShadows: true,
 	shadowMapSize: 1024
 };
@@ -75,6 +83,8 @@ const HIGH: EnvironmentQuality = {
 	rainDropCount: 760,
 	rainSplashCount: 64,
 	snowFlakeCount: 560,
+	ashParticleCount: 480,
+	dustParticleCount: 680,
 	sunShadows: true,
 	shadowMapSize: 2048
 };

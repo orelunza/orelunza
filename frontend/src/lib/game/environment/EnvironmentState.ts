@@ -11,6 +11,7 @@ import type { LightningFrameState } from './weather/LightningState';
 import type { ClimateFrameState } from './climate/ClimateState';
 import type { SurfaceWeatherFrameState } from './surface/SurfaceWeatherState';
 import type { RegionalWeatherInspect } from './regions/RegionalWeatherSystem';
+import type { SpecialWeatherFrameState, SpecialWeatherKind } from './special/SpecialWeatherState';
 
 export type { WeatherFrameState, WeatherKind, WeatherSaveState } from './weather/WeatherState';
 
@@ -76,6 +77,21 @@ export class EnvironmentState {
 	weatherCellCloudInfluence = 0;
 	weatherCellCoreInfluence = 0;
 
+	specialWeather: SpecialWeatherKind = 'none';
+	specialWeatherTarget: SpecialWeatherKind = 'none';
+	specialWeatherTransition = 1;
+	specialWeatherIntensity = 0;
+	ashIntensity = 0;
+	dustIntensity = 0;
+	hotHazeIntensity = 0;
+	smokeIntensity = 0;
+	specialVisibilityLoss = 0;
+	specialSunOcclusion = 0;
+	specialFogBoost = 0;
+	specialTintR = 0.55;
+	specialTintG = 0.58;
+	specialTintB = 0.62;
+
 	readonly sunDirection = new Vector3(0, 1, 0);
 	readonly moonDirection = new Vector3(0, -1, 0);
 
@@ -112,7 +128,8 @@ export class EnvironmentState {
 		lightning?: Readonly<LightningFrameState>,
 		climate?: Readonly<ClimateFrameState>,
 		surface?: Readonly<SurfaceWeatherFrameState>,
-		regional?: Readonly<RegionalWeatherInspect>
+		regional?: Readonly<RegionalWeatherInspect>,
+		special?: Readonly<SpecialWeatherFrameState>
 	): void {
 		if (weather) {
 			this.applyWeather(weather);
@@ -148,6 +165,10 @@ export class EnvironmentState {
 
 		if (regional) {
 			this.applyRegionalWeather(regional);
+		}
+
+		if (special) {
+			this.applySpecialWeather(special);
 		}
 
 		this.timeOfDay = clock.normalizedTimeOfDay;
@@ -256,6 +277,38 @@ export class EnvironmentState {
 		this.weatherCellCoreInfluence = clamp01(frame.cellCoreInfluence);
 	}
 
+	applySpecialWeather(frame: Readonly<SpecialWeatherFrameState>): void {
+		const parameters = frame.parameters;
+		this.specialWeather = frame.current;
+		this.specialWeatherTarget = frame.target;
+		this.specialWeatherTransition = clamp01(frame.transition);
+		this.ashIntensity = clamp01(parameters.ash);
+		this.dustIntensity = clamp01(parameters.dust);
+		this.hotHazeIntensity = clamp01(parameters.haze);
+		this.smokeIntensity = clamp01(parameters.smoke);
+		this.specialWeatherIntensity = Math.max(
+			this.ashIntensity,
+			this.dustIntensity,
+			this.hotHazeIntensity,
+			this.smokeIntensity
+		);
+		this.specialVisibilityLoss = clamp01(parameters.visibilityLoss);
+		this.specialSunOcclusion = clamp01(parameters.sunOcclusion);
+		this.specialFogBoost = clamp01(parameters.fogBoost);
+		this.specialTintR = clamp01(parameters.tintR);
+		this.specialTintG = clamp01(parameters.tintG);
+		this.specialTintB = clamp01(parameters.tintB);
+		this.cloudDarkness = clamp01(this.cloudDarkness + parameters.cloudDarkening * 0.72);
+		this.cloudSunOcclusion = clamp01(Math.max(this.cloudSunOcclusion, parameters.sunOcclusion));
+		this.cloudMoonOcclusion = clamp01(
+			Math.max(this.cloudMoonOcclusion, parameters.sunOcclusion * 0.9)
+		);
+		this.fogDensity = clamp01(Math.max(this.fogDensity, parameters.fogBoost));
+		this.visibility = clamp01(this.visibility * (1 - parameters.visibilityLoss * 0.9));
+		this.temperatureCelsius += parameters.temperatureOffset;
+		this.windChillCelsius += parameters.temperatureOffset;
+	}
+
 	restoreWeather(state: WeatherSaveState): void {
 		this.weather.current = validWeatherKind(state.current, 'clear');
 		this.weather.next = validWeatherKind(state.next, this.weather.current);
@@ -294,6 +347,12 @@ export class EnvironmentState {
 			this.scratchCloud.setRGB(grey * 0.92, grey * 0.96, grey);
 			this.zenithColor.lerp(this.scratchCloud, cloudInfluence);
 			this.horizonColor.lerp(this.scratchCloud, cloudInfluence * 0.86);
+		}
+
+		if (this.specialWeatherIntensity > 0) {
+			this.scratchCloud.setRGB(this.specialTintR, this.specialTintG, this.specialTintB);
+			this.zenithColor.lerp(this.scratchCloud, this.specialWeatherIntensity * 0.58);
+			this.horizonColor.lerp(this.scratchCloud, this.specialWeatherIntensity * 0.72);
 		}
 
 		const coldInfluence = clamp01((6 - this.windChillCelsius) / 18);
@@ -355,6 +414,15 @@ export class EnvironmentState {
 			this.fogColor.lerp(this.scratchCloud, coldLighting * 0.2);
 		}
 
+		if (this.specialWeatherIntensity > 0) {
+			this.scratchCloud.setRGB(this.specialTintR, this.specialTintG, this.specialTintB);
+			this.lightColor.lerp(this.scratchCloud, this.specialWeatherIntensity * 0.42);
+			this.ambientColor.lerp(this.scratchCloud, this.specialWeatherIntensity * 0.5);
+			this.fogColor.lerp(this.scratchCloud, this.specialWeatherIntensity * 0.76);
+			this.lightIntensity *= 1 - this.specialSunOcclusion * 0.76;
+			this.ambientIntensity *= 1 - this.specialSunOcclusion * 0.34;
+		}
+
 		const flash = this.lightningFlash;
 		if (flash > 0) {
 			this.scratchCloud.setRGB(0.82, 0.9, 1);
@@ -369,7 +437,8 @@ export class EnvironmentState {
 			lerp(1.18, 1, daylight) -
 			this.overcast * 0.13 -
 			this.cloudDarkness * 0.04 -
-			this.rainHaze * 0.08 +
+			this.rainHaze * 0.08 -
+			this.specialSunOcclusion * 0.16 +
 			flash * 0.32;
 		this.shadowSoftness = clamp01(this.cloudShadowStrength * daylight + this.rainHaze * 0.18);
 	}
