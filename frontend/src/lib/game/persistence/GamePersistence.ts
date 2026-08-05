@@ -1,16 +1,28 @@
 import type { Inventory } from '../inventory/Inventory';
 import type { PlayerController } from '../player/PlayerController';
 import type { VoxelWorld } from '../world/VoxelWorld';
-import type { WorldSave, WorldSaveV2 } from '../world/WorldSave';
+import type { WorldSave, WorldSaveV3 } from '../world/WorldSave';
 import type { SaveStatus } from '../game-types';
 import { IndexedDbWorldStore } from './IndexedDbWorldStore';
 import type { CharacterAppearanceV1 } from '../character/CharacterAppearance';
+import type { EnvironmentSaveState } from '../environment/EnvironmentSystem';
+
+/**
+ * Minimal environment surface the persistence layer talks to. The concrete
+ * implementation is the {@link Sky} façade; typing it structurally here avoids
+ * a hard import cycle between persistence and rendering.
+ */
+export interface PersistableEnvironment {
+	serialize(): EnvironmentSaveState;
+	restore(save: EnvironmentSaveState | null | undefined): void;
+}
 
 export class GamePersistence {
 	private dirty = false;
 	private status: SaveStatus = 'idle';
 	private lastSavedPayload = '';
 	private lastSaveAt = 0;
+	private environment: PersistableEnvironment | null = null;
 	private readonly store = new IndexedDbWorldStore();
 
 	constructor(
@@ -32,6 +44,11 @@ export class GamePersistence {
 		this.setStatus('dirty');
 	}
 
+	/** Registers the environment so its clock/weather are saved and restored. */
+	setEnvironment(environment: PersistableEnvironment): void {
+		this.environment = environment;
+	}
+
 	async load(): Promise<WorldSave | null> {
 		const save = await this.store.load(this.worldId);
 
@@ -47,6 +64,13 @@ export class GamePersistence {
 		this.inventory.load(save.inventory);
 		const position = this.world.safeRestorePosition(save.player.position);
 		this.player.setTransform(position, save.player.yaw, save.player.pitch);
+
+		// Only V3 saves carry an environment block; older saves start the sky at
+		// its default time, which the environment system already initializes.
+		if (save.version === 3) {
+			this.environment?.restore(save.environment);
+		}
+
 		this.lastSavedPayload = JSON.stringify(this.buildSave(save.updatedAt));
 		this.dirty = false;
 		this.setStatus('saved');
@@ -86,11 +110,11 @@ export class GamePersistence {
 		}
 	}
 
-	private buildSave(updatedAt: number): WorldSaveV2 {
+	private buildSave(updatedAt: number): WorldSaveV3 {
 		const modifications = this.world.exportModifications();
 
 		return {
-			version: 2,
+			version: 3,
 			worldId: this.worldId,
 			seed: this.seed,
 			player: {
@@ -105,7 +129,26 @@ export class GamePersistence {
 			placedBlocks: modifications.placedBlocks,
 			removedBlocks: modifications.removedBlocks,
 			changes: modifications.changes,
+			environment: this.buildEnvironmentSave(),
 			updatedAt
+		};
+	}
+
+	/**
+	 * Produces the environment block for the save. When no environment is
+	 * registered (headless tests), a neutral default is written so the V3 shape
+	 * is always valid and round-trips cleanly.
+	 */
+	private buildEnvironmentSave(): EnvironmentSaveState {
+		if (this.environment) {
+			return this.environment.serialize();
+		}
+
+		return {
+			version: 1,
+			clock: { timeOfDaySeconds: 0, dayNumber: 0 },
+			dayLengthSeconds: 1200,
+			weather: { current: 'clear', next: 'clear', transition: 0, seed: 0 }
 		};
 	}
 

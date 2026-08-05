@@ -21,6 +21,7 @@ import {
 	type HumanoidAnimationSnapshot,
 	type HumanoidPose
 } from './HumanoidPose';
+import { BuildHammer } from './BuildHammer';
 import type { PlayerState } from './PlayerState';
 import { angleDelta } from './ThirdPersonCamera';
 
@@ -125,6 +126,7 @@ export class PlayerAvatar {
 	readonly ready: Promise<void>;
 
 	private readonly model: HumanoidModel;
+	private readonly buildHammer = new BuildHammer();
 	private readonly animationController: HumanoidAnimationController;
 	private readonly trackStats = new Map<string, ReturnType<typeof countClipTrackMatches>>();
 	private readonly renderPose: HumanoidPose = createNeutralPose();
@@ -169,6 +171,7 @@ export class PlayerAvatar {
 		}
 
 		this.object.add(this.model.object);
+		this.model.rig.joints.handRight.add(this.buildHammer.object);
 		// The procedural rig is authored facing local -Z. Correct that once on
 		// the model child so the public avatar root can mirror bodyYaw exactly.
 		this.model.object.rotation.y = MODEL_FORWARD_OFFSET;
@@ -227,6 +230,20 @@ export class PlayerAvatar {
 	clearHandTarget(): void {
 		this.handTargetActive = false;
 		this.handTargetHasWorldPosition = false;
+	}
+
+	setBuildMode(active: boolean): void {
+		this.buildHammer.setVisible(active);
+
+		if (active) {
+			this.setHandTarget();
+		} else {
+			this.clearHandTarget();
+		}
+	}
+
+	swingBuildTool(): void {
+		this.buildHammer.swing();
 	}
 
 	lookAtWorldPosition(position: Vector3): void {
@@ -303,6 +320,7 @@ export class PlayerAvatar {
 			}
 
 			this.model.applyPose(this.renderPose);
+			this.buildHammer.update(delta);
 			this.object.position.set(
 				finiteOr(player.position.x, 0),
 				finiteOr(player.position.y, 0) + this.model.modelOffsetY,
@@ -345,6 +363,7 @@ export class PlayerAvatar {
 		);
 		this.applyPreviewHandOverlay(this.renderPose);
 		this.model.applyPose(this.renderPose);
+		this.buildHammer.update(delta);
 		this.animationController.playPreview(delta);
 	}
 
@@ -357,6 +376,7 @@ export class PlayerAvatar {
 		this.status = 'failed';
 		this.error = null;
 		this.animationController.dispose();
+		this.buildHammer.dispose();
 		this.model.dispose();
 		this.trackStats.clear();
 		this.object.clear();

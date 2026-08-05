@@ -1,48 +1,211 @@
-import { Raycaster, Vector2, Vector3, type Camera } from 'three';
-import type { BlockInstanceLookup } from '../world/BlockMeshFactory';
-import type { BlockType } from '../world/voxel-types';
+import { MathUtils, PerspectiveCamera, Quaternion, Vector3, type Camera } from 'three';
 import type { TargetedBlock } from '../game-types';
+import type { VoxelWorld } from '../world/VoxelWorld';
+import type { BlockCoordinate, VoxelBlock } from '../world/voxel-types';
 
-const CENTER = new Vector2(0, 0);
+const RAY_EPSILON = 1e-7;
+const ZERO_NORMAL: BlockCoordinate = { x: 0, y: 0, z: 0 };
 
+/**
+ * Grid-based voxel raycaster.
+ *
+ * Targeting is deliberately independent from rendered meshes. Decorative
+ * geometry, instancing, transparent materials and chunk mesh replacement can
+ * therefore never change which voxel the reticle selects.
+ */
 export class BlockRaycaster {
-	private readonly raycaster = new Raycaster();
+	private readonly origin = new Vector3();
+	private readonly direction = new Vector3();
+	private readonly start = new Vector3();
+	private readonly worldQuaternion = new Quaternion();
 
-	constructor(private readonly maxDistance = 6) {}
+	constructor(private readonly reachDistance = 6) {}
 
-	raycast(camera: Camera, lookups: BlockInstanceLookup[]): TargetedBlock | null {
-		this.raycaster.setFromCamera(CENTER, camera);
-		this.raycaster.far = this.maxDistance;
+	raycast(
+		camera: Camera,
+		world: VoxelWorld,
+		cameraDistance = 0,
+		screenPoint: Readonly<{ x: number; y: number }> = { x: 0, y: 0 }
+	): TargetedBlock | null {
+		camera.updateMatrixWorld(true);
+		camera.getWorldPosition(this.origin);
+		this.directionFromScreenPoint(camera, screenPoint);
 
-		const intersections = this.raycaster.intersectObjects(
-			lookups.map((lookup) => lookup.mesh),
-			false
+		// In third person, the camera sits behind the player. Camera distance must
+		// not consume the player's actual building reach.
+		const maxDistance = this.reachDistance + Math.max(0, finiteOrZero(cameraDistance));
+
+		return this.raycastFrom(
+			this.origin,
+			this.direction,
+			world,
+			maxDistance,
+			Math.max(0, finiteOrZero(cameraDistance))
 		);
-
-		const hit = intersections[0];
-
-		if (!hit || hit.instanceId === undefined) {
-			return null;
-		}
-
-		const lookup = lookups.find((candidate) => candidate.mesh === hit.object);
-		const block = lookup?.blocks[hit.instanceId];
-
-		if (!lookup || !block) {
-			return null;
-		}
-
-		const normal = hit.face?.normal.clone() ?? new Vector3(0, 1, 0);
-		normal.transformDirection(hit.object.matrixWorld);
-
-		return {
-			block,
-			normal: {
-				x: Math.round(normal.x),
-				y: Math.round(normal.y),
-				z: Math.round(normal.z)
-			},
-			type: lookup.type as BlockType
-		};
 	}
+
+	private directionFromScreenPoint(
+		camera: Camera,
+		screenPoint: Readonly<{ x: number; y: number }>
+	): void {
+		if (!(camera instanceof PerspectiveCamera)) {
+			camera.getWorldDirection(this.direction).normalize();
+			return;
+		}
+
+		const x = clamp(finiteOrZero(screenPoint.x), -1, 1);
+		const y = clamp(finiteOrZero(screenPoint.y), -1, 1);
+		const halfHeight = Math.tan(MathUtils.degToRad(camera.fov) * 0.5);
+
+		this.direction.set(x * halfHeight * camera.aspect, y * halfHeight, -1).normalize();
+		camera.getWorldQuaternion(this.worldQuaternion);
+		this.direction.applyQuaternion(this.worldQuaternion).normalize();
+	}
+
+	/**
+	 * Public deterministic entry point used by tests and non-camera callers.
+	 */
+	raycastFrom(
+		origin: Vector3,
+		direction: Vector3,
+		world: VoxelWorld,
+		maxDistance = this.reachDistance,
+		minimumReplaceableDistance = 0
+	): TargetedBlock | null {
+		if (
+			!isFiniteVector(origin) ||
+			!isFiniteVector(direction) ||
+			direction.lengthSq() === 0 ||
+			!Number.isFinite(maxDistance) ||
+			maxDistance <= 0
+		) {
+			return null;
+		}
+
+		this.direction.copy(direction).normalize();
+		this.start.copy(origin).addScaledVector(this.direction, RAY_EPSILON);
+
+		let x = Math.floor(this.start.x);
+		let y = Math.floor(this.start.y);
+		let z = Math.floor(this.start.z);
+
+		const stepX = Math.sign(this.direction.x);
+		const stepY = Math.sign(this.direction.y);
+		const stepZ = Math.sign(this.direction.z);
+
+		const deltaX = stepX === 0 ? Number.POSITIVE_INFINITY : Math.abs(1 / this.direction.x);
+		const deltaY = stepY === 0 ? Number.POSITIVE_INFINITY : Math.abs(1 / this.direction.y);
+		const deltaZ = stepZ === 0 ? Number.POSITIVE_INFINITY : Math.abs(1 / this.direction.z);
+
+		let maxX = firstBoundaryDistance(this.start.x, this.direction.x);
+		let maxY = firstBoundaryDistance(this.start.y, this.direction.y);
+		let maxZ = firstBoundaryDistance(this.start.z, this.direction.z);
+		let travelled = 0;
+		let normal = initialNormal(this.direction);
+		let replaceableFallback: TargetedBlock | null = null;
+
+		while (travelled <= maxDistance) {
+			const position = { x, y, z };
+			const block = world.getLoadedBlock(position);
+
+			// Never generate or interact with a chunk merely because the reticle
+			// points towards it. Streaming remains the only chunk owner.
+			if (block === null) {
+				return replaceableFallback;
+			}
+
+			if (
+				block.type === 'water' &&
+				replaceableFallback === null &&
+				travelled >= Math.max(0, finiteOrZero(minimumReplaceableDistance))
+			) {
+				replaceableFallback = {
+					block: position,
+					normal: { ...normal },
+					type: block.type
+				};
+			}
+
+			if (isTargetable(block)) {
+				return {
+					block: position,
+					normal: { ...normal },
+					type: block.type
+				};
+			}
+
+			if (maxX <= maxY && maxX <= maxZ) {
+				travelled = maxX;
+				maxX += deltaX;
+				x += stepX;
+				normal = { x: -stepX, y: 0, z: 0 };
+			} else if (maxY <= maxZ) {
+				travelled = maxY;
+				maxY += deltaY;
+				y += stepY;
+				normal = { x: 0, y: -stepY, z: 0 };
+			} else {
+				travelled = maxZ;
+				maxZ += deltaZ;
+				z += stepZ;
+				normal = { x: 0, y: 0, z: -stepZ };
+			}
+		}
+
+		return replaceableFallback;
+	}
+}
+
+function firstBoundaryDistance(position: number, direction: number): number {
+	if (direction > 0) {
+		return (Math.floor(position) + 1 - position) / direction;
+	}
+
+	if (direction < 0) {
+		return (position - Math.floor(position)) / -direction;
+	}
+
+	return Number.POSITIVE_INFINITY;
+}
+
+function initialNormal(direction: Vector3): BlockCoordinate {
+	const absoluteX = Math.abs(direction.x);
+	const absoluteY = Math.abs(direction.y);
+	const absoluteZ = Math.abs(direction.z);
+
+	if (absoluteX >= absoluteY && absoluteX >= absoluteZ) {
+		return { x: -Math.sign(direction.x), y: 0, z: 0 };
+	}
+
+	if (absoluteY >= absoluteZ) {
+		return { x: 0, y: -Math.sign(direction.y), z: 0 };
+	}
+
+	if (absoluteZ > 0) {
+		return { x: 0, y: 0, z: -Math.sign(direction.z) };
+	}
+
+	return ZERO_NORMAL;
+}
+
+function isTargetable(block: VoxelBlock): boolean {
+	if (block.type === 'air') {
+		return false;
+	}
+
+	// Fluid cells are crossed like Minecraft's normal block raycast. Solid
+	// blocks and collectable decorations such as flowers remain targetable.
+	return block.solid || block.collectable;
+}
+
+function isFiniteVector(vector: Vector3): boolean {
+	return Number.isFinite(vector.x) && Number.isFinite(vector.y) && Number.isFinite(vector.z);
+}
+
+function finiteOrZero(value: number): number {
+	return Number.isFinite(value) ? value : 0;
+}
+
+function clamp(value: number, min: number, max: number): number {
+	return Math.max(min, Math.min(max, value));
 }

@@ -9,7 +9,9 @@ export interface KeyboardCommands {
 	inventory: boolean;
 	pause: boolean;
 	build: boolean;
+	catalog: boolean;
 	debugPerformance: boolean;
+	recenterBuildCursor: boolean;
 	hotbarIndex: number | null;
 }
 
@@ -18,10 +20,16 @@ export class KeyboardInput {
 	private inventoryPressed = false;
 	private pausePressed = false;
 	private buildPressed = false;
+	private catalogPressed = false;
 	private debugPerformancePressed = false;
+	private recenterBuildCursorPressed = false;
 	private hotbarPressed: number | null = null;
 	private readonly handleKeydown = (event: KeyboardEvent): void => {
 		this.keys.add(event.code);
+
+		if (event.repeat) {
+			return;
+		}
 
 		if (event.code === 'KeyI') {
 			this.inventoryPressed = true;
@@ -31,8 +39,16 @@ export class KeyboardInput {
 			this.buildPressed = true;
 		}
 
+		if (event.code === 'KeyC') {
+			this.catalogPressed = true;
+		}
+
 		if (event.code === 'F3') {
 			this.debugPerformancePressed = true;
+		}
+
+		if (event.code === 'KeyR') {
+			this.recenterBuildCursorPressed = true;
 		}
 
 		if (event.code === 'Escape') {
@@ -88,14 +104,18 @@ export class KeyboardInput {
 			inventory: this.inventoryPressed,
 			pause: this.pausePressed,
 			build: this.buildPressed,
+			catalog: this.catalogPressed,
 			debugPerformance: this.debugPerformancePressed,
+			recenterBuildCursor: this.recenterBuildCursorPressed,
 			hotbarIndex: this.hotbarPressed
 		};
 
 		this.inventoryPressed = false;
 		this.pausePressed = false;
 		this.buildPressed = false;
+		this.catalogPressed = false;
 		this.debugPerformancePressed = false;
+		this.recenterBuildCursorPressed = false;
 		this.hotbarPressed = null;
 
 		return commands;

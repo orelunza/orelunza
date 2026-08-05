@@ -1,21 +1,45 @@
-import { Scene, WebGLRenderer, type Camera } from 'three';
-import { addWorldLighting } from './Lighting';
+import {
+	ACESFilmicToneMapping,
+	PCFSoftShadowMap,
+	SRGBColorSpace,
+	Scene,
+	WebGLRenderer,
+	type Camera,
+	type Vector3
+} from 'three';
+import { PlacementPreview } from './PlacementPreview';
 import { SelectionOutline } from './SelectionOutline';
+import {
+	resolveQualitySettings,
+	type QualitySettings,
+	type RenderQuality
+} from './QualitySettings';
 import { BlockMeshFactory, type BlockInstanceLookup } from '../world/BlockMeshFactory';
 import type { VoxelWorld } from '../world/VoxelWorld';
 import { chunkKey, type BlockCoordinate, type ChunkCoordinate } from '../world/voxel-types';
 import type { ChunkStreamingChanges } from '../world/ChunkStreamingSystem';
+import { TallGrassRenderer } from './TallGrassRenderer';
+import { GroundFoliageRenderer } from './GroundFoliageRenderer';
 
 export class GameRenderer {
 	readonly scene = new Scene();
 	readonly renderer: WebGLRenderer;
 	readonly selection = new SelectionOutline();
+	readonly placementPreview = new PlacementPreview();
 
+	readonly quality: QualitySettings;
+
+	private readonly tallGrass: TallGrassRenderer;
+	private readonly groundFoliage: GroundFoliageRenderer;
 	private readonly meshFactory = new BlockMeshFactory();
 	private readonly meshesByChunk = new Map<string, BlockInstanceLookup[]>();
 	private blockMeshes: BlockInstanceLookup[] = [];
 
-	constructor(readonly canvas: HTMLCanvasElement) {
+	constructor(
+		readonly canvas: HTMLCanvasElement,
+		quality: RenderQuality = 'medium'
+	) {
+		this.quality = resolveQualitySettings(quality);
 		this.renderer = new WebGLRenderer({
 			canvas,
 			antialias: true,
@@ -23,11 +47,24 @@ export class GameRenderer {
 			powerPreference: 'high-performance'
 		});
 
-		this.renderer.setPixelRatio(1);
-		this.renderer.shadowMap.enabled = false;
+		this.renderer.setPixelRatio(this.quality.pixelRatio);
 
-		addWorldLighting(this.scene);
-		this.scene.add(this.selection.object);
+		// Tone mapping and colour space give the atmospheric sky its dynamic
+		// range; exposure is then driven per frame by the environment system.
+		this.renderer.outputColorSpace = SRGBColorSpace;
+		this.renderer.toneMapping = ACESFilmicToneMapping;
+		this.renderer.toneMappingExposure = 1;
+
+		// Shadow casting is toggled by the environment lighting according to the
+		// quality profile; configure the type once here.
+		this.renderer.shadowMap.enabled = this.quality.shadows;
+		this.renderer.shadowMap.type = PCFSoftShadowMap;
+		this.tallGrass = new TallGrassRenderer(this.scene, this.quality);
+		this.groundFoliage = new GroundFoliageRenderer(this.scene, this.quality);
+
+		// Lighting is owned by EnvironmentLighting (dynamic sun/moon), so the
+		// renderer no longer adds static lights of its own.
+		this.scene.add(this.selection.object, this.placementPreview.object);
 	}
 
 	get lookups(): BlockInstanceLookup[] {
@@ -43,6 +80,8 @@ export class GameRenderer {
 	 */
 	rebuildWorld(world: VoxelWorld): void {
 		this.clearChunkMeshes();
+		this.tallGrass.clear();
+		this.groundFoliage.clear();
 
 		for (const chunk of world.getLoadedChunks()) {
 			this.replaceChunk(world, chunk);
@@ -112,6 +151,20 @@ export class GameRenderer {
 		this.selection.setTarget(block);
 	}
 
+	setPlacementPreview(block: BlockCoordinate | null, allowed = false): void {
+		this.placementPreview.setTarget(block, allowed);
+	}
+
+	updateVegetation(
+		cameraPosition: Readonly<Vector3>,
+		deltaSeconds: number,
+		windDirection = 0,
+		windStrength = 0.15
+	): void {
+		this.tallGrass.update(cameraPosition, deltaSeconds, windDirection, windStrength);
+		this.groundFoliage.update(cameraPosition, deltaSeconds, windDirection, windStrength);
+	}
+
 	render(camera: Camera): void {
 		this.renderer.render(this.scene, camera);
 	}
@@ -120,6 +173,9 @@ export class GameRenderer {
 		this.clearChunkMeshes();
 		this.blockMeshes = [];
 		this.selection.dispose();
+		this.placementPreview.dispose();
+		this.tallGrass.dispose();
+		this.groundFoliage.dispose();
 		this.meshFactory.dispose();
 		this.renderer.dispose();
 	}
@@ -127,7 +183,9 @@ export class GameRenderer {
 	private replaceChunk(world: VoxelWorld, chunk: ChunkCoordinate): void {
 		this.removeChunkInternal(chunk);
 
-		const lookups = this.meshFactory.createMeshes(world.getVisibleBlocksInChunk(chunk));
+		const lookups = this.meshFactory.createMeshes(world.getVisibleBlocksInChunk(chunk), world);
+		this.tallGrass.replaceChunk(world, chunk);
+		this.groundFoliage.replaceChunk(world, chunk);
 		this.meshesByChunk.set(chunkKey(chunk), lookups);
 
 		for (const lookup of lookups) {
@@ -138,6 +196,9 @@ export class GameRenderer {
 	private removeChunkInternal(chunk: ChunkCoordinate): void {
 		const key = chunkKey(chunk);
 		const lookups = this.meshesByChunk.get(key);
+
+		this.tallGrass.removeChunk(chunk);
+		this.groundFoliage.removeChunk(chunk);
 
 		if (!lookups) {
 			return;

@@ -1,12 +1,13 @@
 import type { Inventory } from '../inventory/Inventory';
 import type { VoxelWorld } from '../world/VoxelWorld';
+import type { BlockCoordinate } from '../world/voxel-types';
 import type { TargetedBlock } from '../game-types';
 
 export class BlockBreakingSystem {
 	constructor(
 		private readonly world: VoxelWorld,
 		private readonly inventory: Inventory,
-		private readonly onChanged: () => void
+		private readonly onChanged: (position: BlockCoordinate) => void
 	) {}
 
 	break(target: TargetedBlock | null): boolean {
@@ -21,7 +22,7 @@ export class BlockBreakingSystem {
 		}
 
 		this.inventory.addItem(collected, 1);
-		this.onChanged();
+		this.onChanged(target.block);
 
 		return true;
 	}

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { GameSnapshot } from '$lib/game/game-types';
-	import Hotbar from './Hotbar.svelte';
+	import BuildHotbar from './BuildHotbar.svelte';
 	import InteractionPrompt from './InteractionPrompt.svelte';
 
 	interface Props {
@@ -11,7 +11,15 @@
 
 	let { snapshot, onHotbarSelect, onPause }: Props = $props();
 
-	let selectedSlot = $derived(snapshot.inventory.hotbar[snapshot.selectedHotbarIndex] ?? null);
+	let selectedSlot = $derived(
+		snapshot.buildMode && snapshot.selectedBuildBlock
+			? (snapshot.inventory.hotbar.find(
+					(slot) => slot.stack?.type === snapshot.selectedBuildBlock
+				) ??
+					snapshot.inventory.hotbar[snapshot.selectedHotbarIndex] ??
+					null)
+			: (snapshot.inventory.hotbar[snapshot.selectedHotbarIndex] ?? null)
+	);
 </script>
 
 <div class="pointer-events-none absolute inset-0 z-20 text-white" aria-label="Game HUD">
@@ -75,13 +83,15 @@
 		Menu
 	</button>
 
-	<div
-		class="absolute top-1/2 left-1/2 size-4 -translate-x-1/2 -translate-y-1/2"
-		aria-label="Crosshair"
-	>
-		<span class="absolute top-1/2 left-0 h-px w-full bg-white/78"></span>
-		<span class="absolute top-0 left-1/2 h-full w-px bg-white/78"></span>
-	</div>
+	{#if !snapshot.buildMode}
+		<div
+			class="absolute top-1/2 left-1/2 size-4 -translate-x-1/2 -translate-y-1/2"
+			aria-label="Crosshair"
+		>
+			<span class="absolute top-1/2 left-0 h-px w-full bg-white/78"></span>
+			<span class="absolute top-0 left-1/2 h-full w-px bg-white/78"></span>
+		</div>
+	{/if}
 
 	{#if snapshot.mobileLimited}
 		<div
@@ -99,11 +109,16 @@
 		/>
 	</div>
 
-	<div class="pointer-events-auto absolute bottom-4 left-1/2 -translate-x-1/2">
-		<Hotbar
-			slots={snapshot.inventory.hotbar}
-			selectedIndex={snapshot.selectedHotbarIndex}
-			onSelect={onHotbarSelect}
-		/>
-	</div>
+	{#if snapshot.buildMode}
+		<div class="pointer-events-auto absolute bottom-4 left-1/2 -translate-x-1/2">
+			<BuildHotbar
+				palette={snapshot.buildPalette}
+				selectedIndex={snapshot.selectedBuildPaletteIndex}
+				selectedBlock={snapshot.selectedBuildBlock}
+				inventory={snapshot.inventory}
+				creative={snapshot.creativeBuild}
+				onSelect={onHotbarSelect}
+			/>
+		</div>
+	{/if}
 </div>

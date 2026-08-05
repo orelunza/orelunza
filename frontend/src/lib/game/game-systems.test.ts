@@ -4,6 +4,7 @@ import {
 	AnimationMixer,
 	Bone,
 	Box3,
+	PerspectiveCamera,
 	QuaternionKeyframeTrack,
 	Vector3,
 	VectorKeyframeTrack
@@ -20,6 +21,7 @@ import {
 import { BlockPlacementSystem } from './interaction/BlockPlacementSystem';
 import { Hotbar } from './inventory/Hotbar';
 import { Inventory } from './inventory/Inventory';
+import { BuildCursor } from './input/BuildCursor';
 import { KeyboardInput } from './input/KeyboardInput';
 import {
 	HUMANOID_ANIMATION_STATES,
@@ -62,6 +64,7 @@ import { parseWorldSave, serializeWorldSave, type WorldSaveV1 } from './world/Wo
 import {
 	CENTRAL_CITY_CENTER,
 	STARTER_WORLD_SEED,
+	WORLD_MAX_Y,
 	chunkToWorld,
 	worldToChunk
 } from './world/voxel-types';
@@ -1010,7 +1013,46 @@ describe('humanoid avatar rig and animation', () => {
 	});
 });
 
+test('shows a lightweight hammer only while build mode is active', async () => {
+	const world = new VoxelWorld(STARTER_WORLD_SEED);
+	const avatar = new PlayerAvatar(DEFAULT_CHARACTER_APPEARANCE, { allowFallback: true });
+	await avatar.ready;
+	const hammer = avatar.object.getObjectByName('buildHammer');
+
+	expect(hammer).toBeDefined();
+	expect(hammer?.visible).toBe(false);
+
+	avatar.setBuildMode(true);
+	expect(hammer?.visible).toBe(true);
+
+	avatar.swingBuildTool();
+	avatar.update(testPlayer(world), false, 1 / 60);
+	expect(Number.isFinite(hammer?.rotation.x ?? Number.NaN)).toBe(true);
+
+	avatar.setBuildMode(false);
+	expect(hammer?.visible).toBe(false);
+	avatar.dispose();
+});
+
 describe('player physics', () => {
+	test('moves the build cursor freely before forwarding overflow to the camera', () => {
+		const cursor = new BuildCursor();
+		const freeMove = cursor.move({ x: 100, y: 50 }, 1000, 500);
+
+		expect(freeMove.position.x).toBeCloseTo(0.2, 6);
+		expect(freeMove.position.y).toBeCloseTo(-0.2, 6);
+		expect(freeMove.cameraDelta).toEqual({ x: 0, y: 0 });
+
+		const edgeMove = cursor.move({ x: 1000, y: 1000 }, 1000, 500);
+		expect(edgeMove.position.x).toBeLessThanOrEqual(0.9);
+		expect(edgeMove.position.y).toBeGreaterThanOrEqual(-0.84);
+		expect(edgeMove.cameraDelta.x).toBeGreaterThan(0);
+		expect(edgeMove.cameraDelta.y).toBeGreaterThan(0);
+
+		cursor.reset();
+		expect(cursor.position).toEqual({ x: 0, y: 0 });
+	});
+
 	test('normalizes diagonal movement input', () => {
 		const windowTarget = new FakeWindow();
 		const input = new KeyboardInput(windowTarget as unknown as Window);
@@ -1032,6 +1074,31 @@ describe('player physics', () => {
 
 		expect(input.consumeCommands()).toMatchObject({
 			build: true
+		});
+		input.destroy();
+	});
+
+	test('opens the block catalog through a separate keyboard command', () => {
+		const windowTarget = new FakeWindow();
+		const input = new KeyboardInput(windowTarget as unknown as Window);
+
+		windowTarget.press('KeyC');
+
+		expect(input.consumeCommands()).toMatchObject({
+			build: false,
+			catalog: true
+		});
+		input.destroy();
+	});
+
+	test('recenters the independent build cursor with R', () => {
+		const windowTarget = new FakeWindow();
+		const input = new KeyboardInput(windowTarget as unknown as Window);
+
+		windowTarget.press('KeyR');
+
+		expect(input.consumeCommands()).toMatchObject({
+			recenterBuildCursor: true
 		});
 		input.destroy();
 	});
@@ -1274,6 +1341,98 @@ describe('player physics', () => {
 		);
 	});
 
+	test('camera can aim almost straight up and down without entering terrain', () => {
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		const player = testPlayer(world);
+		const camera = new ThirdPersonCamera(1, world);
+
+		camera.setOrientation(Math.PI, MIN_CAMERA_PITCH);
+
+		for (let index = 0; index < 120; index += 1) {
+			camera.update(player, 1 / 60);
+		}
+
+		const upward = new Vector3(0, 0, -1).applyQuaternion(camera.camera.quaternion).normalize();
+
+		expect(upward.y).toBeGreaterThan(0.98);
+		expect(camera.camera.position.y).toBeGreaterThan(
+			world.terrainGenerator.heightAt(camera.camera.position.x, camera.camera.position.z)
+		);
+
+		camera.setOrientation(Math.PI, MAX_CAMERA_PITCH);
+		camera.update(player, 1 / 60);
+
+		const downward = new Vector3(0, 0, -1).applyQuaternion(camera.camera.quaternion).normalize();
+
+		expect(downward.y).toBeLessThan(-0.98);
+	});
+
+	test('looking up changes aim without lowering the camera boom into water', () => {
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		const player = testPlayer(world);
+		const camera = new ThirdPersonCamera(1, world);
+
+		camera.setOrientation(Math.PI, MIN_CAMERA_PITCH);
+		camera.update(player, 1 / 60);
+		const aimingUpHeight = camera.camera.position.y;
+
+		camera.setOrientation(Math.PI, MAX_CAMERA_PITCH);
+		camera.update(player, 1 / 60);
+		const aimingDownHeight = camera.camera.position.y;
+
+		expect(Math.abs(aimingUpHeight - aimingDownHeight)).toBeLessThan(0.05);
+	});
+
+	test('preserves real altitude perspective and moves closer again while descending', () => {
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		const base = world.findSafeSpawnPosition();
+		const player = testPlayer(world, {
+			position: { ...base, y: base.y + 48 }
+		});
+		const camera = new ThirdPersonCamera(16 / 9, world);
+		camera.setShoulderFraming('build');
+		camera.setOrientation(Math.PI, MAX_CAMERA_PITCH);
+
+		for (let index = 0; index < 180; index += 1) {
+			camera.update(player, 1 / 60);
+		}
+
+		const highAltitudeDistance = camera.currentDistance;
+
+		expect(camera.altitudeFramingFactor).toBeGreaterThan(0.95);
+		expect(highAltitudeDistance).toBeGreaterThan(MAX_CAMERA_DISTANCE);
+		// The camera must not auto-fit the complete 48-block tower. Keeping this
+		// distance sub-linear preserves the feeling that the ground is far away.
+		expect(highAltitudeDistance).toBeLessThan(32);
+
+		player.position.y = base.y + 8;
+
+		for (let index = 0; index < 240; index += 1) {
+			camera.update(player, 1 / 60);
+		}
+
+		expect(camera.currentDistance).toBeLessThan(highAltitudeDistance);
+		expect(camera.currentDistance).toBeLessThan(12);
+	});
+
+	test('keeps normal close framing at altitude until the player looks downward', () => {
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		const base = world.findSafeSpawnPosition();
+		const player = testPlayer(world, {
+			position: { ...base, y: base.y + 48 }
+		});
+		const camera = new ThirdPersonCamera(16 / 9, world);
+		camera.setShoulderFraming('build');
+		camera.setOrientation(Math.PI, 0.2);
+
+		for (let index = 0; index < 180; index += 1) {
+			camera.update(player, 1 / 60);
+		}
+
+		expect(camera.altitudeFramingFactor).toBeLessThan(0.01);
+		expect(camera.currentDistance).toBeLessThanOrEqual(MAX_CAMERA_DISTANCE);
+	});
+
 	test('camera shortens before an obstacle behind the player', () => {
 		const world = new VoxelWorld(STARTER_WORLD_SEED);
 		const player = testPlayer(world);
@@ -1343,6 +1502,38 @@ describe('player physics', () => {
 		expect(forward.dot(expected)).toBeGreaterThan(0.999);
 	});
 
+	test('keeps camera rotation stable near a vertical pitch', () => {
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		const player = testPlayer(world);
+		const camera = new ThirdPersonCamera(1, world);
+		camera.setOrientation(Math.PI, MIN_CAMERA_PITCH);
+		camera.update(player, 1 / 60);
+
+		const previous = camera.camera.quaternion.clone();
+
+		for (let index = 0; index < 180; index += 1) {
+			camera.applyMouse(player, { x: 2, y: 0 });
+			camera.update(player, 1 / 60);
+
+			const quaternion = camera.camera.quaternion;
+			const values = [quaternion.x, quaternion.y, quaternion.z, quaternion.w];
+
+			expect(values.every(Number.isFinite)).toBe(true);
+			expect(quaternion.length()).toBeCloseTo(1, 6);
+			expect(Math.abs(previous.dot(quaternion))).toBeGreaterThan(0.99);
+
+			const forward = new Vector3(0, 0, -1).applyQuaternion(quaternion).normalize();
+			const expected = new Vector3(
+				Math.sin(camera.orientationYaw) * Math.cos(camera.orientationPitch),
+				-Math.sin(camera.orientationPitch),
+				Math.cos(camera.orientationYaw) * Math.cos(camera.orientationPitch)
+			).normalize();
+
+			expect(forward.dot(expected)).toBeGreaterThan(0.99999);
+			previous.copy(quaternion);
+		}
+	});
+
 	test('build framing offsets the avatar further than exploration framing and settles without jitter', () => {
 		const world = new VoxelWorld(STARTER_WORLD_SEED);
 
@@ -1365,6 +1556,59 @@ describe('player physics', () => {
 		build.update(testPlayer(world), 1 / 60);
 		expect(Math.abs(build.shoulderFramingOffset - settled)).toBeLessThan(1e-4);
 	});
+
+	test('camera collision can pull closer than the normal zoom limit without entering a wall', () => {
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		const player = testPlayer(world);
+		const camera = new ThirdPersonCamera(1, world);
+		const wallZ = Math.floor(player.position.z - 1);
+		const centerX = Math.floor(player.position.x);
+
+		for (let x = centerX - 2; x <= centerX + 2; x += 1) {
+			for (let y = Math.floor(player.position.y); y <= Math.floor(player.position.y + 3); y += 1) {
+				world.setBlock({ x, y, z: wallZ }, 'brick');
+			}
+		}
+
+		camera.setOrientation(0, 0.1);
+		camera.update(player, 1 / 60);
+
+		expect(camera.currentDistance).toBeLessThan(MIN_CAMERA_DISTANCE);
+		expect(
+			world.isSolidLoadedAt({
+				x: camera.camera.position.x,
+				y: camera.camera.position.y,
+				z: camera.camera.position.z
+			})
+		).toBe(false);
+	});
+
+	test('camera rotation does not interpolate through a wall beside the player', () => {
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		const player = testPlayer(world);
+		const camera = new ThirdPersonCamera(1, world);
+		const wallX = Math.floor(player.position.x + 1);
+		const centerZ = Math.floor(player.position.z);
+
+		for (let z = centerZ - 4; z <= centerZ + 4; z += 1) {
+			for (let y = Math.floor(player.position.y); y <= Math.floor(player.position.y + 4); y += 1) {
+				world.setBlock({ x: wallX, y, z }, 'stone');
+			}
+		}
+
+		for (let index = 0; index <= 90; index += 1) {
+			camera.setOrientation((-Math.PI / 2) * (index / 90), 0.25);
+			camera.update(player, 1 / 60);
+
+			expect(
+				world.isSolidLoadedAt({
+					x: camera.camera.position.x,
+					y: camera.camera.position.y,
+					z: camera.camera.position.z
+				})
+			).toBe(false);
+		}
+	});
 });
 
 describe('inventory and placement', () => {
@@ -1384,8 +1628,154 @@ describe('inventory and placement', () => {
 		expect(inventory.getSelectedStack(1)?.quantity).toBe(33);
 	});
 
-	test('does not place a block inside the player', () => {
+	test('previews the exact destination cell and whether placement is allowed', () => {
 		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		world.loadChunk({ x: 0, z: 0 });
+		world.setBlock({ x: 6, y: 20, z: 6 }, 'stone');
+		const controller = new PlayerController(world, 'p', 'w', { x: 10.5, y: 20, z: 10.5 }, 1);
+		const system = new BlockPlacementSystem(
+			world,
+			new Inventory(),
+			controller.state,
+			controller.physics.collider,
+			() => undefined
+		);
+
+		expect(
+			system.preview(
+				{
+					block: { x: 6, y: 20, z: 6 },
+					normal: { x: 0, y: 1, z: 0 },
+					type: 'stone'
+				},
+				'brick'
+			)
+		).toEqual({
+			position: { x: 6, y: 21, z: 6 },
+			allowed: true,
+			liftsPlayer: false
+		});
+	});
+
+	test('pillar-builds beneath the player and lifts them onto the new block', () => {
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		world.loadChunk({ x: 0, z: 0 });
+		world.setBlock({ x: 10, y: 19, z: 10 }, 'stone');
+		const controller = new PlayerController(world, 'p', 'w', { x: 10.5, y: 20, z: 10.5 }, 1);
+		const system = new BlockPlacementSystem(
+			world,
+			new Inventory(),
+			controller.state,
+			controller.physics.collider,
+			() => undefined
+		);
+
+		expect(
+			system.place(
+				{
+					block: { x: 10, y: 19, z: 10 },
+					normal: { x: 0, y: 1, z: 0 },
+					type: 'stone'
+				},
+				'brick',
+				true
+			)
+		).toBe(true);
+		expect(world.getLoadedBlock({ x: 10, y: 20, z: 10 })?.type).toBe('brick');
+		expect(controller.state.position.y).toBe(21);
+		expect(controller.state.onGround).toBe(true);
+	});
+
+	test('supports repeated assisted pillar building', () => {
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		world.loadChunk({ x: 0, z: 0 });
+		world.setBlock({ x: 10, y: 39, z: 10 }, 'stone');
+		const controller = new PlayerController(world, 'p', 'w', { x: 10.5, y: 40, z: 10.5 }, 1);
+		const system = new BlockPlacementSystem(
+			world,
+			new Inventory(),
+			controller.state,
+			controller.physics.collider,
+			() => undefined
+		);
+
+		for (let index = 0; index < 12; index += 1) {
+			const baseY = 39 + index;
+			expect(
+				system.place(
+					{
+						block: { x: 10, y: baseY, z: 10 },
+						normal: { x: 0, y: 1, z: 0 },
+						type: index === 0 ? 'stone' : 'brick'
+					},
+					'brick',
+					true
+				)
+			).toBe(true);
+		}
+
+		expect(controller.state.position.y).toBe(52);
+		expect(world.getLoadedBlock({ x: 10, y: 51, z: 10 })?.type).toBe('brick');
+	});
+
+	test('still refuses a side placement that intersects the player torso', () => {
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		world.loadChunk({ x: 0, z: 0 });
+		world.setBlock({ x: 9, y: 20, z: 10 }, 'stone');
+		const controller = new PlayerController(world, 'p', 'w', { x: 10.2, y: 20, z: 10.5 }, 1);
+		const system = new BlockPlacementSystem(
+			world,
+			new Inventory(),
+			controller.state,
+			controller.physics.collider,
+			() => undefined
+		);
+
+		expect(
+			system.place(
+				{
+					block: { x: 9, y: 20, z: 10 },
+					normal: { x: 1, y: 0, z: 0 },
+					type: 'stone'
+				},
+				'brick',
+				true
+			)
+		).toBe(false);
+	});
+
+	test('refuses pillar lifting when a ceiling blocks the new player position', () => {
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		world.loadChunk({ x: 0, z: 0 });
+		world.setBlock({ x: 10, y: 19, z: 10 }, 'stone');
+		world.setBlock({ x: 10, y: 22, z: 10 }, 'stone');
+		const controller = new PlayerController(world, 'p', 'w', { x: 10.5, y: 20, z: 10.5 }, 1);
+		const system = new BlockPlacementSystem(
+			world,
+			new Inventory(),
+			controller.state,
+			controller.physics.collider,
+			() => undefined
+		);
+
+		expect(
+			system.place(
+				{
+					block: { x: 10, y: 19, z: 10 },
+					normal: { x: 0, y: 1, z: 0 },
+					type: 'stone'
+				},
+				'brick',
+				true
+			)
+		).toBe(false);
+		expect(controller.state.position.y).toBe(20);
+		expect(world.getLoadedBlock({ x: 10, y: 20, z: 10 })?.type).toBe('air');
+	});
+
+	test('builds tall vertical walls above the former height limit', () => {
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		world.loadChunk({ x: 0, z: 0 });
 		const controller = new PlayerController(world, 'p', 'w', { x: 10.5, y: 20, z: 10.5 }, 1);
 		const inventory = new Inventory();
 		const system = new BlockPlacementSystem(
@@ -1396,16 +1786,27 @@ describe('inventory and placement', () => {
 			() => undefined
 		);
 
-		const placed = system.place(
-			{
-				block: { x: 10, y: 19, z: 10 },
-				normal: { x: 0, y: 1, z: 0 },
-				type: 'stone'
-			},
-			'brick'
-		);
+		const x = 3;
+		const z = 3;
+		const baseY = 40;
+		expect(world.setBlock({ x, y: baseY, z }, 'stone')).toBe(true);
 
-		expect(placed).toBe(false);
+		for (let y = baseY + 1; y <= baseY + 24; y += 1) {
+			expect(
+				system.place(
+					{
+						block: { x, y: y - 1, z },
+						normal: { x: 0, y: 1, z: 0 },
+						type: y === baseY + 1 ? 'stone' : 'brick'
+					},
+					'brick',
+					true
+				)
+			).toBe(true);
+		}
+
+		expect(world.getLoadedBlock({ x, y: baseY + 24, z })?.type).toBe('brick');
+		expect(world.setBlock({ x, y: WORLD_MAX_Y + 1, z }, 'brick')).toBe(false);
 	});
 });
 
@@ -1683,25 +2084,212 @@ describe('rewritten locomotion, camera and avatar contracts', () => {
 		expect(maxRootBob).toBeLessThan(0.02);
 	});
 
+	test('casts through the independent build cursor position instead of only screen center', async () => {
+		const { BlockRaycaster } = await import('./interaction/BlockRaycaster');
+		const camera = new PerspectiveCamera(60, 1, 0.1, 100);
+		camera.position.set(5.5, 22.5, 10.5);
+		camera.lookAt(5.5, 22.5, 5.5);
+		camera.updateMatrixWorld(true);
+
+		const world = {
+			getLoadedBlock(position: { x: number; y: number; z: number }) {
+				return BlockRegistry.create(
+					position.x === 5 && position.y === 20 && position.z === 5 ? 'brick' : 'air',
+					position
+				);
+			}
+		} as VoxelWorld;
+		const raycaster = new BlockRaycaster(8);
+
+		expect(raycaster.raycast(camera, world, 0, { x: 0, y: 0 })).toBeNull();
+		expect(raycaster.raycast(camera, world, 0, { x: 0, y: -0.72 })?.block).toEqual({
+			x: 5,
+			y: 20,
+			z: 5
+		});
+	});
+
+	test('voxel raycast targets the exact cell face independently from rendered geometry', async () => {
+		const { BlockRaycaster } = await import('./interaction/BlockRaycaster');
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		world.loadChunk({ x: 0, z: 0 });
+		world.setBlock({ x: 5, y: 20, z: 5 }, 'wood');
+
+		const raycaster = new BlockRaycaster(6);
+		const result = raycaster.raycastFrom(new Vector3(2.5, 20.5, 5.5), new Vector3(1, 0, 0), world);
+
+		expect(result).toEqual({
+			block: { x: 5, y: 20, z: 5 },
+			normal: { x: -1, y: 0, z: 0 },
+			type: 'wood'
+		});
+	});
+
+	test('third-person camera distance does not consume the build reach', async () => {
+		const { BlockRaycaster } = await import('./interaction/BlockRaycaster');
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		world.loadChunk({ x: 0, z: 0 });
+		world.setBlock({ x: 10, y: 20, z: 5 }, 'brick');
+
+		const raycaster = new BlockRaycaster(6);
+		const origin = new Vector3(0.5, 20.5, 5.5);
+		const direction = new Vector3(1, 0, 0);
+
+		expect(raycaster.raycastFrom(origin, direction, world)).toBeNull();
+		expect(raycaster.raycastFrom(origin, direction, world, 12)?.block).toEqual({
+			x: 10,
+			y: 20,
+			z: 5
+		});
+	});
+
+	test('voxel raycast keeps correct cells and normals at negative world coordinates', async () => {
+		const { BlockRaycaster } = await import('./interaction/BlockRaycaster');
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		world.loadChunk({ x: -1, z: -1 });
+		world.setBlock({ x: -3, y: 20, z: -2 }, 'stone');
+
+		const result = new BlockRaycaster(6).raycastFrom(
+			new Vector3(-0.5, 20.5, -1.5),
+			new Vector3(-1, 0, 0),
+			world
+		);
+
+		expect(result).toEqual({
+			block: { x: -3, y: 20, z: -2 },
+			normal: { x: 1, y: 0, z: 0 },
+			type: 'stone'
+		});
+	});
+
+	test('voxel raycast crosses water and targets the solid block behind it', async () => {
+		const { BlockRaycaster } = await import('./interaction/BlockRaycaster');
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		world.loadChunk({ x: 0, z: 0 });
+		world.setBlock({ x: 4, y: 20, z: 5 }, 'water');
+		world.setBlock({ x: 5, y: 20, z: 5 }, 'brick');
+
+		const result = new BlockRaycaster(6).raycastFrom(
+			new Vector3(2.5, 20.5, 5.5),
+			new Vector3(1, 0, 0),
+			world
+		);
+
+		expect(result?.block).toEqual({ x: 5, y: 20, z: 5 });
+		expect(result?.normal).toEqual({ x: -1, y: 0, z: 0 });
+		expect(result?.type).toBe('brick');
+	});
+
+	test('voxel raycast returns water as a placement fallback when no solid is behind it', async () => {
+		const { BlockRaycaster } = await import('./interaction/BlockRaycaster');
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		world.loadChunk({ x: 0, z: 0 });
+		world.setBlock({ x: 4, y: 20, z: 5 }, 'water');
+
+		const result = new BlockRaycaster(6).raycastFrom(
+			new Vector3(2.5, 20.5, 5.5),
+			new Vector3(1, 0, 0),
+			world
+		);
+
+		expect(result).toEqual({
+			block: { x: 4, y: 20, z: 5 },
+			normal: { x: -1, y: 0, z: 0 },
+			type: 'water'
+		});
+	});
+
+	test('voxel raycast never loads an unseen chunk', async () => {
+		const { BlockRaycaster } = await import('./interaction/BlockRaycaster');
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		world.loadChunk({ x: 0, z: 0 });
+		const loadedBefore = world.getLoadedChunks();
+
+		const result = new BlockRaycaster(6).raycastFrom(
+			new Vector3(14.5, 20.5, 8.5),
+			new Vector3(1, 0, 0),
+			world
+		);
+
+		expect(result).toBeNull();
+		expect(world.getLoadedChunks()).toEqual(loadedBefore);
+	});
+
+	test('places across a chunk boundary using the cardinal voxel face', () => {
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		world.loadChunk({ x: 0, z: 0 });
+		world.loadChunk({ x: 1, z: 0 });
+		world.setBlock({ x: 15, y: 20, z: 8 }, 'brick');
+
+		const controller = new PlayerController(world, 'p', 'w', { x: 8.5, y: 20, z: 8.5 }, 1);
+		const inventory = new Inventory();
+		let changedPosition: { x: number; y: number; z: number } | null = null;
+		const system = new BlockPlacementSystem(
+			world,
+			inventory,
+			controller.state,
+			controller.physics.collider,
+			(position) => {
+				changedPosition = { ...position };
+			}
+		);
+
+		const placed = system.place(
+			{
+				block: { x: 15, y: 20, z: 8 },
+				normal: { x: 1, y: 0, z: 0 },
+				type: 'brick'
+			},
+			'stone',
+			true
+		);
+
+		expect(placed).toBe(true);
+		expect(changedPosition).toEqual({ x: 16, y: 20, z: 8 });
+		expect(world.getLoadedBlock({ x: 16, y: 20, z: 8 })?.type).toBe('stone');
+	});
+
+	test('places a solid block directly into a water cell in creative build mode', () => {
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		world.loadChunk({ x: 0, z: 0 });
+		world.setBlock({ x: 6, y: 20, z: 6 }, 'water');
+		const controller = new PlayerController(world, 'p', 'w', { x: 2.5, y: 20, z: 2.5 }, 1);
+		const system = new BlockPlacementSystem(
+			world,
+			new Inventory(),
+			controller.state,
+			controller.physics.collider,
+			() => undefined
+		);
+
+		const placed = system.place(
+			{
+				block: { x: 6, y: 20, z: 6 },
+				normal: { x: -1, y: 0, z: 0 },
+				type: 'water'
+			},
+			'brick',
+			true
+		);
+
+		expect(placed).toBe(true);
+		expect(world.getLoadedBlock({ x: 6, y: 20, z: 6 })?.type).toBe('brick');
+	});
+
 	test('build raycast ignores the avatar entirely', async () => {
 		const { BlockRaycaster } = await import('./interaction/BlockRaycaster');
 		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		world.loadChunk({ x: 0, z: 0 });
 		const avatar = new PlayerAvatar(DEFAULT_CHARACTER_APPEARANCE, { allowFallback: true });
 		await avatar.ready;
 
-		const raycaster = new BlockRaycaster(6);
-		const camera = new ThirdPersonCamera(1, world);
-		const player = testPlayer(world);
-		camera.setOrientation(Math.PI, 0.2);
-		camera.update(player);
+		const result = new BlockRaycaster(6).raycastFrom(
+			new Vector3(2.5, 20.5, 2.5),
+			new Vector3(1, 0, 0),
+			world
+		);
 
-		// The raycaster only ever receives world block lookups. The avatar object
-		// is never part of that set, so it can never be targeted.
-		const lookups: never[] = [];
-		const result = raycaster.raycast(camera.camera, lookups);
 		expect(result).toBeNull();
-
-		// And the avatar object graph is not a block lookup mesh.
 		expect(avatar.object.name).toBe('playerAvatar');
 		avatar.dispose();
 	});

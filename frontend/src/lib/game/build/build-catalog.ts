@@ -1,0 +1,239 @@
+import { BlockRegistry } from '../world/BlockRegistry';
+import type { BlockDefinition, BlockType } from '../world/voxel-types';
+import { BUILD_CATEGORY_DESCRIPTORS, type BuildCategory } from './build-types';
+
+export type CreationKind =
+	'material' | 'object' | 'vegetation' | 'effect' | 'terrain-tool' | 'blueprint';
+
+export type CreationPlacementMode =
+	'voxel' | 'surface' | 'free' | 'wall' | 'ceiling' | 'brush' | 'procedural';
+
+/**
+ * Current catalog entry. Blocks are the first creation kind supported by the
+ * game, but the metadata already follows the universal creation catalog model
+ * so furniture, vegetation, lights and procedural tools can join later without
+ * redesigning the dock.
+ */
+export interface CatalogEntry {
+	type: BlockType;
+	label: string;
+	description: string;
+	category: BuildCategory;
+	kind: CreationKind;
+	placementMode: CreationPlacementMode;
+	tags: readonly string[];
+	synonyms: readonly string[];
+}
+
+export type CatalogSpecialFilter = 'all' | 'owned' | 'favorites' | 'recent';
+export type CatalogFilter = CatalogSpecialFilter | BuildCategory;
+
+export interface CatalogCategoryOption {
+	id: CatalogFilter;
+	label: string;
+}
+
+export type CatalogIconId =
+	| 'all'
+	| 'owned'
+	| 'favorites'
+	| 'recent'
+	| 'terrain'
+	| 'nature'
+	| 'construction'
+	| 'decoration'
+	| 'light'
+	| 'utility';
+
+export interface CatalogFilterContext {
+	owned?: readonly BlockType[];
+	favorites?: readonly BlockType[];
+	recent?: readonly BlockType[];
+}
+
+const CATEGORY_SEARCH_METADATA: Record<BuildCategory, readonly string[]> = {
+	terrain: ['ground', 'landscape', 'soil', 'earth', 'path'],
+	nature: ['garden', 'plant', 'tree', 'forest', 'water', 'outdoor'],
+	construction: ['architecture', 'house', 'wall', 'floor', 'building'],
+	decoration: ['decor', 'interior', 'home', 'ornament'],
+	light: ['lamp', 'fire', 'illumination', 'glow'],
+	utility: ['tool', 'functional', 'mechanism']
+};
+
+/** A block appears when it is explicitly placeable and is not air. */
+export function isCatalogBlock(definition: BlockDefinition): boolean {
+	return definition.placeable && definition.type !== 'air';
+}
+
+/** Build the deterministic block-backed portion of the universal catalog. */
+export function buildCatalogEntries(): CatalogEntry[] {
+	const order = new Map<BuildCategory, number>(
+		BUILD_CATEGORY_DESCRIPTORS.map((descriptor, index) => [descriptor.id, index])
+	);
+
+	return BlockRegistry.all()
+		.filter(isCatalogBlock)
+		.map((definition): CatalogEntry => ({
+			type: definition.type,
+			label: definition.label,
+			description: definition.description,
+			category: definition.category,
+			kind: definition.category === 'nature' ? 'vegetation' : 'material',
+			placementMode: 'voxel',
+			tags: CATEGORY_SEARCH_METADATA[definition.category],
+			synonyms: buildSynonyms(definition)
+		}))
+		.sort((a, b) => {
+			const categoryDelta =
+				(order.get(a.category) ?? Number.MAX_SAFE_INTEGER) -
+				(order.get(b.category) ?? Number.MAX_SAFE_INTEGER);
+
+			if (categoryDelta !== 0) {
+				return categoryDelta;
+			}
+
+			const labelDelta = a.label.localeCompare(b.label);
+
+			if (labelDelta !== 0) {
+				return labelDelta;
+			}
+
+			return a.type.localeCompare(b.type);
+		});
+}
+
+/** `All` followed by build categories containing at least one entry. */
+export function buildCategoryOptions(entries: CatalogEntry[]): CatalogCategoryOption[] {
+	const present = new Set<BuildCategory>(entries.map((entry) => entry.category));
+	const options: CatalogCategoryOption[] = [{ id: 'all', label: 'All' }];
+
+	for (const descriptor of BUILD_CATEGORY_DESCRIPTORS) {
+		if (present.has(descriptor.id)) {
+			options.push({ id: descriptor.id, label: descriptor.label });
+		}
+	}
+
+	return options;
+}
+
+export function catalogFilterLabel(filter: CatalogFilter): string {
+	switch (filter) {
+		case 'all':
+			return 'All creations';
+		case 'owned':
+			return 'Owned';
+		case 'favorites':
+			return 'Favorites';
+		case 'recent':
+			return 'Recent';
+		default:
+			return (
+				BUILD_CATEGORY_DESCRIPTORS.find((descriptor) => descriptor.id === filter)?.label ?? filter
+			);
+	}
+}
+
+export function catalogFilterIcon(filter: CatalogFilter): CatalogIconId {
+	return filter;
+}
+
+/** Lowercase, trim and collapse whitespace for stable matching. */
+export function normalizeQuery(query: string): string {
+	return query.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+/**
+ * Filter by special collection or build category, then search across human and
+ * technical metadata. Recent results retain their usage order.
+ */
+export function filterCatalogEntries(
+	entries: CatalogEntry[],
+	category: CatalogFilter,
+	query: string,
+	context: CatalogFilterContext = {}
+): CatalogEntry[] {
+	const normalizedQuery = normalizeQuery(query);
+	const owned = new Set(context.owned ?? []);
+	const favorites = new Set(context.favorites ?? []);
+	const recentOrder = new Map((context.recent ?? []).map((type, index) => [type, index]));
+
+	const filtered = entries.filter((entry) => {
+		if (category === 'owned' && !owned.has(entry.type)) {
+			return false;
+		}
+
+		if (category === 'favorites' && !favorites.has(entry.type)) {
+			return false;
+		}
+
+		if (category === 'recent' && !recentOrder.has(entry.type)) {
+			return false;
+		}
+
+		if (
+			category !== 'all' &&
+			category !== 'owned' &&
+			category !== 'favorites' &&
+			category !== 'recent' &&
+			entry.category !== category
+		) {
+			return false;
+		}
+
+		return matchesQuery(entry, normalizedQuery);
+	});
+
+	if (category === 'recent') {
+		return filtered.sort(
+			(left, right) =>
+				(recentOrder.get(left.type) ?? Number.MAX_SAFE_INTEGER) -
+				(recentOrder.get(right.type) ?? Number.MAX_SAFE_INTEGER)
+		);
+	}
+
+	return filtered;
+}
+
+function matchesQuery(entry: CatalogEntry, normalizedQuery: string): boolean {
+	if (normalizedQuery.length === 0) {
+		return true;
+	}
+
+	const haystack = [
+		entry.label,
+		entry.type,
+		entry.description,
+		entry.category,
+		entry.kind,
+		entry.placementMode,
+		...entry.tags,
+		...entry.synonyms
+	]
+		.join(' ')
+		.toLowerCase();
+
+	return haystack.includes(normalizedQuery);
+}
+
+function buildSynonyms(definition: BlockDefinition): readonly string[] {
+	switch (definition.type) {
+		case 'wooden_plank':
+			return ['plank', 'board', 'timber', 'floor'];
+		case 'wood':
+			return ['trunk', 'log', 'branch', 'tree stem'];
+		case 'leaves':
+			return ['foliage', 'canopy', 'bush'];
+		case 'flower':
+			return ['blossom', 'garden flower'];
+		case 'grass':
+			return ['lawn', 'meadow', 'turf'];
+		case 'brick':
+			return ['masonry', 'wall'];
+		case 'glass':
+			return ['window', 'transparent wall'];
+		case 'water':
+			return ['river', 'pond', 'lake'];
+		default:
+			return [];
+	}
+}

@@ -1,6 +1,15 @@
 import { type BlockCoordinate, type BlockType, CHUNK_SIZE, WATER_LEVEL } from './voxel-types';
 import { CENTRAL_CITY_CENTER } from './voxel-types';
 import { CityGenerator } from './CityGenerator';
+import { generateTreeShape } from '../vegetation/TreeShapeGenerator';
+import {
+	selectTreeSpecies,
+	treeAnchorForCell,
+	TREE_CANOPY_MARGIN,
+	TREE_CELL_SIZE,
+	vegetationSeedValue
+} from '../vegetation/VegetationDistribution';
+import type { TreeSpeciesId } from '../vegetation/VegetationFamily';
 
 function hashString(value: string): number {
 	let hash = 2166136261;
@@ -43,10 +52,12 @@ export interface GeneratedChunk {
 
 export class TerrainGenerator {
 	private readonly seedValue: number;
+	private readonly vegetationSeed: number;
 	private readonly city = new CityGenerator();
 
 	constructor(readonly seed: string) {
 		this.seedValue = hashString(seed);
+		this.vegetationSeed = vegetationSeedValue(seed);
 	}
 
 	heightAt(x: number, z: number): number {
@@ -95,6 +106,14 @@ export class TerrainGenerator {
 			return 'Riverbank';
 		}
 
+		if (x < -72 && z > 18) {
+			return 'Amazon Rainforest';
+		}
+
+		if (z > 72) {
+			return 'Pine Highlands';
+		}
+
 		if (x < -28 && z < -10) {
 			return 'Forest Edge';
 		}
@@ -138,61 +157,100 @@ export class TerrainGenerator {
 					}
 				}
 
-				this.addPlants(blocks, x, height, z, nearWater);
 				blocks.push(...this.city.generateForColumn(x, height, z));
 			}
 		}
 
+		this.addTreesForChunk(blocks, chunkX, chunkZ);
+
 		return { blocks };
 	}
 
-	private addPlants(
-		blocks: GeneratedChunk['blocks'],
-		x: number,
-		height: number,
-		z: number,
-		nearWater: boolean
-	): void {
-		if (nearWater || height <= WATER_LEVEL) {
-			return;
-		}
+	treeSpeciesAt(x: number, z: number): TreeSpeciesId | null {
+		const cellX = Math.floor(x / TREE_CELL_SIZE);
+		const cellZ = Math.floor(z / TREE_CELL_SIZE);
 
-		if (Math.hypot(x, z) < 10 || this.isPath(x, z)) {
-			return;
-		}
+		return selectTreeSpecies(this.zoneAt(x, z), cellX, cellZ, this.vegetationSeed);
+	}
 
-		const forest = x < -28 && z < -10;
-		const clearing = smoothNoise(this.seedValue + 29, x / 22, z / 22) > (forest ? 0.38 : 0.7);
-		const treeRoll = hash2(this.seedValue + 71, x, z);
+	private addTreesForChunk(blocks: GeneratedChunk['blocks'], chunkX: number, chunkZ: number): void {
+		const startX = chunkX * CHUNK_SIZE;
+		const startZ = chunkZ * CHUNK_SIZE;
+		const endX = startX + CHUNK_SIZE - 1;
+		const endZ = startZ + CHUNK_SIZE - 1;
+		const minCellX = Math.floor((startX - TREE_CANOPY_MARGIN) / TREE_CELL_SIZE);
+		const maxCellX = Math.floor((endX + TREE_CANOPY_MARGIN) / TREE_CELL_SIZE);
+		const minCellZ = Math.floor((startZ - TREE_CANOPY_MARGIN) / TREE_CELL_SIZE);
+		const maxCellZ = Math.floor((endZ + TREE_CANOPY_MARGIN) / TREE_CELL_SIZE);
+		const generated = new Map<string, { position: BlockCoordinate; type: BlockType }>();
 
-		if (!clearing && treeRoll > (forest ? 0.94 : 0.988)) {
-			const trunkHeight = 3 + Math.floor(hash2(this.seedValue + 73, x, z) * 3);
+		for (let cellX = minCellX; cellX <= maxCellX; cellX += 1) {
+			for (let cellZ = minCellZ; cellZ <= maxCellZ; cellZ += 1) {
+				const anchor = treeAnchorForCell(cellX, cellZ, this.vegetationSeed);
+				const species = selectTreeSpecies(
+					this.zoneAt(anchor.x, anchor.z),
+					cellX,
+					cellZ,
+					this.vegetationSeed
+				);
 
-			for (let offset = 1; offset <= trunkHeight; offset += 1) {
-				blocks.push({ position: { x, y: height + offset, z }, type: 'wood' });
-			}
+				if (!species || !this.canGrowTreeAt(anchor.x, anchor.z)) {
+					continue;
+				}
 
-			const crownY = height + trunkHeight;
+				const groundY = this.heightAt(anchor.x, anchor.z);
+				const tree = generateTreeShape(species, anchor.x, groundY, anchor.z, this.vegetationSeed);
 
-			for (let dx = -2; dx <= 2; dx += 1) {
-				for (let dz = -2; dz <= 2; dz += 1) {
-					for (let dy = -1; dy <= 1; dy += 1) {
-						if (Math.abs(dx) + Math.abs(dz) + Math.abs(dy) <= 4) {
-							blocks.push({
-								position: { x: x + dx, y: crownY + dy, z: z + dz },
-								type: 'leaves'
-							});
-						}
+				for (const block of tree) {
+					const { x, z } = block.position;
+
+					if (x < startX || x > endX || z < startZ || z > endZ) {
+						continue;
 					}
+
+					const blockZone = this.zoneAt(x, z);
+
+					if (
+						blockZone === 'Central City' ||
+						blockZone === 'Free Build Meadow' ||
+						this.isPath(x, z)
+					) {
+						continue;
+					}
+
+					generated.set(`${x},${block.position.y},${z}`, block);
 				}
 			}
-
-			return;
 		}
 
-		if (clearing && Math.hypot(x, z) < 35 && hash2(this.seedValue + 113, x, z) > 0.93) {
-			blocks.push({ position: { x, y: height + 1, z }, type: 'flower' });
+		blocks.push(...generated.values());
+	}
+
+	private canGrowTreeAt(x: number, z: number): boolean {
+		if (Math.hypot(x, z) < 14 || this.isPath(x, z) || this.isRiver(x, z)) {
+			return false;
 		}
+
+		const zone = this.zoneAt(x, z);
+
+		if (zone === 'Central City' || zone === 'Free Build Meadow') {
+			return false;
+		}
+
+		const center = this.heightAt(x, z);
+
+		if (center <= WATER_LEVEL + 1) {
+			return false;
+		}
+
+		const neighbours = [
+			this.heightAt(x + 1, z),
+			this.heightAt(x - 1, z),
+			this.heightAt(x, z + 1),
+			this.heightAt(x, z - 1)
+		];
+
+		return neighbours.every((height) => Math.abs(height - center) <= 2);
 	}
 
 	isPath(x: number, z: number): boolean {
