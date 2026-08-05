@@ -32,8 +32,8 @@ import { angleDelta } from './ThirdPersonCamera';
  *   1. asks HumanoidAnimator for a locomotion pose from a read-only view of the
  *      player (it passes velocities/flags, never mutates them);
  *   2. copies that pose into a private render pose;
- *   3. layers transient visual overlays (world look, build reach, terrain foot
- *      grounding) onto the render pose only;
+ *   3. layers transient visual overlays (world look, build reach, hammer action,
+ *      terrain foot grounding) onto the render pose only;
  *   4. applies the render pose to the rig and syncs the group transform.
  *
  * It never writes bodyYaw, yaw, desiredMovementYaw or any telemetry back onto
@@ -119,6 +119,10 @@ const HAND_RESPONSE = 15;
 const HEAD_ORIGIN_HEIGHT = 1.72;
 const DEFAULT_HAND_TARGET_DISTANCE = 0.72;
 const DEFAULT_HAND_TARGET_HEIGHT = 1.12;
+
+const HAMMER_PREP_END = 0.22;
+const HAMMER_STRIKE_END = 0.58;
+const HAMMER_IMPACT_END = 0.68;
 
 export class PlayerAvatar {
 	readonly object = new Group();
@@ -276,6 +280,7 @@ export class PlayerAvatar {
 		this.lookYawOffset = 0;
 		this.lookPitchOffset = 0;
 		this.handInfluence = 0;
+		this.buildHammer.cancelSwing();
 		this.updateMs = 0;
 		this.error = null;
 		this.status = 'ready';
@@ -311,16 +316,17 @@ export class PlayerAvatar {
 				cameraRecentering: player.cameraRecentering
 			});
 
+			this.buildHammer.update(delta);
 			copyHumanoidPose(this.renderPose, locomotionPose);
 			this.applyLookOverlay(player, this.renderPose, delta);
 			this.applyHandOverlay(player, this.renderPose, delta);
+			this.applyHammerSwingOverlay(this.renderPose);
 
 			if (player.onGround) {
 				this.applyFootGrounding(player, this.renderPose);
 			}
 
 			this.model.applyPose(this.renderPose);
-			this.buildHammer.update(delta);
 			this.object.position.set(
 				finiteOr(player.position.x, 0),
 				finiteOr(player.position.y, 0) + this.model.modelOffsetY,
@@ -354,6 +360,7 @@ export class PlayerAvatar {
 			deltaSeconds: delta
 		});
 
+		this.buildHammer.update(delta);
 		copyHumanoidPose(this.renderPose, locomotionPose);
 		this.handInfluence = dampScalar(
 			this.handInfluence,
@@ -362,8 +369,8 @@ export class PlayerAvatar {
 			delta
 		);
 		this.applyPreviewHandOverlay(this.renderPose);
+		this.applyHammerSwingOverlay(this.renderPose);
 		this.model.applyPose(this.renderPose);
-		this.buildHammer.update(delta);
 		this.animationController.playPreview(delta);
 	}
 
@@ -511,6 +518,56 @@ export class PlayerAvatar {
 		pose.rightElbowPitch = lerp(pose.rightElbowPitch, -0.88, influence);
 	}
 
+	private applyHammerSwingOverlay(pose: HumanoidPose): void {
+		if (!this.buildHammer.swinging) {
+			return;
+		}
+
+		const progress = this.buildHammer.swingProgress;
+		let influence = 1;
+		let chestPitch = -0.06;
+		let chestYaw = -0.24;
+		let shoulderPitch = 0.42;
+		let shoulderRoll = -0.32;
+		let elbowPitch = -1.55;
+
+		if (progress < HAMMER_PREP_END) {
+			influence = smoothstep01(progress / HAMMER_PREP_END);
+		} else if (progress < HAMMER_STRIKE_END) {
+			const strike = smoothstep01(
+				(progress - HAMMER_PREP_END) / (HAMMER_STRIKE_END - HAMMER_PREP_END)
+			);
+			chestPitch = lerp(-0.06, 0.15, strike);
+			chestYaw = lerp(-0.24, 0.24, strike);
+			shoulderPitch = lerp(0.42, -1.36, strike);
+			shoulderRoll = lerp(-0.32, -0.06, strike);
+			elbowPitch = lerp(-1.55, -0.22, strike);
+		} else if (progress < HAMMER_IMPACT_END) {
+			chestPitch = 0.15;
+			chestYaw = 0.24;
+			shoulderPitch = -1.36;
+			shoulderRoll = -0.06;
+			elbowPitch = -0.22;
+		} else {
+			influence = 1 - smoothstep01((progress - HAMMER_IMPACT_END) / (1 - HAMMER_IMPACT_END));
+			chestPitch = 0.15;
+			chestYaw = 0.24;
+			shoulderPitch = -1.36;
+			shoulderRoll = -0.06;
+			elbowPitch = -0.22;
+		}
+
+		pose.chestPitch = lerp(pose.chestPitch, chestPitch, influence * 0.78);
+		pose.chestYaw = lerp(pose.chestYaw, chestYaw, influence * 0.9);
+		pose.rightShoulderPitch = lerp(pose.rightShoulderPitch, shoulderPitch, influence);
+		pose.rightShoulderRoll = lerp(pose.rightShoulderRoll, shoulderRoll, influence);
+		pose.rightElbowPitch = lerp(pose.rightElbowPitch, elbowPitch, influence);
+
+		// The left arm remains a stabilizer instead of mirroring the striking arm.
+		pose.leftShoulderPitch = lerp(pose.leftShoulderPitch, -0.48, influence * 0.28);
+		pose.leftElbowPitch = lerp(pose.leftElbowPitch, -0.82, influence * 0.22);
+	}
+
 	private applyPreviewHandOverlay(pose: HumanoidPose): void {
 		const influence = this.handInfluence;
 
@@ -605,6 +662,11 @@ function dampScalar(current: number, target: number, response: number, delta: nu
 
 function lerp(start: number, end: number, amount: number): number {
 	return start + (end - start) * MathUtils.clamp(amount, 0, 1);
+}
+
+function smoothstep01(value: number): number {
+	const clamped = MathUtils.clamp(value, 0, 1);
+	return clamped * clamped * (3 - 2 * clamped);
 }
 
 function errorMessage(cause: unknown): string {

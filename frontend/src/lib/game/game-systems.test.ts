@@ -38,7 +38,7 @@ import {
 	neutralizeRootMotionHorizontal,
 	normalizeMixamoBoneName
 } from './player/HumanoidModel';
-import { HumanoidRig } from './player/HumanoidRig';
+import { HUMANOID_PROPORTIONS, HumanoidRig } from './player/HumanoidRig';
 import { PlayerAvatar } from './player/PlayerAvatar';
 import { PlayerController } from './player/PlayerController';
 import type { PlayerState } from './player/PlayerState';
@@ -644,7 +644,7 @@ describe('humanoid avatar rig and animation', () => {
 		rig.dispose();
 	});
 
-	test('matches the Orelunza silhouette: attached head, separated arms, tunic and boots', () => {
+	test('matches the Orelunza silhouette: attached head and shoulders, tunic and boots', () => {
 		const rig = new HumanoidRig(DEFAULT_CHARACTER_APPEARANCE);
 		const joints = rig.joints;
 		rig.object.updateMatrixWorld(true);
@@ -657,6 +657,8 @@ describe('humanoid avatar rig and animation', () => {
 		const chest = worldPosition(joints.chest);
 		const leftArm = worldPosition(joints.upperArmLeft);
 		const rightArm = worldPosition(joints.upperArmRight);
+		const leftShoulder = worldPosition(joints.shoulderLeft);
+		const rightShoulder = worldPosition(joints.shoulderRight);
 
 		// The head sits directly on a short neck that rises from the chest, so it
 		// is never a floating cube: head is above neck, neck is above chest, and
@@ -666,16 +668,36 @@ describe('humanoid avatar rig and animation', () => {
 		expect(head.y - neck.y).toBeLessThan(0.4);
 		expect(Math.hypot(head.x - neck.x, head.z - neck.z)).toBeLessThan(0.05);
 
-		// The arms hang clearly to the sides of the torso, not merged into it.
-		expect(Math.abs(leftArm.x)).toBeGreaterThan(0.28);
-		expect(Math.abs(rightArm.x)).toBeGreaterThan(0.28);
-		expect(rightArm.x - leftArm.x).toBeGreaterThan(0.56);
+		// Shoulder pivots stay on the torso edge instead of floating outside it.
+		expect(Math.abs(leftShoulder.x)).toBeCloseTo(HUMANOID_PROPORTIONS.shoulderX, 3);
+		expect(Math.abs(rightShoulder.x)).toBeCloseTo(HUMANOID_PROPORTIONS.shoulderX, 3);
+		expect(Math.abs(leftArm.x - leftShoulder.x)).toBeLessThan(0.001);
+		expect(Math.abs(rightArm.x - rightShoulder.x)).toBeLessThan(0.001);
 
-		// There must be a real air gap between the inner edge of each arm and the
-		// side of the torso — the arms are never glued to the body.
-		const ARM_HALF_WIDTH = 0.075;
-		const TORSO_HALF_WIDTH = 0.25;
-		expect(Math.abs(rightArm.x) - ARM_HALF_WIDTH).toBeGreaterThan(TORSO_HALF_WIDTH);
+		const meshWithRole = (
+			group: (typeof joints)['upperArmLeft'] | (typeof joints)['chest'],
+			role: string
+		): import('three').Mesh => {
+			const mesh = group.children.find(
+				(child): child is import('three').Mesh =>
+					(child as { isMesh?: boolean }).isMesh === true &&
+					String(child.userData.avatarPart) === role
+			);
+
+			expect(mesh).toBeDefined();
+			return mesh as import('three').Mesh;
+		};
+		const torsoBox = new Box3().setFromObject(meshWithRole(joints.chest, 'shirt'));
+		const leftSleeveBox = new Box3().setFromObject(meshWithRole(joints.upperArmLeft, 'shirt'));
+		const rightSleeveBox = new Box3().setFromObject(meshWithRole(joints.upperArmRight, 'shirt'));
+		const leftShoulderGap = torsoBox.min.x - leftSleeveBox.max.x;
+		const rightShoulderGap = rightSleeveBox.min.x - torsoBox.max.x;
+
+		// Tiny overlap is acceptable to prevent rendering cracks, but visible air is not.
+		expect(leftShoulderGap).toBeLessThan(0.015);
+		expect(rightShoulderGap).toBeLessThan(0.015);
+		expect(leftShoulderGap).toBeGreaterThan(-0.04);
+		expect(rightShoulderGap).toBeGreaterThan(-0.04);
 
 		// A short sleeve leaves the forearm bare: the forearm and hand read as
 		// skin while the shoulder wears the shirt.
@@ -1013,21 +1035,59 @@ describe('humanoid avatar rig and animation', () => {
 	});
 });
 
-test('shows a lightweight hammer only while build mode is active', async () => {
+test('attaches the hammer to the right hand and performs a visible body swing', async () => {
 	const world = new VoxelWorld(STARTER_WORLD_SEED);
 	const avatar = new PlayerAvatar(DEFAULT_CHARACTER_APPEARANCE, { allowFallback: true });
 	await avatar.ready;
+	const player = testPlayer(world);
 	const hammer = avatar.object.getObjectByName('buildHammer');
+	const rightShoulder = avatar.object.getObjectByName('shoulderRight');
+	const chest = avatar.object.getObjectByName('chest');
 
 	expect(hammer).toBeDefined();
+	expect(hammer?.parent?.name).toBe('handRight');
 	expect(hammer?.visible).toBe(false);
+	expect(rightShoulder).toBeDefined();
+	expect(chest).toBeDefined();
 
 	avatar.setBuildMode(true);
 	expect(hammer?.visible).toBe(true);
 
+	for (let index = 0; index < 60; index += 1) {
+		avatar.update(player, false, 1 / 60);
+	}
+
+	const restingShoulder = rightShoulder!.quaternion.clone();
+	const restingChest = chest!.quaternion.clone();
+	const restingHammerX = hammer!.rotation.x;
+	let maximumShoulderAngle = 0;
+	let maximumChestAngle = 0;
+	let maximumHammerRotation = 0;
+
 	avatar.swingBuildTool();
-	avatar.update(testPlayer(world), false, 1 / 60);
+	for (let index = 0; index < 32; index += 1) {
+		avatar.update(player, false, 1 / 60);
+		maximumShoulderAngle = Math.max(
+			maximumShoulderAngle,
+			rightShoulder!.quaternion.angleTo(restingShoulder)
+		);
+		maximumChestAngle = Math.max(maximumChestAngle, chest!.quaternion.angleTo(restingChest));
+		maximumHammerRotation = Math.max(
+			maximumHammerRotation,
+			Math.abs(hammer!.rotation.x - restingHammerX)
+		);
+	}
+
+	expect(maximumShoulderAngle).toBeGreaterThan(0.75);
+	expect(maximumChestAngle).toBeGreaterThan(0.12);
+	expect(maximumHammerRotation).toBeGreaterThan(0.2);
 	expect(Number.isFinite(hammer?.rotation.x ?? Number.NaN)).toBe(true);
+
+	for (let index = 0; index < 60; index += 1) {
+		avatar.update(player, false, 1 / 60);
+	}
+	expect(rightShoulder!.quaternion.angleTo(restingShoulder)).toBeLessThan(0.08);
+	expect(chest!.quaternion.angleTo(restingChest)).toBeLessThan(0.08);
 
 	avatar.setBuildMode(false);
 	expect(hammer?.visible).toBe(false);

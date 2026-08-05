@@ -309,7 +309,8 @@ export class HumanoidAnimator {
 			pose.chestPitch = -runWeight * 0.16 + backWeight * 0.09;
 			pose.chestYaw = -pose.hipsYaw * 0.7;
 
-			// Opposite arms/legs, arms kept out from the torso via shoulder roll.
+			// Opposite arms and legs. Shoulder rolls preserve a readable silhouette
+			// while the shoulder pivots themselves remain anchored to the torso.
 			pose.leftShoulderPitch = -opposite * armAmp * cautious - runWeight * 0.2;
 			pose.rightShoulderPitch = -stride * armAmp * cautious - runWeight * 0.2;
 			pose.leftShoulderRoll = 0.12 - sideSign * sideWeight * 0.13;

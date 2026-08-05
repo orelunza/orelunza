@@ -19,7 +19,7 @@ import type { HumanoidPose } from './HumanoidPose';
  * Design goals taken directly from the reference image:
  *   - a small, softly cubic head seated on a short, visible neck (never floating);
  *   - a slim, gently trapezoidal torso (not a massive block);
- *   - shoulders that sit outboard so the arms hang clearly away from the chest;
+ *   - shoulder pivots anchored to the torso so the arms never float away;
  *   - short tunic sleeves with bare forearms and visible hands;
  *   - a distinct pelvis, separate thighs, shins and feet;
  *   - clearly visible boots and a lighter trouser cuff;
@@ -43,7 +43,7 @@ export const HUMANOID_PROPORTIONS = {
 	chestY: 0.23,
 	neckY: 0.23,
 	headY: 0.1,
-	shoulderX: 0.36,
+	shoulderX: 0.296,
 	shoulderY: 0.15,
 	upperArm: 0.25,
 	forearm: 0.23,
@@ -281,19 +281,20 @@ export class HumanoidRig {
 		this.addPart(j.neck, UNIT_BOX, 'skin', 0.11, 0.11, 0.11, 0, -0.01, 0);
 		this.addPart(j.head, HEAD_BOX, 'skin', 0.38, 0.38, 0.36, 0, 0.01, 0);
 
-		this.buildArm(j.upperArmLeft, j.forearmLeft, j.handLeft, -1);
-		this.buildArm(j.upperArmRight, j.forearmRight, j.handRight, 1);
+		this.buildArm(j.upperArmLeft, j.forearmLeft, j.handLeft);
+		this.buildArm(j.upperArmRight, j.forearmRight, j.handRight);
 		this.buildLeg(j.thighLeft, j.shinLeft, j.shoeLeft);
 		this.buildLeg(j.thighRight, j.shinRight, j.shoeRight);
 	}
 
-	private buildArm(upperArm: Group, forearm: Group, hand: Group, side: -1 | 1): void {
+	private buildArm(upperArm: Group, forearm: Group, hand: Group): void {
 		const P = HUMANOID_PROPORTIONS;
 		const sleeve = P.upperArm * 0.38;
 
-		// Short tunic sleeve, then a bare-skin upper arm so the whole forearm
-		// reads as one continuous bare arm hanging clear of the torso.
-		this.addPart(upperArm, UNIT_BOX, 'shirt', 0.145, sleeve, 0.145, side * 0.012, -sleeve * 0.5, 0);
+		// The sleeve starts exactly at the shoulder pivot. Keeping every segment
+		// centred on the same local X axis prevents the arm from looking detached
+		// while still allowing the whole chain to rotate naturally.
+		this.addPart(upperArm, UNIT_BOX, 'shirt', 0.145, sleeve, 0.145, 0, -sleeve * 0.5, 0);
 		this.addPart(
 			upperArm,
 			UNIT_BOX,
@@ -301,22 +302,12 @@ export class HumanoidRig {
 			0.125,
 			P.upperArm - sleeve,
 			0.125,
-			side * 0.012,
+			0,
 			-sleeve - (P.upperArm - sleeve) * 0.5,
 			0
 		);
-		this.addPart(
-			forearm,
-			UNIT_BOX,
-			'skin',
-			0.12,
-			P.forearm,
-			0.12,
-			side * 0.008,
-			-P.forearm * 0.5,
-			0
-		);
-		this.addPart(hand, UNIT_BOX, 'skin', 0.13, 0.09, 0.12, side * 0.012, -0.045, -0.008);
+		this.addPart(forearm, UNIT_BOX, 'skin', 0.12, P.forearm, 0.12, 0, -P.forearm * 0.5, 0);
+		this.addPart(hand, UNIT_BOX, 'skin', 0.13, 0.09, 0.12, 0, -0.045, -0.008);
 	}
 
 	private buildLeg(thigh: Group, shin: Group, shoe: Group): void {
@@ -547,8 +538,8 @@ const NEUTRAL_RIG_POSE: HumanoidPose = {
 	headYaw: 0,
 	leftShoulderPitch: 0.04,
 	rightShoulderPitch: 0.04,
-	leftShoulderRoll: -0.11,
-	rightShoulderRoll: 0.11,
+	leftShoulderRoll: 0.06,
+	rightShoulderRoll: -0.06,
 	leftElbowPitch: -0.14,
 	rightElbowPitch: -0.14,
 	leftHipPitch: 0,
