@@ -162,7 +162,7 @@ export class GameRenderer {
 	private replaceChunk(world: VoxelWorld, chunk: ChunkCoordinate): void {
 		this.removeChunkInternal(chunk);
 
-		const lookups = this.meshFactory.createMeshes(world.getVisibleBlocksInChunk(chunk));
+		const lookups = this.meshFactory.createMeshes(world.getVisibleBlocksInChunk(chunk), world);
 		this.meshesByChunk.set(chunkKey(chunk), lookups);
 
 		for (const lookup of lookups) {
