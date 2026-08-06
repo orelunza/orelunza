@@ -23,6 +23,18 @@ export interface PlanetDataManifest {
 	sources: PlanetDataSourceAttribution[];
 	coastlinePath: string;
 	countriesIndexPath: string;
+	countriesBoundaryPath?: string;
+	ecologyFormat?: 'orelunza-ecology-pack';
+	ecologyVersion?: 1;
+	ecologyDataQuality?: 'preview-proxy' | 'production';
+	ecologyTileResolution?: number;
+	ecologyMinimumLevel?: number;
+	ecologyMaximumLevel?: number;
+	ecologyTileExtension?: string;
+	ecologyTilePathTemplate?: string;
+	landCoverOverviewPath?: string;
+	biomeOverviewPath?: string;
+	ecologyNote?: string;
 	tilePathTemplate: string;
 	generatedSampleCount?: number;
 	landSampleFraction?: number;
@@ -55,6 +67,25 @@ export function validatePlanetDataManifest(value: unknown): PlanetDataManifest {
 		!Array.isArray(manifest.sources)
 	) {
 		throw new TypeError('Invalid Orelunza geography manifest values.');
+	}
+
+	if (manifest.ecologyTilePathTemplate !== undefined) {
+		if (
+			manifest.ecologyFormat !== 'orelunza-ecology-pack' ||
+			manifest.ecologyVersion !== 1 ||
+			!Number.isInteger(manifest.ecologyTileResolution) ||
+			(manifest.ecologyTileResolution ?? 0) < 2 ||
+			!Number.isInteger(manifest.ecologyMinimumLevel) ||
+			!Number.isInteger(manifest.ecologyMaximumLevel) ||
+			(manifest.ecologyMinimumLevel ?? -1) < 0 ||
+			(manifest.ecologyMaximumLevel ?? -1) < (manifest.ecologyMinimumLevel ?? 0) ||
+			!manifest.ecologyTilePathTemplate.includes('{face}') ||
+			!manifest.ecologyTilePathTemplate.includes('{level}') ||
+			!manifest.ecologyTilePathTemplate.includes('{x}') ||
+			!manifest.ecologyTilePathTemplate.includes('{y}')
+		) {
+			throw new TypeError('Invalid Orelunza ecology manifest values.');
+		}
 	}
 
 	return manifest;

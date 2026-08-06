@@ -1,24 +1,39 @@
 import type { GeneratedChunk, WorldTerrainGenerator } from '../TerrainGenerator';
-import type { BlockType } from '../voxel-types';
+import type { BlockCoordinate, BlockType } from '../voxel-types';
 import { CHUNK_SIZE, WORLD_MAX_Y } from '../voxel-types';
 import type { PlanetSurfaceAnchor } from '../../planet/surface/PlanetSurfaceAnchor';
+import type { PlanetSurfaceEcology } from '../../geography/ecology/PlanetSurfaceEcology';
+import { createFallbackPlanetSurfaceEcology } from '../../geography/ecology/PlanetSurfaceEcology';
+import { planetBiomeProfile } from '../../geography/ecology/PlanetBiomeProfile';
+import { generateTreeShape } from '../../vegetation/TreeShapeGenerator';
+import {
+	selectTreeSpeciesAtDensity,
+	treeAnchorForCell,
+	TREE_CANOPY_MARGIN,
+	TREE_CELL_SIZE,
+	vegetationSeedValue
+} from '../../vegetation/VegetationDistribution';
+import type { TreeSpeciesId } from '../../vegetation/VegetationFamily';
 import { PlanetTerrainColumnSampler } from './PlanetTerrainColumnSampler';
 
 export interface PlanetTerrainGeneratorOptions {
 	baseSurfaceY?: number;
 	detailAmplitudeMeters?: number;
 	seed?: string;
+	ecology?: PlanetSurfaceEcology;
 }
 
 /**
- * Synchronous voxel generator backed by a previously prepared geographic grid.
- * Global elevation defines the large shape; deterministic detail only fills the
- * metre-scale information absent from low-resolution world data.
+ * Synchronous voxel generator backed by prepared planetary elevation and ecology.
+ * Geographic data owns the large-scale shape; deterministic local detail and tree
+ * placement only fill metre-scale information absent from the global pack.
  */
 export class PlanetTerrainGenerator implements WorldTerrainGenerator {
 	readonly baseSurfaceY: number;
 	readonly detailAmplitudeMeters: number;
+	readonly ecology: PlanetSurfaceEcology;
 	private readonly seedValue: number;
+	private readonly vegetationSeed: number;
 
 	constructor(
 		readonly anchor: Readonly<PlanetSurfaceAnchor>,
@@ -27,7 +42,9 @@ export class PlanetTerrainGenerator implements WorldTerrainGenerator {
 	) {
 		this.baseSurfaceY = Math.max(12, Math.min(192, Math.round(options.baseSurfaceY ?? 40)));
 		this.detailAmplitudeMeters = Math.max(0, Math.min(12, options.detailAmplitudeMeters ?? 3.5));
+		this.ecology = options.ecology ?? createFallbackPlanetSurfaceEcology();
 		this.seedValue = hashString(options.seed ?? anchor.id);
+		this.vegetationSeed = vegetationSeedValue(`${options.seed ?? anchor.id}:planet-ecology`);
 	}
 
 	heightAt(x: number, z: number): number {
@@ -54,21 +71,9 @@ export class PlanetTerrainGenerator implements WorldTerrainGenerator {
 
 	zoneAt(x: number, z: number): string {
 		const sample = this.columns.sample(x, z);
-		if (sample.land < 0.5) {
-			return sample.coastProximity > 0.35 ? 'Planet Coast' : 'Planet Ocean';
-		}
-		const latitudeDegrees = Math.abs((this.anchor.coordinate.latitudeRadians * 180) / Math.PI);
-		const elevation = sample.elevationMeters;
-		if (elevation > 2600 || latitudeDegrees > 66) {
-			return 'Planet Alpine';
-		}
-		if (latitudeDegrees < 15) {
-			return 'Planet Tropical';
-		}
-		if (latitudeDegrees < 35) {
-			return 'Planet Subtropical';
-		}
-		return 'Planet Temperate';
+		if (sample.land < 0.5) return sample.coastProximity > 0.35 ? 'Planet Coast' : 'Planet Ocean';
+		if (sample.coastProximity > 0.68 && this.ecology.biome !== 'mangrove') return 'Planet Coast';
+		return this.ecology.zoneName;
 	}
 
 	isPath(_x: number, _z: number): boolean {
@@ -86,6 +91,7 @@ export class PlanetTerrainGenerator implements WorldTerrainGenerator {
 				Math.round(this.baseSurfaceY - this.anchor.referenceElevationMeters)
 			)
 		);
+		const profile = planetBiomeProfile(this.ecology.biome);
 
 		for (let localX = 0; localX < CHUNK_SIZE; localX += 1) {
 			for (let localZ = 0; localZ < CHUNK_SIZE; localZ += 1) {
@@ -94,19 +100,14 @@ export class PlanetTerrainGenerator implements WorldTerrainGenerator {
 				const height = this.heightAt(x, z);
 				const sample = this.columns.sample(x, z);
 				const water = sample.land < 0.5 || sample.elevationMeters < 0;
-				const surfaceType = this.surfaceBlockType(
-					sample.elevationMeters,
-					water,
-					sample.coastProximity
-				);
+				const coastal = sample.coastProximity > 0.52;
+				const surfaceType = water || coastal ? 'sand' : profile.surfaceBlock;
+				const subsurfaceType = water || coastal ? 'sand' : profile.subsurfaceBlock;
 
 				for (let y = 0; y <= height; y += 1) {
 					let type: BlockType = 'stone';
-					if (y === height) {
-						type = surfaceType;
-					} else if (y >= height - 3) {
-						type = water || sample.coastProximity > 0.45 ? 'sand' : 'dirt';
-					}
+					if (y === height) type = surfaceType;
+					else if (y >= height - 3) type = subsurfaceType;
 					blocks.push({ position: { x, y, z }, type });
 				}
 
@@ -118,21 +119,84 @@ export class PlanetTerrainGenerator implements WorldTerrainGenerator {
 			}
 		}
 
+		this.addTreesForChunk(blocks, chunkX, chunkZ);
 		return { blocks };
 	}
 
-	private surfaceBlockType(
-		elevationMeters: number,
-		water: boolean,
-		coastProximity: number
-	): BlockType {
-		if (water || coastProximity > 0.48) {
-			return 'sand';
+	treeSpeciesAt(x: number, z: number): TreeSpeciesId | null {
+		if (!this.canGrowTreeAt(x, z)) return null;
+		const cellX = Math.floor(x / TREE_CELL_SIZE);
+		const cellZ = Math.floor(z / TREE_CELL_SIZE);
+		return selectTreeSpeciesAtDensity(
+			this.zoneAt(x, z),
+			cellX,
+			cellZ,
+			this.vegetationSeed,
+			this.effectiveTreeDensity()
+		);
+	}
+
+	private effectiveTreeDensity(): number {
+		const profile = planetBiomeProfile(this.ecology.biome);
+		return clamp01(Math.min(profile.treeDensity, this.ecology.treeCoverDensity * 0.92 + 0.01));
+	}
+
+	private addTreesForChunk(blocks: GeneratedChunk['blocks'], chunkX: number, chunkZ: number): void {
+		const density = this.effectiveTreeDensity();
+		if (density <= 0) return;
+		const startX = chunkX * CHUNK_SIZE;
+		const startZ = chunkZ * CHUNK_SIZE;
+		const endX = startX + CHUNK_SIZE - 1;
+		const endZ = startZ + CHUNK_SIZE - 1;
+		const minCellX = Math.floor((startX - TREE_CANOPY_MARGIN) / TREE_CELL_SIZE);
+		const maxCellX = Math.floor((endX + TREE_CANOPY_MARGIN) / TREE_CELL_SIZE);
+		const minCellZ = Math.floor((startZ - TREE_CANOPY_MARGIN) / TREE_CELL_SIZE);
+		const maxCellZ = Math.floor((endZ + TREE_CANOPY_MARGIN) / TREE_CELL_SIZE);
+		const generated = new Map<string, { position: BlockCoordinate; type: BlockType }>();
+
+		for (let cellX = minCellX; cellX <= maxCellX; cellX += 1) {
+			for (let cellZ = minCellZ; cellZ <= maxCellZ; cellZ += 1) {
+				const anchor = treeAnchorForCell(cellX, cellZ, this.vegetationSeed);
+				const species = selectTreeSpeciesAtDensity(
+					this.zoneAt(anchor.x, anchor.z),
+					cellX,
+					cellZ,
+					this.vegetationSeed,
+					density
+				);
+				if (!species || !this.canGrowTreeAt(anchor.x, anchor.z)) continue;
+				const groundY = this.heightAt(anchor.x, anchor.z);
+				for (const block of generateTreeShape(
+					species,
+					anchor.x,
+					groundY,
+					anchor.z,
+					this.vegetationSeed
+				)) {
+					const { x, z } = block.position;
+					if (x < startX || x > endX || z < startZ || z > endZ) continue;
+					generated.set(`${x},${block.position.y},${z}`, block);
+				}
+			}
 		}
-		if (elevationMeters > 2200) {
-			return 'stone';
+		blocks.push(...generated.values());
+	}
+
+	private canGrowTreeAt(x: number, z: number): boolean {
+		if (Math.hypot(x, z) < 8 || this.isWater(x, z)) return false;
+		if (
+			['desert', 'polar', 'urban', 'cropland', 'ocean', 'freshwater'].includes(this.ecology.biome)
+		) {
+			return false;
 		}
-		return 'grass';
+		const center = this.heightAt(x, z);
+		const neighbours = [
+			this.heightAt(x + 1, z),
+			this.heightAt(x - 1, z),
+			this.heightAt(x, z + 1),
+			this.heightAt(x, z - 1)
+		];
+		return neighbours.every((height) => Math.abs(height - center) <= 2);
 	}
 
 	private localDetail(x: number, z: number): number {
@@ -169,4 +233,8 @@ function smoothNoise(seed: number, x: number, z: number): number {
 	const c = hash2(seed, ix, iz + 1);
 	const d = hash2(seed, ix + 1, iz + 1);
 	return (a + (b - a) * sx) * (1 - sz) + (c + (d - c) * sx) * sz;
+}
+
+function clamp01(value: number): number {
+	return Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
 }

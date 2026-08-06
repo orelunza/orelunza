@@ -61,10 +61,26 @@ export function selectTreeSpecies(
 	cellZ: number,
 	seed: number
 ): TreeSpeciesId | null {
+	return selectTreeSpeciesAtDensity(
+		zone,
+		cellX,
+		cellZ,
+		seed,
+		biomeVegetationProfile(zone).treeDensity
+	);
+}
+
+export function selectTreeSpeciesAtDensity(
+	zone: string,
+	cellX: number,
+	cellZ: number,
+	seed: number,
+	density: number
+): TreeSpeciesId | null {
 	const profile = biomeVegetationProfile(zone);
 	const spawnRoll = vegetationRandom(seed, cellX, cellZ, 0x391d);
 
-	if (spawnRoll >= profile.treeDensity || profile.trees.length === 0) {
+	if (spawnRoll >= clamp01(density) || profile.trees.length === 0) {
 		return null;
 	}
 

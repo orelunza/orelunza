@@ -10,3 +10,5 @@ export * from './PlanetTileRenderer';
 export * from './PlanetDestinationMarker';
 export * from './PlanetSurfaceTransitionRenderer';
 export * from './PlanetSurfaceVoxelRenderer';
+export * from './CountryBoundaryRenderer';
+export * from './PlanetEcologyOverlayRenderer';

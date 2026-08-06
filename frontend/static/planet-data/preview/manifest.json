@@ -29,6 +29,18 @@
       "role": "production elevation and bathymetry import target",
       "license": "public domain with source acknowledgement required",
       "url": "https://www.gebco.net/data-products-gridded-bathymetry-data/gebco2026-grid"
+    },
+    {
+      "name": "Natural Earth low resolution countries",
+      "role": "country boundaries and labels",
+      "license": "public domain",
+      "url": "https://www.naturalearthdata.com/"
+    },
+    {
+      "name": "Orelunza ecological preview proxy",
+      "role": "development land-cover and biome preview",
+      "license": "project-generated; replace with ESA WorldCover/Copernicus LCFM for production",
+      "url": ""
     }
   ],
   "coastlinePath": "coastlines-110m.json",
@@ -36,5 +48,17 @@
   "tilePathTemplate": "tiles/{face}/{level}/{x}/{y}.orgt",
   "generatedSampleCount": 147390,
   "landSampleFraction": 0.282597,
-  "note": "Bundled preview pack gives real continent/coastline shapes and a coarse ETOPO-derived visual relief proxy. Run the GEBCO importer for production terrain values."
+  "note": "Bundled preview pack gives real continent/coastline shapes and a coarse ETOPO-derived visual relief proxy. Run the GEBCO importer for production terrain values.",
+  "countriesBoundaryPath": "countries-110m.json",
+  "ecologyFormat": "orelunza-ecology-pack",
+  "ecologyVersion": 1,
+  "ecologyDataQuality": "preview-proxy",
+  "ecologyTileResolution": 17,
+  "ecologyMinimumLevel": 0,
+  "ecologyMaximumLevel": 3,
+  "ecologyTileExtension": "orec",
+  "ecologyTilePathTemplate": "ecology-tiles/{face}/{level}/{x}/{y}.orec",
+  "landCoverOverviewPath": "land-cover-overview.png",
+  "biomeOverviewPath": "biome-overview.png",
+  "ecologyNote": "Bundled ecology is a deterministic low-resolution proxy for development. Use the WorldCover importer for production land-cover values."
 }

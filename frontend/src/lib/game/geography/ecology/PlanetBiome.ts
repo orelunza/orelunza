@@ -1,0 +1,18 @@
+export type PlanetBiomeId =
+	| 'tropical-rainforest'
+	| 'tropical-seasonal-forest'
+	| 'savanna'
+	| 'temperate-forest'
+	| 'boreal-forest'
+	| 'grassland'
+	| 'shrubland'
+	| 'desert'
+	| 'alpine'
+	| 'polar'
+	| 'wetland'
+	| 'mangrove'
+	| 'cropland'
+	| 'urban'
+	| 'coast'
+	| 'freshwater'
+	| 'ocean';

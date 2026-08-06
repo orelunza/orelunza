@@ -62,7 +62,8 @@ export class PlanetSurfaceSession {
 			},
 			playerGeodeticPosition: snapshot.geodetic,
 			floatingOrigin: this.floatingOrigin.state,
-			terrainEdits: this.region.bridge.edits.serialize()
+			terrainEdits: this.region.bridge.edits.serialize(),
+			ecology: this.region.ecology
 		};
 	}
 

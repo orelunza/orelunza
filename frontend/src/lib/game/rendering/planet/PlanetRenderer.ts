@@ -19,6 +19,11 @@ import {
 import { PlanetStreamingSystem } from '../../planet/PlanetStreamingSystem';
 import { planetTileKey } from '../../planet/PlanetTileId';
 import { CoastlineRenderer } from './CoastlineRenderer';
+import { CountryBoundaryRenderer } from './CountryBoundaryRenderer';
+import {
+	PlanetEcologyOverlayRenderer,
+	type PlanetEcologyOverlayMode
+} from './PlanetEcologyOverlayRenderer';
 import { PlanetDebugOverlay } from './PlanetDebugOverlay';
 import { PlanetGeographyDebugOverlay } from './PlanetGeographyDebugOverlay';
 import { createPlanetTerrainMaterial } from './PlanetTerrainMaterial';
@@ -45,6 +50,8 @@ export interface PlanetRendererDiagnostics {
 	maximumElevationMeters: number;
 	reliefExaggeration: number;
 	coastlinesReady: boolean;
+	countriesReady: boolean;
+	ecologyOverlayReady: boolean;
 }
 
 const SEGMENTS_PER_QUALITY: Readonly<Record<PlanetLodQuality, number>> = Object.freeze({
@@ -61,6 +68,8 @@ export class PlanetRenderer {
 	private readonly surface: Mesh;
 	private readonly ocean: PlanetOceanRenderer;
 	private readonly coastline: CoastlineRenderer;
+	private readonly countries: CountryBoundaryRenderer;
+	private readonly ecologyOverlay: PlanetEcologyOverlayRenderer;
 	private readonly debugOverlay = new PlanetDebugOverlay();
 	private readonly geographyDebug = new PlanetGeographyDebugOverlay();
 	private readonly atmosphere: Mesh;
@@ -73,7 +82,7 @@ export class PlanetRenderer {
 		activeTiles: 0,
 		maximumLodLevel: 0,
 		triangles: 0,
-		drawCalls: 5,
+		drawCalls: 7,
 		geometryRebuilds: 0,
 		cameraAltitudeMeters: 0,
 		geographyReady: false,
@@ -88,7 +97,9 @@ export class PlanetRenderer {
 		minimumElevationMeters: 0,
 		maximumElevationMeters: 0,
 		reliefExaggeration: 1,
-		coastlinesReady: false
+		coastlinesReady: false,
+		countriesReady: false,
+		ecologyOverlayReady: false
 	};
 
 	constructor(
@@ -107,6 +118,9 @@ export class PlanetRenderer {
 		this.ocean = new PlanetOceanRenderer(definition);
 		this.coastline = new CoastlineRenderer(definition);
 		void this.coastline.load();
+		this.countries = new CountryBoundaryRenderer(definition);
+		void this.countries.load().catch(() => undefined);
+		this.ecologyOverlay = new PlanetEcologyOverlayRenderer(definition);
 		this.atmosphere = new Mesh(
 			new SphereGeometry(definition.renderRadiusUnits * 1.025, 48, 32),
 			new MeshBasicMaterial({
@@ -121,6 +135,8 @@ export class PlanetRenderer {
 			this.surface,
 			this.ocean.object,
 			this.coastline.object,
+			this.ecologyOverlay.object,
+			this.countries.object,
 			this.debugOverlay.object,
 			this.atmosphere
 		);
@@ -177,7 +193,9 @@ export class PlanetRenderer {
 			cacheBytes: geography.cacheBytes,
 			cacheEvictions: geography.cacheEvictions,
 			reliefExaggeration: this.reliefExaggeration,
-			coastlinesReady: this.coastline.ready
+			coastlinesReady: this.coastline.ready,
+			countriesReady: this.countries.ready,
+			ecologyOverlayReady: this.ecologyOverlay.ready
 		};
 		return snapshot;
 	}
@@ -200,6 +218,18 @@ export class PlanetRenderer {
 		this.coastline.setVisible(visible);
 	}
 
+	setCountryBoundariesVisible(visible: boolean): void {
+		this.countries.setVisible(visible);
+	}
+
+	setSelectedCountry(id: string | null): void {
+		this.countries.setSelectedCountry(id);
+	}
+
+	setEcologyOverlayMode(mode: PlanetEcologyOverlayMode): void {
+		this.ecologyOverlay.setMode(mode);
+	}
+
 	dispose(): void {
 		if (this.disposed) {
 			return;
@@ -210,6 +240,8 @@ export class PlanetRenderer {
 		(this.surface.material as ReturnType<typeof createPlanetTerrainMaterial>).dispose();
 		this.ocean.dispose();
 		this.coastline.dispose();
+		this.countries.dispose();
+		this.ecologyOverlay.dispose();
 		this.debugOverlay.dispose();
 		this.geographyDebug.dispose();
 		this.streaming.dispose();

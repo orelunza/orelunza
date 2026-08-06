@@ -1,24 +1,42 @@
 <script lang="ts">
+	import { landCoverLabel, type LandCoverClass } from '$lib/game/geography/ecology/LandCoverClass';
+
 	interface Props {
 		latitude: number;
 		longitude: number;
 		elevationMeters: number;
 		zone: string;
+		country?: string | null;
+		continent?: string | null;
+		landCover?: LandCoverClass;
+		biome?: string;
 		editCount: number;
 		onReturn?: () => void;
 	}
 
-	let { latitude, longitude, elevationMeters, zone, editCount, onReturn }: Props = $props();
+	let {
+		latitude,
+		longitude,
+		elevationMeters,
+		zone,
+		country = null,
+		continent = null,
+		landCover = 'unknown',
+		biome = 'Unknown',
+		editCount,
+		onReturn
+	}: Props = $props();
 </script>
 
 <section
-	class="pointer-events-auto w-[min(25rem,calc(100vw-2rem))] rounded-xl border border-white/10 bg-black/65 p-4 text-white shadow-2xl backdrop-blur-md"
+	class="pointer-events-auto w-[min(26rem,calc(100vw-2rem))] rounded-xl border border-white/10 bg-black/65 p-4 text-white shadow-2xl backdrop-blur-md"
 	aria-label="Planet surface location"
 >
 	<p class="m-0 text-xs font-semibold tracking-[0.24em] text-emerald-300 uppercase">
 		Planet surface
 	</p>
-	<h2 class="mt-1 mb-0 text-xl font-semibold">{zone}</h2>
+	<h2 class="mt-1 mb-0 text-xl font-semibold">{country ?? zone}</h2>
+	{#if continent}<p class="mt-1 mb-0 text-xs text-white/48">{continent}</p>{/if}
 	<div class="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
 		<span class="text-white/45">Latitude</span><strong class="text-right"
 			>{latitude.toFixed(5)}°</strong
@@ -28,6 +46,10 @@
 		>
 		<span class="text-white/45">Elevation</span><strong class="text-right"
 			>{elevationMeters.toFixed(0)} m</strong
+		>
+		<span class="text-white/45">Biome</span><strong class="text-right">{biome}</strong>
+		<span class="text-white/45">Land cover</span><strong class="text-right"
+			>{landCoverLabel(landCover)}</strong
 		>
 		<span class="text-white/45">Local edits</span><strong class="text-right">{editCount}</strong>
 	</div>

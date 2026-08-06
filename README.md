@@ -267,3 +267,7 @@ This project does not generate `public/` or `views/`, and `AppBootstrap` does no
 ## Experimental Earth preview
 
 Run the frontend and open `/planet`. The Lot 2 preview streams cube-sphere geography tiles, displays Natural Earth coastlines, separates the ocean surface from the seabed, and visualizes coarse global relief. See `tools/planet-data/README.md` for generating a production GEBCO pack.
+
+## Planet country and ecology data
+
+The bundled planet preview now includes Natural Earth country boundaries and a low-resolution deterministic ecology proxy for gameplay integration. The preview ecology is not measured WorldCover data. Production packs should be generated with `tools/planet-data/build-ecology-pack.py` from ESA WorldCover or compatible Copernicus LCFM rasters and must retain the source attribution.

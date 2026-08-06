@@ -18,6 +18,11 @@
 	import { PlanetDestinationMarker } from '$lib/game/rendering/planet/PlanetDestinationMarker';
 	import { PlanetSurfaceVoxelRenderer } from '$lib/game/rendering/planet/PlanetSurfaceVoxelRenderer';
 	import { PlanetGeographyQuery } from '$lib/game/geography/PlanetGeographyQuery';
+	import { CountryResolver } from '$lib/game/geography/countries/CountryResolver';
+	import { PlanetEcologyQuery } from '$lib/game/geography/ecology/PlanetEcologyQuery';
+	import type { LandCoverClass } from '$lib/game/geography/ecology/LandCoverClass';
+	import { PlanetSurfaceContextResolver } from '$lib/game/geography/ecology/PlanetSurfaceContextResolver';
+	import type { PlanetEcologyOverlayMode } from '$lib/game/rendering/planet/PlanetEcologyOverlayRenderer';
 	import {
 		createPendingSurfaceDestination,
 		rayToPlanetDestination,
@@ -39,6 +44,8 @@
 	let quality = $state<PlanetLodQuality>('medium');
 	let gridVisible = $state(false);
 	let coastlinesVisible = $state(true);
+	let countryBoundariesVisible = $state(true);
+	let ecologyOverlayMode = $state<PlanetEcologyOverlayMode>('none');
 	let latitude = $state(0);
 	let longitude = $state(0);
 	let altitudeKm = $state(0);
@@ -64,6 +71,10 @@
 	let surfaceLongitude = $state(0);
 	let surfaceElevation = $state(0);
 	let surfaceZone = $state('Planet Surface');
+	let surfaceCountry = $state<string | null>(null);
+	let surfaceContinent = $state<string | null>(null);
+	let surfaceLandCover = $state<LandCoverClass>('unknown');
+	let surfaceBiome = $state('Unknown');
 	let surfaceEditCount = $state(0);
 	let planetRenderer: PlanetRenderer | null = null;
 	let enterRegion = (): void => {};
@@ -79,6 +90,14 @@
 
 	$effect(() => {
 		planetRenderer?.setCoastlinesVisible(coastlinesVisible);
+	});
+
+	$effect(() => {
+		planetRenderer?.setCountryBoundariesVisible(countryBoundariesVisible);
+	});
+
+	$effect(() => {
+		planetRenderer?.setEcologyOverlayMode(ecologyOverlayMode);
 	});
 
 	onMount(() => {
@@ -99,10 +118,19 @@
 		planetRenderer = planet;
 		planet.setDebugVisible(gridVisible);
 		planet.setCoastlinesVisible(coastlinesVisible);
+		planet.setCountryBoundariesVisible(countryBoundariesVisible);
+		planet.setEcologyOverlayMode(ecologyOverlayMode);
 		const marker = new PlanetDestinationMarker(planet.definition, planet.coordinateSystem);
 		planet.object.add(marker.object);
 		const geographyQuery = new PlanetGeographyQuery();
-		const spawnResolver = new PlanetSurfaceSpawnResolver(planet.coordinateSystem, geographyQuery);
+		const countryResolver = new CountryResolver();
+		const ecologyQuery = new PlanetEcologyQuery();
+		const surfaceContext = new PlanetSurfaceContextResolver(countryResolver, ecologyQuery);
+		const spawnResolver = new PlanetSurfaceSpawnResolver(
+			planet.coordinateSystem,
+			geographyQuery,
+			surfaceContext
+		);
 		const raycaster = new Raycaster();
 		const pointerNdc = new Vector2();
 
@@ -174,13 +202,16 @@
 			marker.setDestination(coordinate, true);
 			try {
 				const sample = await geographyQuery.sample(coordinate);
-				destination = resolveSurfaceDestination(coordinate, sample);
+				const ecology = await surfaceContext.resolve(coordinate, sample);
+				destination = resolveSurfaceDestination(coordinate, sample, 0.55, ecology);
+				planet.setSelectedCountry(ecology.country?.id ?? null);
 				marker.setDestination(destination.coordinate, destination.status === 'land');
 				travelMessage = destination.message;
 			} catch {
 				destination = { ...destination, status: 'error', message: 'Unable to read this region.' };
 				travelMessage = destination.message;
 				marker.setDestination(coordinate, false);
+				planet.setSelectedCountry(null);
 			}
 		};
 
@@ -202,6 +233,10 @@
 					surfaceLongitude = (destination!.coordinate.longitudeRadians * 180) / Math.PI;
 					surfaceElevation = destination!.sample?.elevationMeters ?? 0;
 					surfaceZone = region.generator.zoneAt(0, 0);
+					surfaceCountry = region.ecology.country?.name ?? null;
+					surfaceContinent = region.ecology.country?.continent ?? null;
+					surfaceLandCover = region.ecology.landCover;
+					surfaceBiome = region.ecology.biomeLabel;
 					surfaceEditCount = 0;
 					explorationMode = 'surface';
 					travelMessage = null;
@@ -372,6 +407,8 @@
 			surfaceSession?.dispose();
 			marker.dispose();
 			geographyQuery.dispose();
+			countryResolver.dispose();
+			ecologyQuery.dispose();
 			planet.dispose();
 			planetRenderer = null;
 			renderer.dispose();
@@ -439,6 +476,21 @@
 					><input bind:checked={coastlinesVisible} type="checkbox" /><span>Coastlines</span></label
 				>
 				<label class="flex items-center gap-2"
+					><input bind:checked={countryBoundariesVisible} type="checkbox" /><span>Countries</span
+					></label
+				>
+				<label class="flex items-center gap-2">
+					<span class="text-white/55">Map</span>
+					<select
+						bind:value={ecologyOverlayMode}
+						class="rounded-md border border-white/15 bg-black/50 px-2 py-1"
+					>
+						<option value="none">Terrain</option>
+						<option value="land-cover">Land cover</option>
+						<option value="biome">Biomes</option>
+					</select>
+				</label>
+				<label class="flex items-center gap-2"
 					><input bind:checked={gridVisible} type="checkbox" /><span>LOD grid</span></label
 				>
 				<button
@@ -453,6 +505,10 @@
 				longitude={surfaceLongitude}
 				elevationMeters={surfaceElevation}
 				zone={surfaceZone}
+				country={surfaceCountry}
+				continent={surfaceContinent}
+				landCover={surfaceLandCover}
+				biome={surfaceBiome}
 				editCount={surfaceEditCount}
 				onReturn={returnToGlobe}
 			/>

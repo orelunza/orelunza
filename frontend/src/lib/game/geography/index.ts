@@ -12,3 +12,6 @@ export * from './PlanetDataManifest';
 export * from './StaticGeographicTileProvider';
 
 export * from './PlanetGeographyQuery';
+
+export * from './countries';
+export * from './ecology';

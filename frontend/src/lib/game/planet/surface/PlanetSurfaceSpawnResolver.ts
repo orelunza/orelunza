@@ -1,5 +1,10 @@
 import { Vector3 } from 'three';
 import type { GeographicSample } from '../../geography/GeographicTile';
+import type { PlanetSurfaceContextSource } from '../../geography/ecology/PlanetSurfaceContextResolver';
+import {
+	createFallbackPlanetSurfaceEcology,
+	type PlanetSurfaceEcology
+} from '../../geography/ecology/PlanetSurfaceEcology';
 import type { GeodeticCoordinate } from '../GeodeticCoordinate';
 import type { PlanetCoordinateSystem } from '../PlanetCoordinateSystem';
 import { createPlanetSurfaceAnchor } from './PlanetSurfaceAnchor';
@@ -21,12 +26,14 @@ export interface PreparedPlanetSurfaceRegion {
 	generator: PlanetTerrainGenerator;
 	bridge: PlanetVoxelBridge;
 	spawnPosition: Vector3;
+	ecology: PlanetSurfaceEcology;
 }
 
 export class PlanetSurfaceSpawnResolver {
 	constructor(
 		private readonly coordinateSystem: PlanetCoordinateSystem,
-		private readonly elevationSource: PlanetSurfaceElevationSource
+		private readonly elevationSource: PlanetSurfaceElevationSource,
+		private readonly contextSource?: PlanetSurfaceContextSource
 	) {}
 
 	async resolve(
@@ -34,7 +41,10 @@ export class PlanetSurfaceSpawnResolver {
 		options: Readonly<PlanetSurfaceRegionBuildOptions> = {}
 	): Promise<PreparedPlanetSurfaceRegion> {
 		const firstSample = await this.elevationSource.sample(coordinate, options.signal);
-		const destination = resolveSurfaceDestination(coordinate, firstSample);
+		const ecology = this.contextSource
+			? await this.contextSource.resolve(coordinate, firstSample, options.signal)
+			: createFallbackPlanetSurfaceEcology();
+		const destination = resolveSurfaceDestination(coordinate, firstSample, 0.55, ecology);
 		if (destination.status !== 'land' || !destination.sample) {
 			throw new PlanetSurfaceDestinationError(
 				destination.message ?? 'Surface destination required'
@@ -49,7 +59,7 @@ export class PlanetSurfaceSpawnResolver {
 		const coordinates = new PlanetLocalCoordinateSystem(this.coordinateSystem, anchor);
 		const grid = await buildPlanetSurfaceElevationGrid(coordinates, this.elevationSource, options);
 		const columns = new PlanetTerrainColumnSampler(grid);
-		const generator = new PlanetTerrainGenerator(anchor, columns);
+		const generator = new PlanetTerrainGenerator(anchor, columns, { ecology });
 		const bridge = new PlanetVoxelBridge(coordinates, generator);
 		bridge.ensureChunksAround({ x: 0, z: 0 }, 2);
 		const spawn = bridge.world.findSafeSpawnPosition(0.32, 1.78, { x: 0, z: 0 }, 12);
@@ -58,7 +68,8 @@ export class PlanetSurfaceSpawnResolver {
 			coordinates,
 			generator,
 			bridge,
-			spawnPosition: new Vector3(spawn.x, spawn.y, spawn.z)
+			spawnPosition: new Vector3(spawn.x, spawn.y, spawn.z),
+			ecology
 		};
 	}
 }

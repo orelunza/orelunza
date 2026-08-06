@@ -9,8 +9,15 @@ curl -fL \
   -o "$ROOT/ne_110m_land.zip"
 unzip -o "$ROOT/ne_110m_land.zip" -d "$ROOT/ne_110m_land"
 
+curl -fL \
+  https://naturalearth.s3.amazonaws.com/110m_cultural/ne_110m_admin_0_countries.zip \
+  -o "$ROOT/ne_110m_admin_0_countries.zip"
+unzip -o "$ROOT/ne_110m_admin_0_countries.zip" -d "$ROOT/ne_110m_admin_0_countries"
+
 cat <<'EOF'
-Natural Earth land data downloaded.
+Natural Earth land and country boundary data downloaded.
+
+Download ESA WorldCover/Copernicus LCFM separately for production ecology tiles.
 
 Download the current GEBCO grid from the official GEBCO download application:
   https://download.gebco.net/

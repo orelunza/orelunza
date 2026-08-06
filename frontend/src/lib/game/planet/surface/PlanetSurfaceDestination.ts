@@ -1,5 +1,6 @@
 import { Ray, Sphere, Vector3 } from 'three';
 import type { GeographicSample } from '../../geography/GeographicTile';
+import type { PlanetSurfaceEcology } from '../../geography/ecology/PlanetSurfaceEcology';
 import type { GeodeticCoordinate } from '../GeodeticCoordinate';
 import type { PlanetCoordinateSystem } from '../PlanetCoordinateSystem';
 import type { PlanetDefinition } from '../PlanetDefinition';
@@ -11,6 +12,7 @@ export interface PlanetSurfaceDestination {
 	sample: GeographicSample | null;
 	status: PlanetSurfaceDestinationStatus;
 	message: string | null;
+	ecology: PlanetSurfaceEcology | null;
 }
 
 export function createPendingSurfaceDestination(
@@ -20,14 +22,16 @@ export function createPendingSurfaceDestination(
 		coordinate: { ...coordinate },
 		sample: null,
 		status: 'pending',
-		message: null
+		message: null,
+		ecology: null
 	};
 }
 
 export function resolveSurfaceDestination(
 	coordinate: Readonly<GeodeticCoordinate>,
 	sample: Readonly<GeographicSample>,
-	minimumLandCoverage = 0.55
+	minimumLandCoverage = 0.55,
+	ecology: PlanetSurfaceEcology | null = null
 ): PlanetSurfaceDestination {
 	const land = sample.land >= minimumLandCoverage && sample.elevationMeters >= -5;
 	return {
@@ -38,7 +42,8 @@ export function resolveSurfaceDestination(
 		},
 		sample: { ...sample },
 		status: land ? 'land' : 'ocean',
-		message: land ? null : 'Surface destination required'
+		message: land ? null : 'Surface destination required',
+		ecology
 	};
 }
 
