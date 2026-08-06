@@ -3,6 +3,7 @@ import type { PlayerTransform } from '../game-types';
 import type { BlockChange, BlockCoordinate, BlockType } from './voxel-types';
 import type { CharacterAppearanceV1 } from '../character/CharacterAppearance';
 import type { EnvironmentSaveState } from '../environment/EnvironmentSystem';
+import type { PlanetSurfaceSaveState } from '../planet/surface/PlanetSurfaceState';
 
 export interface WorldSaveV1 {
 	version: 1;
@@ -41,6 +42,7 @@ export interface WorldSaveV3 {
 	changes: BlockChange[];
 	environment: EnvironmentSaveState;
 	removedVegetationIds?: string[];
+	planetSurface?: PlanetSurfaceSaveState;
 	updatedAt: number;
 }
 
@@ -109,6 +111,8 @@ export function isWorldSaveV3(value: unknown): value is WorldSaveV3 {
 		(candidate.removedVegetationIds === undefined ||
 			(Array.isArray(candidate.removedVegetationIds) &&
 				candidate.removedVegetationIds.every((id) => typeof id === 'string'))) &&
+		(candidate.planetSurface === undefined ||
+			(typeof candidate.planetSurface === 'object' && candidate.planetSurface !== null)) &&
 		Array.isArray(candidate.placedBlocks) &&
 		Array.isArray(candidate.removedBlocks)
 	);

@@ -50,7 +50,17 @@ export interface GeneratedChunk {
 	blocks: Array<{ position: BlockCoordinate; type: BlockType }>;
 }
 
-export class TerrainGenerator {
+export interface WorldTerrainGenerator {
+	heightAt(x: number, z: number): number;
+	visualHeightAt(x: number, z: number): number;
+	isWater(x: number, z: number): boolean;
+	zoneAt(x: number, z: number): string;
+	isPath(x: number, z: number): boolean;
+	generateChunk(chunkX: number, chunkZ: number): GeneratedChunk;
+	treeSpeciesAt?(x: number, z: number): TreeSpeciesId | null;
+}
+
+export class TerrainGenerator implements WorldTerrainGenerator {
 	private readonly seedValue: number;
 	private readonly vegetationSeed: number;
 	private readonly city = new CityGenerator();

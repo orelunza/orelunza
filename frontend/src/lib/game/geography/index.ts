@@ -10,3 +10,5 @@ export * from './GeographicTileSampler';
 export * from './LandMaskSampler';
 export * from './PlanetDataManifest';
 export * from './StaticGeographicTileProvider';
+
+export * from './PlanetGeographyQuery';

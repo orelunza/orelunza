@@ -7,6 +7,7 @@ import { IndexedDbWorldStore } from './IndexedDbWorldStore';
 import type { CharacterAppearanceV1 } from '../character/CharacterAppearance';
 import type { EnvironmentSaveState } from '../environment/EnvironmentSystem';
 import { DEFAULT_DAY_LENGTH_SECONDS } from '../environment/CelestialClock';
+import type { PlanetSurfaceSaveState } from '../planet/surface/PlanetSurfaceState';
 
 /**
  * Minimal environment surface the persistence layer talks to. The concrete
@@ -23,6 +24,11 @@ export interface PersistableVegetationRemovals {
 	restore(instanceIds: readonly string[] | null | undefined): void;
 }
 
+export interface PersistablePlanetSurface {
+	serialize(): PlanetSurfaceSaveState;
+	restore(state: PlanetSurfaceSaveState): void;
+}
+
 export class GamePersistence {
 	private dirty = false;
 	private status: SaveStatus = 'idle';
@@ -30,6 +36,7 @@ export class GamePersistence {
 	private lastSaveAt = 0;
 	private environment: PersistableEnvironment | null = null;
 	private vegetationRemovals: PersistableVegetationRemovals | null = null;
+	private planetSurface: PersistablePlanetSurface | null = null;
 	private readonly store = new IndexedDbWorldStore();
 
 	constructor(
@@ -60,6 +67,10 @@ export class GamePersistence {
 		this.vegetationRemovals = vegetationRemovals;
 	}
 
+	setPlanetSurface(planetSurface: PersistablePlanetSurface | null): void {
+		this.planetSurface = planetSurface;
+	}
+
 	async load(): Promise<WorldSave | null> {
 		const save = await this.store.load(this.worldId);
 
@@ -81,6 +92,9 @@ export class GamePersistence {
 		if (save.version === 3) {
 			this.environment?.restore(save.environment);
 			this.vegetationRemovals?.restore(save.removedVegetationIds);
+			if (save.planetSurface && this.planetSurface) {
+				this.planetSurface.restore(save.planetSurface);
+			}
 		} else {
 			this.vegetationRemovals?.restore([]);
 		}
@@ -145,6 +159,7 @@ export class GamePersistence {
 			changes: modifications.changes,
 			environment: this.buildEnvironmentSave(),
 			removedVegetationIds: this.vegetationRemovals?.serialize() ?? [],
+			planetSurface: this.planetSurface?.serialize(),
 			updatedAt
 		};
 	}

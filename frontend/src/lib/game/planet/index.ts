@@ -15,3 +15,5 @@ export * from './PlanetGeographySystem';
 export * from './PlanetStreamingSystem';
 export * from './PlanetTerrainSampler';
 export * from './PlanetTileDataState';
+
+export * from './surface';

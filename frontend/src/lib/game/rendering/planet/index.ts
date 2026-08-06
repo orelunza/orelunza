@@ -7,3 +7,6 @@ export * from './PlanetRenderer';
 export * from './PlanetTerrainMaterial';
 export * from './PlanetTerrainRenderer';
 export * from './PlanetTileRenderer';
+export * from './PlanetDestinationMarker';
+export * from './PlanetSurfaceTransitionRenderer';
+export * from './PlanetSurfaceVoxelRenderer';

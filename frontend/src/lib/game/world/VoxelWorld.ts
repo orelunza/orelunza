@@ -1,5 +1,5 @@
 import { BlockRegistry } from './BlockRegistry';
-import { TerrainGenerator } from './TerrainGenerator';
+import { TerrainGenerator, type WorldTerrainGenerator } from './TerrainGenerator';
 import {
 	type BlockChange,
 	type BlockCoordinate,
@@ -21,7 +21,7 @@ export interface WorldModificationSnapshot {
 }
 
 export class VoxelWorld {
-	private readonly generator: TerrainGenerator;
+	private readonly generator: WorldTerrainGenerator;
 	private readonly generatedBlocks = new Map<string, BlockType>();
 	private readonly generatedChunkBlocks = new Map<string, Set<string>>();
 	private readonly loadedChunks = new Set<string>();
@@ -29,11 +29,14 @@ export class VoxelWorld {
 	private readonly removedBlocks = new Set<string>();
 	private readonly changes: BlockChange[] = [];
 
-	constructor(readonly seed: string) {
-		this.generator = new TerrainGenerator(seed);
+	constructor(
+		readonly seed: string,
+		generator?: WorldTerrainGenerator
+	) {
+		this.generator = generator ?? new TerrainGenerator(seed);
 	}
 
-	get terrainGenerator(): TerrainGenerator {
+	get terrainGenerator(): WorldTerrainGenerator {
 		return this.generator;
 	}
 

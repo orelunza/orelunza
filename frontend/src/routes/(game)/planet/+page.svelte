@@ -3,13 +3,16 @@
 </script>
 
 <svelte:head>
-	<title>Real Earth Geography Preview — Orelunza</title>
+	<title>Planet Surface Travel — Orelunza</title>
 	<meta
 		name="description"
-		content="Streamed Natural Earth continents, coastlines, global relief and ocean bathymetry preview for Orelunza."
+		content="Select real land on Earth and descend into local editable voxel terrain in Orelunza."
 	/>
 </svelte:head>
 
-<main class="h-dvh w-screen overflow-hidden bg-[#020711]" aria-label="Orelunza planet preview">
+<main
+	class="h-dvh w-screen overflow-hidden bg-[#020711]"
+	aria-label="Orelunza planet travel preview"
+>
 	<PlanetPreviewCanvas />
 </main>

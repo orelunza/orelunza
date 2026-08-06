@@ -25,6 +25,8 @@ export type GameStatus =
 
 export type SaveStatus = 'idle' | 'dirty' | 'saving' | 'saved' | 'error';
 
+export type WorldGeometry = 'local-flat' | 'planet-earth';
+
 export interface PlayerTransform {
 	playerId: string;
 	worldId: string;
@@ -85,6 +87,7 @@ export interface GameEngineOptions {
 	regionName: string;
 	seed: string;
 	quality?: RenderQuality;
+	worldGeometry?: WorldGeometry;
 	appearance: CharacterAppearanceV1;
 	onSnapshot?: (snapshot: GameSnapshot) => void;
 	onError?: (error: Error) => void;
