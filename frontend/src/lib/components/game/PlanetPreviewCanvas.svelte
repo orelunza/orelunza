@@ -44,6 +44,7 @@
 	let quality = $state<PlanetLodQuality>('medium');
 	let gridVisible = $state(false);
 	let coastlinesVisible = $state(true);
+	let hydrologyVisible = $state(true);
 	let countryBoundariesVisible = $state(true);
 	let ecologyOverlayMode = $state<PlanetEcologyOverlayMode>('none');
 	let latitude = $state(0);
@@ -63,6 +64,8 @@
 	let landPercent = $state(0);
 	let elevationRange = $state('0 / 0 m');
 	let reliefExaggeration = $state(1);
+	let riverSegments = $state(0);
+	let lakePoints = $state(0);
 	let destination = $state<PlanetSurfaceDestination | null>(null);
 	let travelLoading = $state(false);
 	let travelMessage = $state<string | null>(null);
@@ -97,6 +100,10 @@
 	});
 
 	$effect(() => {
+		planetRenderer?.setHydrologyVisible(hydrologyVisible);
+	});
+
+	$effect(() => {
 		planetRenderer?.setEcologyOverlayMode(ecologyOverlayMode);
 	});
 
@@ -119,6 +126,7 @@
 		planet.setDebugVisible(gridVisible);
 		planet.setCoastlinesVisible(coastlinesVisible);
 		planet.setCountryBoundariesVisible(countryBoundariesVisible);
+		planet.setHydrologyVisible(hydrologyVisible);
 		planet.setEcologyOverlayMode(ecologyOverlayMode);
 		const marker = new PlanetDestinationMarker(planet.definition, planet.coordinateSystem);
 		planet.object.add(marker.object);
@@ -375,6 +383,8 @@
 				landPercent = diagnostics.landVertexFraction * 100;
 				elevationRange = `${diagnostics.minimumElevationMeters.toFixed(0)} / ${diagnostics.maximumElevationMeters.toFixed(0)} m`;
 				reliefExaggeration = diagnostics.reliefExaggeration;
+				riverSegments = diagnostics.riverSegments;
+				lakePoints = diagnostics.lakePoints;
 			}
 			frame = requestAnimationFrame(renderFrame);
 		};
@@ -456,6 +466,9 @@
 					<span class="text-white/45">Visible land</span><strong>{landPercent.toFixed(1)}%</strong>
 					<span class="text-white/45">Elevation range</span><strong>{elevationRange}</strong>
 					<span class="text-white/45">Relief display</span><strong>×{reliefExaggeration}</strong>
+					<span class="text-white/45">Hydrology</span><strong
+						>{riverSegments.toLocaleString()} river segments · {lakePoints.toLocaleString()} lake samples</strong
+					>
 					<span class="text-white/45">Rebuilds</span><strong>{geometryRebuilds}</strong>
 				</div>
 			</section>
@@ -477,6 +490,10 @@
 				>
 				<label class="flex items-center gap-2"
 					><input bind:checked={countryBoundariesVisible} type="checkbox" /><span>Countries</span
+					></label
+				>
+				<label class="flex items-center gap-2"
+					><input bind:checked={hydrologyVisible} type="checkbox" /><span>Rivers & lakes</span
 					></label
 				>
 				<label class="flex items-center gap-2">

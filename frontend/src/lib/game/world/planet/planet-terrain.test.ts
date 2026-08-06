@@ -77,6 +77,57 @@ describe('planet Earth Lot 3 local voxel terrain', () => {
 		}
 	});
 
+	test('carves deterministic rivers and fills inland water from the watershed', () => {
+		const resolution = 9;
+		const elevationMeters = new Float32Array(resolution * resolution);
+		const landMask = new Uint8Array(resolution * resolution).fill(255);
+		for (let row = 0; row < resolution; row += 1) {
+			for (let column = 0; column < resolution; column += 1) {
+				elevationMeters[row * resolution + column] =
+					60 + Math.abs(column - 4) * 18 + (resolution - 1 - row) * 5;
+			}
+		}
+		landMask[8 * resolution + 4] = 0;
+		elevationMeters[8 * resolution + 4] = -5;
+		const anchor = createPlanetSurfaceAnchor(planet, { ...coordinate, altitudeMeters: 60 }, 60);
+		const generator = new PlanetTerrainGenerator(
+			anchor,
+			new PlanetTerrainColumnSampler({
+				resolution,
+				halfExtentMeters: 128,
+				referenceElevationMeters: 60,
+				elevationMeters,
+				landMask,
+				minimumElevationMeters: -5,
+				maximumElevationMeters: 172
+			}),
+			{ detailAmplitudeMeters: 2, seed: 'hydrology-test' }
+		);
+		let water: { x: number; z: number } | null = null;
+		for (let z = -120; z <= 120 && !water; z += 2) {
+			for (let x = -120; x <= 120; x += 2) {
+				if (generator.hydrologyAt(x, z).kind !== 'none') {
+					water = { x, z };
+					break;
+				}
+			}
+		}
+		expect(water).not.toBeNull();
+		if (!water) return;
+		const sample = generator.hydrologyAt(water.x, water.z);
+		expect(sample.waterSurfaceElevationMeters).not.toBeNull();
+		expect(['Planet River', 'Planet Lake', 'River Mouth', 'Waterfall']).toContain(
+			generator.zoneAt(water.x, water.z)
+		);
+		const chunk = generator.generateChunk(Math.floor(water.x / 16), Math.floor(water.z / 16));
+		expect(
+			chunk.blocks.some(
+				(block) =>
+					block.type === 'water' && block.position.x === water.x && block.position.z === water.z
+			)
+		).toBe(true);
+	});
+
 	test('creates stable anchor-scoped chunk identifiers', () => {
 		const key = planetSurfaceChunkKey({ anchorId: 'earth/positive-x/16/10/12', x: -3, z: 8 });
 		expect(key).toBe('earth/positive-x/16/10/12/chunk/-3/8');

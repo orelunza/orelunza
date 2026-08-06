@@ -17,3 +17,5 @@ export * from './countries';
 export * from './ecology';
 
 export * from './ocean';
+
+export * from './hydrology';

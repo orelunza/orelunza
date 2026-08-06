@@ -29,6 +29,7 @@ import { PlanetGeographyDebugOverlay } from './PlanetGeographyDebugOverlay';
 import { createPlanetTerrainMaterial } from './PlanetTerrainMaterial';
 import { PlanetTerrainRenderer } from './PlanetTerrainRenderer';
 import { PlanetOceanRenderer } from './PlanetOceanRenderer';
+import { PlanetHydrologyRenderer } from './PlanetHydrologyRenderer';
 
 export interface PlanetRendererDiagnostics {
 	activeTiles: number;
@@ -52,6 +53,10 @@ export interface PlanetRendererDiagnostics {
 	coastlinesReady: boolean;
 	countriesReady: boolean;
 	ecologyOverlayReady: boolean;
+	hydrologyReady: boolean;
+	riverSegments: number;
+	lakePoints: number;
+	waterfalls: number;
 }
 
 const SEGMENTS_PER_QUALITY: Readonly<Record<PlanetLodQuality, number>> = Object.freeze({
@@ -67,6 +72,7 @@ export class PlanetRenderer {
 	private readonly streaming: PlanetStreamingSystem;
 	private readonly surface: Mesh;
 	private readonly ocean: PlanetOceanRenderer;
+	private readonly hydrology: PlanetHydrologyRenderer;
 	private readonly coastline: CoastlineRenderer;
 	private readonly countries: CountryBoundaryRenderer;
 	private readonly ecologyOverlay: PlanetEcologyOverlayRenderer;
@@ -78,11 +84,12 @@ export class PlanetRenderer {
 	private disposed = false;
 	private geometryRebuilds = 0;
 	private reliefExaggeration = 1;
+	private hydrologyRequestedVisible = true;
 	private diagnosticsState: PlanetRendererDiagnostics = {
 		activeTiles: 0,
 		maximumLodLevel: 0,
 		triangles: 0,
-		drawCalls: 7,
+		drawCalls: 9,
 		geometryRebuilds: 0,
 		cameraAltitudeMeters: 0,
 		geographyReady: false,
@@ -99,7 +106,11 @@ export class PlanetRenderer {
 		reliefExaggeration: 1,
 		coastlinesReady: false,
 		countriesReady: false,
-		ecologyOverlayReady: false
+		ecologyOverlayReady: false,
+		hydrologyReady: false,
+		riverSegments: 0,
+		lakePoints: 0,
+		waterfalls: 0
 	};
 
 	constructor(
@@ -116,6 +127,7 @@ export class PlanetRenderer {
 		this.surface.receiveShadow = true;
 		this.surface.renderOrder = 2;
 		this.ocean = new PlanetOceanRenderer(definition);
+		this.hydrology = new PlanetHydrologyRenderer(definition);
 		this.coastline = new CoastlineRenderer(definition);
 		void this.coastline.load();
 		this.countries = new CountryBoundaryRenderer(definition);
@@ -134,6 +146,7 @@ export class PlanetRenderer {
 		this.object.add(
 			this.surface,
 			this.ocean.object,
+			this.hydrology.object,
 			this.coastline.object,
 			this.ecologyOverlay.object,
 			this.countries.object,
@@ -173,6 +186,7 @@ export class PlanetRenderer {
 			? geodetic.altitudeMeters
 			: Math.max(0, cameraDistance - this.definition.equatorialRadiusMeters);
 		this.reliefExaggeration = PlanetRenderer.reliefForAltitude(cameraAltitudeMeters);
+		this.hydrology.setVisible(this.hydrologyRequestedVisible && cameraAltitudeMeters >= 20_000);
 		const geography = this.streaming.geography.diagnostics;
 		this.geographyDebug.update(geography);
 		const signature = `${snapshot.tiles.map(planetTileKey).join('|')}@${geography.revision}@${this.reliefExaggeration}`;
@@ -180,6 +194,7 @@ export class PlanetRenderer {
 			this.tileSignature = signature;
 			this.rebuild(snapshot);
 		}
+		const hydrology = this.hydrology.diagnostics;
 
 		this.diagnosticsState = {
 			...this.diagnosticsState,
@@ -198,7 +213,11 @@ export class PlanetRenderer {
 			reliefExaggeration: this.reliefExaggeration,
 			coastlinesReady: this.coastline.ready,
 			countriesReady: this.countries.ready,
-			ecologyOverlayReady: this.ecologyOverlay.ready
+			ecologyOverlayReady: this.ecologyOverlay.ready,
+			hydrologyReady: hydrology.ready,
+			riverSegments: hydrology.riverSegments,
+			lakePoints: hydrology.lakePoints,
+			waterfalls: hydrology.waterfalls
 		};
 		return snapshot;
 	}
@@ -219,6 +238,10 @@ export class PlanetRenderer {
 
 	setCoastlinesVisible(visible: boolean): void {
 		this.coastline.setVisible(visible);
+	}
+
+	setHydrologyVisible(visible: boolean): void {
+		this.hydrologyRequestedVisible = visible;
 	}
 
 	setCountryBoundariesVisible(visible: boolean): void {
@@ -242,6 +265,7 @@ export class PlanetRenderer {
 		this.surface.geometry.dispose();
 		(this.surface.material as ReturnType<typeof createPlanetTerrainMaterial>).dispose();
 		this.ocean.dispose();
+		this.hydrology.dispose();
 		this.coastline.dispose();
 		this.countries.dispose();
 		this.ecologyOverlay.dispose();
@@ -264,6 +288,7 @@ export class PlanetRenderer {
 		this.surface.geometry.dispose();
 		this.surface.geometry = geometry.surface;
 		this.debugOverlay.setGeometry(geometry.grid);
+		this.hydrology.rebuild(snapshot.tiles, this.streaming.geography, this.reliefExaggeration);
 		this.geometryRebuilds += 1;
 		this.diagnosticsState = {
 			...this.diagnosticsState,

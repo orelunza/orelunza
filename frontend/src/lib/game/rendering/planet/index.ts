@@ -12,3 +12,4 @@ export * from './PlanetSurfaceTransitionRenderer';
 export * from './PlanetSurfaceVoxelRenderer';
 export * from './CountryBoundaryRenderer';
 export * from './PlanetEcologyOverlayRenderer';
+export * from './PlanetHydrologyRenderer';

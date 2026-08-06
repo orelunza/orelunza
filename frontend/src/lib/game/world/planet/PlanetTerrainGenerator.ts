@@ -15,6 +15,10 @@ import {
 } from '../../vegetation/VegetationDistribution';
 import type { TreeSpeciesId } from '../../vegetation/VegetationFamily';
 import { CoastalLandformResolver } from '../../geography/ocean/CoastalLandformResolver';
+import {
+	PlanetHydrologyModel,
+	type PlanetHydrologySample
+} from '../../geography/hydrology/PlanetHydrologyModel';
 import { PlanetTerrainColumnSampler } from './PlanetTerrainColumnSampler';
 
 export interface PlanetTerrainGeneratorOptions {
@@ -36,6 +40,7 @@ export class PlanetTerrainGenerator implements WorldTerrainGenerator {
 	private readonly seedValue: number;
 	private readonly vegetationSeed: number;
 	private readonly coastalLandforms = new CoastalLandformResolver();
+	private readonly hydrology: PlanetHydrologyModel;
 
 	constructor(
 		readonly anchor: Readonly<PlanetSurfaceAnchor>,
@@ -47,13 +52,28 @@ export class PlanetTerrainGenerator implements WorldTerrainGenerator {
 		this.ecology = options.ecology ?? createFallbackPlanetSurfaceEcology();
 		this.seedValue = hashString(options.seed ?? anchor.id);
 		this.vegetationSeed = vegetationSeedValue(`${options.seed ?? anchor.id}:planet-ecology`);
+		this.hydrology = new PlanetHydrologyModel(
+			{
+				halfExtentMeters: columns.grid.halfExtentMeters,
+				elevationAt: (x, z) => this.baseElevationMetersAt(x, z),
+				landAt: (x, z) => columns.sample(x, z).land
+			},
+			{
+				resolution: 65,
+				moisture: Math.max(this.ecology.surfaceMoisture, this.ecology.vegetationDensity * 0.72),
+				seed: this.seedValue
+			}
+		);
 	}
 
 	heightAt(x: number, z: number): number {
-		const sample = this.columns.sample(x, z);
-		const detail =
-			this.localDetail(x, z) * this.detailAmplitudeMeters * (0.35 + sample.land * 0.65);
-		const relative = sample.relativeHeightMeters + detail;
+		const baseElevationMeters = this.baseElevationMetersAt(x, z);
+		const hydrology = this.hydrology.sample(x, z);
+		const elevationMeters =
+			hydrology.bedElevationMeters === null
+				? baseElevationMeters
+				: Math.min(baseElevationMeters, hydrology.bedElevationMeters);
+		const relative = elevationMeters - this.anchor.referenceElevationMeters;
 		return Math.max(2, Math.min(WORLD_MAX_Y - 16, Math.round(this.baseSurfaceY + relative)));
 	}
 
@@ -68,10 +88,21 @@ export class PlanetTerrainGenerator implements WorldTerrainGenerator {
 
 	isWater(x: number, z: number): boolean {
 		const sample = this.columns.sample(x, z);
-		return sample.land < 0.5 || sample.elevationMeters < 0;
+		return (
+			sample.land < 0.5 || sample.elevationMeters < 0 || this.hydrology.sample(x, z).kind !== 'none'
+		);
+	}
+
+	hydrologyAt(x: number, z: number): PlanetHydrologySample {
+		return this.hydrology.sample(x, z);
 	}
 
 	zoneAt(x: number, z: number): string {
+		const hydrology = this.hydrology.sample(x, z);
+		if (hydrology.kind === 'river' && hydrology.waterfallDropMeters > 0) return 'Waterfall';
+		if (hydrology.kind === 'lake') return 'Planet Lake';
+		if (hydrology.kind === 'river' && hydrology.riverMouth) return 'River Mouth';
+		if (hydrology.kind === 'river') return 'Planet River';
 		const sample = this.columns.sample(x, z);
 		const coast = this.coastalLandforms.resolve(sample);
 		if (coast.landform === 'open-ocean') return 'Planet Ocean';
@@ -105,16 +136,32 @@ export class PlanetTerrainGenerator implements WorldTerrainGenerator {
 				const z = startZ + localZ;
 				const height = this.heightAt(x, z);
 				const sample = this.columns.sample(x, z);
-				const water = sample.land < 0.5 || sample.elevationMeters < 0;
+				const hydrology = this.hydrology.sample(x, z);
+				const oceanWater = sample.land < 0.5 || sample.elevationMeters < 0;
+				const inlandWater = hydrology.kind !== 'none';
+				const water = oceanWater || inlandWater;
 				const coast = this.coastalLandforms.resolve(sample);
 				const beach = coast.landform === 'beach' || coast.landform === 'shallow-water';
 				const rocky = coast.landform === 'cliff' || coast.landform === 'rocky-coast';
-				const surfaceType: BlockType = beach ? 'sand' : rocky ? 'stone' : profile.surfaceBlock;
-				const subsurfaceType: BlockType = beach
-					? 'sand'
-					: rocky
+				const inlandStone = hydrology.waterfallDropMeters > 0 || sample.slope > 0.48;
+				const surfaceType: BlockType = inlandWater
+					? inlandStone
 						? 'stone'
-						: profile.subsurfaceBlock;
+						: 'sand'
+					: beach
+						? 'sand'
+						: rocky
+							? 'stone'
+							: profile.surfaceBlock;
+				const subsurfaceType: BlockType = inlandWater
+					? inlandStone
+						? 'stone'
+						: 'sand'
+					: beach
+						? 'sand'
+						: rocky
+							? 'stone'
+							: profile.subsurfaceBlock;
 
 				for (let y = 0; y <= height; y += 1) {
 					let type: BlockType = 'stone';
@@ -123,8 +170,23 @@ export class PlanetTerrainGenerator implements WorldTerrainGenerator {
 					blocks.push({ position: { x, y, z }, type });
 				}
 
-				if (water && height < seaLevelY) {
-					for (let y = height + 1; y <= seaLevelY; y += 1) {
+				const inlandWaterLevelY =
+					hydrology.waterSurfaceElevationMeters === null
+						? null
+						: Math.max(
+								1,
+								Math.min(
+									WORLD_MAX_Y - 1,
+									Math.round(
+										this.baseSurfaceY +
+											hydrology.waterSurfaceElevationMeters -
+											this.anchor.referenceElevationMeters
+									)
+								)
+							);
+				const waterLevelY = oceanWater ? seaLevelY : inlandWaterLevelY;
+				if (water && waterLevelY !== null && height < waterLevelY) {
+					for (let y = height + 1; y <= waterLevelY; y += 1) {
 						blocks.push({ position: { x, y, z }, type: 'water' });
 					}
 				}
@@ -209,6 +271,13 @@ export class PlanetTerrainGenerator implements WorldTerrainGenerator {
 			this.heightAt(x, z - 1)
 		];
 		return neighbours.every((height) => Math.abs(height - center) <= 2);
+	}
+
+	private baseElevationMetersAt(x: number, z: number): number {
+		const sample = this.columns.sample(x, z);
+		const detail =
+			this.localDetail(x, z) * this.detailAmplitudeMeters * (0.35 + sample.land * 0.65);
+		return sample.elevationMeters + detail;
 	}
 
 	private localDetail(x: number, z: number): number {
