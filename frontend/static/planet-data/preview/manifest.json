@@ -3,6 +3,7 @@
   "version": 1,
   "planetId": "earth",
   "dataQuality": "preview",
+  "coordinateConvention": "legacy-positive-z-east",
   "tileResolution": 17,
   "minimumLevel": 0,
   "maximumLevel": 3,

@@ -1,8 +1,5 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
-import { Vector3 } from 'three';
-
-import { directionToCubeFaceUv } from '../planet/CubeSphere';
 import { PlanetGeographySystem } from '../planet/PlanetGeographySystem';
 import type { PlanetTileId } from '../planet/PlanetTileId';
 import { PlanetTileRenderer } from '../rendering/planet/PlanetTileRenderer';
@@ -11,7 +8,16 @@ import { GeographicTileCache } from './GeographicTileCache';
 import { decodeGeographicTile } from './GeographicTileDecoder';
 import type { GeographicTileProvider } from './GeographicTileProvider';
 import { sampleGeographicTile } from './GeographicTileSampler';
-import { validatePlanetDataManifest, type PlanetDataManifest } from './PlanetDataManifest';
+import {
+	resolvePlanetDataCoordinateConvention,
+	validatePlanetDataManifest,
+	type PlanetDataManifest
+} from './PlanetDataManifest';
+import {
+	canonicalFaceUvToDataFaceUv,
+	canonicalTileToDataTile,
+	geodeticToDataFaceUv
+} from './PlanetDataProjection';
 
 const previewRoot = 'static/planet-data/preview';
 
@@ -21,14 +27,16 @@ function readArrayBuffer(path: string): ArrayBuffer {
 }
 
 function loadPreviewSample(latitudeDegrees: number, longitudeDegrees: number) {
-	const latitude = (latitudeDegrees * Math.PI) / 180;
-	const longitude = (longitudeDegrees * Math.PI) / 180;
-	const direction = new Vector3(
-		Math.cos(latitude) * Math.cos(longitude),
-		Math.sin(latitude),
-		Math.cos(latitude) * Math.sin(longitude)
+	const manifest = validatePlanetDataManifest(
+		JSON.parse(readFileSync(`${previewRoot}/manifest.json`, 'utf8'))
 	);
-	const faceUv = directionToCubeFaceUv(direction);
+	const faceUv = geodeticToDataFaceUv(
+		{
+			latitudeRadians: (latitudeDegrees * Math.PI) / 180,
+			longitudeRadians: (longitudeDegrees * Math.PI) / 180
+		},
+		resolvePlanetDataCoordinateConvention(manifest)
+	);
 	const level = 3;
 	const side = 2 ** level;
 	const x = Math.min(side - 1, Math.floor(faceUv.u * side));
@@ -89,6 +97,24 @@ class MemoryProvider implements GeographicTileProvider {
 }
 
 describe('planet Earth Lot 2 geography and streamed terrain', () => {
+	test('adapts legacy preview tiles without reflecting canonical Earth coordinates', () => {
+		expect(canonicalFaceUvToDataFaceUv('positive-z', 0.25, 0.75, 'legacy-positive-z-east')).toEqual(
+			{ face: 'negative-z', u: 0.75, v: 0.75 }
+		);
+		expect(
+			canonicalTileToDataTile(
+				{ face: 'positive-z', level: 3, x: 2, y: 5 },
+				'legacy-positive-z-east'
+			)
+		).toEqual({ face: 'negative-z', level: 3, x: 5, y: 5 });
+		expect(
+			canonicalTileToDataTile(
+				{ face: 'positive-y', level: 3, x: 2, y: 1 },
+				'legacy-positive-z-east'
+			)
+		).toEqual({ face: 'positive-y', level: 3, x: 2, y: 6 });
+	});
+
 	test('loads a bounded preview manifest with explicit source attribution', () => {
 		const manifest = validatePlanetDataManifest(
 			JSON.parse(readFileSync(`${previewRoot}/manifest.json`, 'utf8'))
@@ -163,7 +189,7 @@ describe('planet Earth Lot 2 geography and streamed terrain', () => {
 		geography.update([renderTile]);
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		const resolved = geography.resolveTile(renderTile);
-		expect(resolved?.id).toEqual({ face: 'positive-z', level: 0, x: 0, y: 0 });
+		expect(resolved?.id).toEqual({ face: 'negative-z', level: 0, x: 0, y: 0 });
 		expect(geography.diagnostics.fallbackTiles).toBe(1);
 		const geometry = PlanetTileRenderer.buildGeometry([renderTile], 2, undefined, geography, 20);
 		expect(geometry.loadedDataTiles).toBe(1);

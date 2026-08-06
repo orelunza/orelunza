@@ -33,7 +33,7 @@ export class PlanetCoordinateSystem {
 
 		target.x = (radius + value.altitudeMeters) * cosLatitude * cosLongitude;
 		target.y = (radius * (1 - this.firstEccentricitySquared) + value.altitudeMeters) * sinLatitude;
-		target.z = (radius + value.altitudeMeters) * cosLatitude * sinLongitude;
+		target.z = -(radius + value.altitudeMeters) * cosLatitude * sinLongitude;
 		return target;
 	}
 
@@ -50,7 +50,7 @@ export class PlanetCoordinateSystem {
 			throw new RangeError('The planet centre has no geodetic coordinate.');
 		}
 
-		const longitude = horizontal < 1e-9 ? 0 : Math.atan2(position.z, position.x);
+		const longitude = horizontal < 1e-9 ? 0 : Math.atan2(-position.z, position.x);
 		const theta = Math.atan2(position.y * a, horizontal * b);
 		const sinTheta = Math.sin(theta);
 		const cosTheta = Math.cos(theta);

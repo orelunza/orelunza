@@ -8,6 +8,7 @@
 		PerspectiveCamera,
 		Raycaster,
 		Scene,
+		Spherical,
 		Vector2,
 		Vector3,
 		WebGLRenderer
@@ -44,7 +45,7 @@
 	let quality = $state<PlanetLodQuality>('medium');
 	let gridVisible = $state(false);
 	let coastlinesVisible = $state(true);
-	let hydrologyVisible = $state(true);
+	let hydrologyVisible = $state(false);
 	let countryBoundariesVisible = $state(true);
 	let ecologyOverlayMode = $state<PlanetEcologyOverlayMode>('none');
 	let latitude = $state(0);
@@ -148,8 +149,20 @@
 		sun.position.set(180, 120, 240);
 		scene.add(sun);
 
-		let orbitYaw = 0.7;
-		let orbitPolar = 1.08;
+		const initialCameraPlanetPosition = planet.coordinateSystem.geodeticToPlanet({
+			latitudeRadians: (8 * Math.PI) / 180,
+			longitudeRadians: (22 * Math.PI) / 180,
+			altitudeMeters: 0
+		});
+		const initialOrbit = new Spherical().setFromVector3(
+			new Vector3(
+				initialCameraPlanetPosition.x,
+				initialCameraPlanetPosition.y,
+				initialCameraPlanetPosition.z
+			)
+		);
+		let orbitYaw = initialOrbit.theta;
+		let orbitPolar = initialOrbit.phi;
 		let orbitDistance = 285;
 		let surfaceYaw = 0.75;
 		let surfacePolar = 1.05;
@@ -161,6 +174,7 @@
 		let pointerTravel = 0;
 		let frame = 0;
 		let lastHudUpdate = 0;
+		let destinationRequestId = 0;
 		let surfaceSession: PlanetSurfaceSession | null = null;
 		let surfaceRenderer: PlanetSurfaceVoxelRenderer | null = null;
 		const logicalCamera = new Vector3();
@@ -195,9 +209,9 @@
 			);
 		};
 
-		const selectDestination = async (event: MouseEvent): Promise<void> => {
+		const selectDestination = async (event: PointerEvent): Promise<void> => {
 			if (explorationMode !== 'globe' || travelLoading) return;
-			updatePointerNdc(event as PointerEvent);
+			updatePointerNdc(event);
 			raycaster.setFromCamera(pointerNdc, camera);
 			const coordinate = rayToPlanetDestination(
 				raycaster.ray,
@@ -205,17 +219,21 @@
 				planet.coordinateSystem
 			);
 			if (!coordinate) return;
+
+			const requestId = ++destinationRequestId;
 			destination = createPendingSurfaceDestination(coordinate);
 			travelMessage = 'Reading land and elevation data…';
 			marker.setDestination(coordinate, true);
 			try {
 				const sample = await geographyQuery.sample(coordinate);
 				const ecology = await surfaceContext.resolve(coordinate, sample);
+				if (requestId !== destinationRequestId || explorationMode !== 'globe') return;
 				destination = resolveSurfaceDestination(coordinate, sample, 0.55, ecology);
 				planet.setSelectedCountry(ecology.country?.id ?? null);
 				marker.setDestination(destination.coordinate, destination.status === 'land');
 				travelMessage = destination.message;
 			} catch {
+				if (requestId !== destinationRequestId || explorationMode !== 'globe') return;
 				destination = { ...destination, status: 'error', message: 'Unable to read this region.' };
 				travelMessage = destination.message;
 				marker.setDestination(coordinate, false);
@@ -258,6 +276,7 @@
 		};
 
 		returnToGlobe = (): void => {
+			destinationRequestId += 1;
 			if (surfaceRenderer) {
 				scene.remove(surfaceRenderer.object);
 				surfaceRenderer.dispose();
@@ -299,7 +318,14 @@
 			if (pointerId !== event.pointerId) return;
 			pointerId = null;
 			canvas?.releasePointerCapture(event.pointerId);
-			if (explorationMode === 'surface' && surfaceRenderer && pointerTravel < 5) {
+			if (event.type === 'pointercancel' || pointerTravel >= 5) return;
+
+			if (explorationMode === 'globe' && pointerButton === 0) {
+				void selectDestination(event);
+				return;
+			}
+
+			if (explorationMode === 'surface' && surfaceRenderer) {
 				updatePointerNdc(event);
 				raycaster.setFromCamera(pointerNdc, camera);
 				const hit = surfaceRenderer.pick(raycaster);
@@ -395,7 +421,6 @@
 		canvas.addEventListener('pointermove', pointerMove);
 		canvas.addEventListener('pointerup', pointerUp);
 		canvas.addEventListener('pointercancel', pointerUp);
-		canvas.addEventListener('dblclick', selectDestination);
 		canvas.addEventListener('wheel', wheel, { passive: false });
 		canvas.addEventListener('contextmenu', contextMenu);
 		window.addEventListener('keydown', keyDown);
@@ -403,13 +428,13 @@
 		frame = requestAnimationFrame(renderFrame);
 
 		return () => {
+			destinationRequestId += 1;
 			cancelAnimationFrame(frame);
 			resizeObserver.disconnect();
 			canvas?.removeEventListener('pointerdown', pointerDown);
 			canvas?.removeEventListener('pointermove', pointerMove);
 			canvas?.removeEventListener('pointerup', pointerUp);
 			canvas?.removeEventListener('pointercancel', pointerUp);
-			canvas?.removeEventListener('dblclick', selectDestination);
 			canvas?.removeEventListener('wheel', wheel);
 			canvas?.removeEventListener('contextmenu', contextMenu);
 			window.removeEventListener('keydown', keyDown);
@@ -493,7 +518,8 @@
 					></label
 				>
 				<label class="flex items-center gap-2"
-					><input bind:checked={hydrologyVisible} type="checkbox" /><span>Rivers & lakes</span
+					><input bind:checked={hydrologyVisible} type="checkbox" /><span
+						>Rivers & lakes · close view</span
 					></label
 				>
 				<label class="flex items-center gap-2">

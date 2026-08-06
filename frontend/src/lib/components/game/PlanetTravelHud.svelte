@@ -65,7 +65,7 @@
 		</button>
 	{:else}
 		<p class="mt-3 mb-0 text-sm leading-6 text-white/60">
-			Double-click a continent to identify the country, land cover and biome before entering.
+			Click a place to identify its country, land cover and biome before entering.
 		</p>
 	{/if}
 

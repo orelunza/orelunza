@@ -9,6 +9,7 @@ export * from './GeographicTileProvider';
 export * from './GeographicTileSampler';
 export * from './LandMaskSampler';
 export * from './PlanetDataManifest';
+export * from './PlanetDataProjection';
 export * from './StaticGeographicTileProvider';
 
 export * from './PlanetGeographyQuery';

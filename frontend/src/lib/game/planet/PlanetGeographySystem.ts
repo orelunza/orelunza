@@ -4,7 +4,12 @@ import type { GeographicSample, GeographicTile } from '../geography/GeographicTi
 import { GeographicTileCache } from '../geography/GeographicTileCache';
 import type { GeographicTileProvider } from '../geography/GeographicTileProvider';
 import { geographicTileAncestor } from '../geography/GeographicTileId';
-import type { PlanetDataManifest } from '../geography/PlanetDataManifest';
+import {
+	resolvePlanetDataCoordinateConvention,
+	type PlanetDataCoordinateConvention,
+	type PlanetDataManifest
+} from '../geography/PlanetDataManifest';
+import { canonicalTileToDataTile } from '../geography/PlanetDataProjection';
 import { StaticGeographicTileProvider } from '../geography/StaticGeographicTileProvider';
 import { PlanetTerrainSampler } from './PlanetTerrainSampler';
 
@@ -48,6 +53,12 @@ export class PlanetGeographySystem {
 
 	get manifest(): Readonly<PlanetDataManifest> | null {
 		return this.manifestState;
+	}
+
+	get dataCoordinateConvention(): PlanetDataCoordinateConvention {
+		return this.manifestState
+			? resolvePlanetDataCoordinateConvention(this.manifestState)
+			: 'legacy-positive-z-east';
 	}
 
 	get revision(): number {
@@ -116,11 +127,13 @@ export class PlanetGeographySystem {
 		}
 		const nextRequested = new Map<string, PlanetTileId>();
 		const dataRequests = new Map<string, PlanetTileId>();
+		const convention = resolvePlanetDataCoordinateConvention(manifest);
 		for (const renderTile of renderTiles) {
 			nextRequested.set(planetTileKey(renderTile), { ...renderTile });
 			const maximumDataLevel = Math.min(renderTile.level, manifest.maximumLevel);
 			for (let level = manifest.minimumLevel; level <= maximumDataLevel; level += 1) {
-				const dataTile = geographicTileAncestor(renderTile, level);
+				const renderAncestor = geographicTileAncestor(renderTile, level);
+				const dataTile = canonicalTileToDataTile(renderAncestor, convention);
 				dataRequests.set(planetTileKey(dataTile), dataTile);
 			}
 		}
@@ -146,12 +159,14 @@ export class PlanetGeographySystem {
 		if (!manifest) {
 			return null;
 		}
+		const convention = resolvePlanetDataCoordinateConvention(manifest);
 		for (
 			let level = Math.min(renderTile.level, manifest.maximumLevel);
 			level >= manifest.minimumLevel;
 			level -= 1
 		) {
-			const candidate = geographicTileAncestor(renderTile, level);
+			const renderAncestor = geographicTileAncestor(renderTile, level);
+			const candidate = canonicalTileToDataTile(renderAncestor, convention);
 			const tile = this.cache.peek(candidate);
 			if (tile) {
 				return tile;
@@ -161,7 +176,13 @@ export class PlanetGeographySystem {
 	}
 
 	sample(renderTile: Readonly<PlanetTileId>, faceU: number, faceV: number): GeographicSample {
-		return this.sampler.sample(renderTile, this.resolveTile(renderTile), faceU, faceV);
+		return this.sampler.sample(
+			renderTile,
+			this.resolveTile(renderTile),
+			faceU,
+			faceV,
+			this.dataCoordinateConvention
+		);
 	}
 
 	dispose(): void {

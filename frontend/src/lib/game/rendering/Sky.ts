@@ -8,6 +8,7 @@ import type { RenderQuality } from './QualitySettings';
 import type { WeatherWorldQuery } from '../environment/weather/WeatherWorldQuery';
 import type { WorldTimeSnapshot } from '../environment/time/WorldDate';
 import type { WeatherKind } from '../environment/weather/WeatherState';
+import type { LocalWaterForcing } from '../world/water/LocalWaterState';
 
 export interface SkyOptions {
 	renderer: WebGLRenderer;
@@ -67,6 +68,19 @@ export class Sky {
 
 	get surfaceWeather(): Readonly<{ wetness: number; snowCoverage: number; frost: number }> {
 		return this.environment.currentState;
+	}
+
+	get localWaterForcing(): LocalWaterForcing {
+		const state = this.environment.currentState;
+		return {
+			rainIntensity: state.rainIntensity,
+			rainShelter: Math.min(0.35, state.rainShelter),
+			precipitationType: state.precipitationType,
+			temperatureCelsius: state.temperatureCelsius,
+			humidity: state.humidity,
+			daylight: state.daylight,
+			windStrength: state.windStrength
+		};
 	}
 
 	get worldTime(): Readonly<WorldTimeSnapshot> {

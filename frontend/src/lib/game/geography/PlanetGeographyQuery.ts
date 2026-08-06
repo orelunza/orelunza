@@ -1,11 +1,13 @@
-import { Vector3 } from 'three';
-import { directionToCubeFaceUv } from '../planet/CubeSphere';
 import type { GeodeticCoordinate } from '../planet/GeodeticCoordinate';
 import { GeographicTileCache } from './GeographicTileCache';
 import type { GeographicTileProvider } from './GeographicTileProvider';
 import { sampleGeographicTile } from './GeographicTileSampler';
 import type { GeographicSample } from './GeographicTile';
-import type { PlanetDataManifest } from './PlanetDataManifest';
+import {
+	resolvePlanetDataCoordinateConvention,
+	type PlanetDataManifest
+} from './PlanetDataManifest';
+import { geodeticToDataFaceUv } from './PlanetDataProjection';
 import { StaticGeographicTileProvider } from './StaticGeographicTileProvider';
 
 export interface PlanetGeographyQueryDiagnostics {
@@ -75,12 +77,10 @@ export class PlanetGeographyQuery {
 		if (![latitude, longitude].every(Number.isFinite)) {
 			throw new RangeError('Geographic query coordinate must be finite.');
 		}
-		const direction = new Vector3(
-			Math.cos(latitude) * Math.cos(longitude),
-			Math.sin(latitude),
-			Math.cos(latitude) * Math.sin(longitude)
+		const faceUv = geodeticToDataFaceUv(
+			coordinate,
+			resolvePlanetDataCoordinateConvention(manifest)
 		);
-		const faceUv = directionToCubeFaceUv(direction);
 		const level = Math.max(
 			manifest.minimumLevel,
 			Math.min(manifest.maximumLevel, Math.trunc(requestedLevel ?? manifest.maximumLevel))

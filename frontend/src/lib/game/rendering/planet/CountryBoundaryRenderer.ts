@@ -20,11 +20,21 @@ export class CountryBoundaryRenderer {
 	private readonly coordinateSystem: PlanetCoordinateSystem;
 	private readonly base = new LineSegments(
 		new BufferGeometry(),
-		new LineBasicMaterial({ color: 0xb9ddff, transparent: true, opacity: 0.5 })
+		new LineBasicMaterial({
+			color: 0xb9ddff,
+			transparent: true,
+			opacity: 0.42,
+			depthWrite: false
+		})
 	);
 	private readonly highlight = new LineSegments(
 		new BufferGeometry(),
-		new LineBasicMaterial({ color: 0xffcf5a, transparent: true, opacity: 0.98 })
+		new LineBasicMaterial({
+			color: 0xffcf5a,
+			transparent: true,
+			opacity: 0.88,
+			depthWrite: false
+		})
 	);
 	private payload: CountryBoundaryPayload | null = null;
 	private selectedId: string | null = null;
@@ -120,7 +130,7 @@ export class CountryBoundaryRenderer {
 		const planet = this.coordinateSystem.geodeticToPlanet({
 			latitudeRadians: (latitudeDegrees * Math.PI) / 180,
 			longitudeRadians: (longitudeDegrees * Math.PI) / 180,
-			altitudeMeters: 285_000
+			altitudeMeters: 32_000
 		});
 		point.set(
 			planet.x / metersPerRenderUnit,

@@ -20,9 +20,9 @@ export function createLocalPlanetFrame(
 	const up = new Vector3(
 		cosLatitude * cosLongitude,
 		sinLatitude,
-		cosLatitude * sinLongitude
+		-cosLatitude * sinLongitude
 	).normalize();
-	const east = new Vector3(-sinLongitude, 0, cosLongitude).normalize();
+	const east = new Vector3(-sinLongitude, 0, -cosLongitude).normalize();
 	const north = new Vector3().crossVectors(up, east).normalize();
 
 	return { east, north, up };

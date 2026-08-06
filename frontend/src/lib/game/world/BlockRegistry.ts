@@ -168,7 +168,7 @@ export class BlockRegistry {
 		return Object.values(BLOCKS);
 	}
 
-	static create(type: BlockType, position: BlockCoordinate): VoxelBlock {
+	static create(type: BlockType, position: BlockCoordinate, fillLevel?: number): VoxelBlock {
 		const definition = this.get(type);
 
 		return {
@@ -177,7 +177,11 @@ export class BlockRegistry {
 			solid: definition.solid,
 			passable: definition.passable,
 			collectable: definition.collectable,
-			transparent: definition.transparent
+			transparent: definition.transparent,
+			fillLevel:
+				type === 'water' && Number.isFinite(fillLevel)
+					? Math.max(0.02, Math.min(1, fillLevel as number))
+					: undefined
 		};
 	}
 }

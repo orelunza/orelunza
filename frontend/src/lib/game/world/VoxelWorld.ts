@@ -20,14 +20,41 @@ export interface WorldModificationSnapshot {
 	changes: BlockChange[];
 }
 
+export interface LoadedWaterColumnProfile {
+	loaded: boolean;
+	groundSurfaceY: number;
+	generatedWaterBottomY: number | null;
+	generatedWaterSurfaceY: number | null;
+	generatedWaterDepth: number;
+}
+
+interface GeneratedColumnProfile {
+	highestSolidY: number;
+	waterBottomY: number | null;
+	waterTopY: number | null;
+}
+
+interface TransientBlock {
+	type: BlockType;
+	fillLevel?: number;
+}
+
 export class VoxelWorld {
 	private readonly generator: WorldTerrainGenerator;
 	private readonly generatedBlocks = new Map<string, BlockType>();
 	private readonly generatedChunkBlocks = new Map<string, Set<string>>();
+	private readonly generatedColumnProfiles = new Map<string, GeneratedColumnProfile>();
 	private readonly loadedChunks = new Set<string>();
 	private readonly placedBlocks = new Map<string, BlockType>();
+	private readonly placedColumnBlocks = new Map<string, Map<number, BlockType>>();
 	private readonly removedBlocks = new Set<string>();
+	private readonly transientBlocks = new Map<string, TransientBlock>();
+	private readonly transientAir = new Set<string>();
+	private readonly transientChunkBlocks = new Map<string, Set<string>>();
+	private readonly transientWaterColumns = new Map<string, Set<string>>();
+	private readonly transientWaterSignatures = new Map<string, string>();
 	private readonly changes: BlockChange[] = [];
+	private structureVersion = 0;
 
 	constructor(
 		readonly seed: string,
@@ -38,6 +65,10 @@ export class VoxelWorld {
 
 	get terrainGenerator(): WorldTerrainGenerator {
 		return this.generator;
+	}
+
+	get modificationVersion(): number {
+		return this.structureVersion;
 	}
 
 	getLoadedChunks(): ChunkCoordinate[] {
@@ -64,6 +95,7 @@ export class VoxelWorld {
 		}
 
 		this.generateChunk(normalized);
+		this.structureVersion += 1;
 
 		return true;
 	}
@@ -76,7 +108,9 @@ export class VoxelWorld {
 			return false;
 		}
 
+		this.clearTransientOverridesInChunk(normalized);
 		this.deleteGeneratedChunk(key);
+		this.structureVersion += 1;
 
 		return true;
 	}
@@ -113,30 +147,18 @@ export class VoxelWorld {
 	}
 
 	getVisibleBlocks(): VoxelBlock[] {
+		const keys = new Set<string>();
+
+		for (const key of this.generatedBlocks.keys()) keys.add(key);
+		for (const key of this.transientBlocks.keys()) keys.add(key);
+		for (const key of this.placedBlocks.keys()) keys.add(key);
+
 		const blocks: VoxelBlock[] = [];
-
-		for (const [key, type] of this.generatedBlocks) {
-			if (this.removedBlocks.has(key) || this.placedBlocks.has(key)) {
-				continue;
-			}
-
+		for (const key of keys) {
 			const position = parseKey(key);
-
-			if (this.isLoadedBlock(position) && this.isExposed(position)) {
-				blocks.push(BlockRegistry.create(type, position));
-			}
-		}
-
-		for (const [key, type] of this.placedBlocks) {
-			if (this.removedBlocks.has(key) || type === 'air') {
-				continue;
-			}
-
-			const position = parseKey(key);
-
-			if (this.isLoadedBlock(position) && this.isExposed(position)) {
-				blocks.push(BlockRegistry.create(type, position));
-			}
+			if (!this.isLoadedBlock(position)) continue;
+			const block = this.peekLoadedBlock(position);
+			if (block.type !== 'air' && this.isExposed(position)) blocks.push(block);
 		}
 
 		return blocks;
@@ -150,42 +172,17 @@ export class VoxelWorld {
 			return [];
 		}
 
-		const blocks: VoxelBlock[] = [];
-		const generatedKeys = this.generatedChunkBlocks.get(key);
-
-		if (generatedKeys) {
-			for (const blockPositionKey of generatedKeys) {
-				if (this.removedBlocks.has(blockPositionKey) || this.placedBlocks.has(blockPositionKey)) {
-					continue;
-				}
-
-				const position = parseKey(blockPositionKey);
-
-				if (this.isExposed(position)) {
-					const type = this.generatedBlocks.get(blockPositionKey);
-
-					if (type) {
-						blocks.push(BlockRegistry.create(type, position));
-					}
-				}
-			}
+		const keys = new Set<string>(this.generatedChunkBlocks.get(key) ?? []);
+		for (const transientKey of this.transientChunkBlocks.get(key) ?? []) keys.add(transientKey);
+		for (const blockPositionKey of this.placedBlocks.keys()) {
+			if (chunkKey(worldToChunk(parseKey(blockPositionKey))) === key) keys.add(blockPositionKey);
 		}
 
-		// Player-placed blocks are usually few, so scanning this map remains cheap.
-		for (const [blockPositionKey, type] of this.placedBlocks) {
-			if (this.removedBlocks.has(blockPositionKey) || type === 'air') {
-				continue;
-			}
-
+		const blocks: VoxelBlock[] = [];
+		for (const blockPositionKey of keys) {
 			const position = parseKey(blockPositionKey);
-
-			if (chunkKey(worldToChunk(position)) !== key) {
-				continue;
-			}
-
-			if (this.isExposed(position)) {
-				blocks.push(BlockRegistry.create(type, position));
-			}
+			const block = this.peekLoadedBlock(position);
+			if (block.type !== 'air' && this.isExposed(position)) blocks.push(block);
 		}
 
 		return blocks;
@@ -231,15 +228,15 @@ export class VoxelWorld {
 		}
 
 		const key = blockKey(normalized);
-
-		if (this.removedBlocks.has(key)) {
-			return BlockRegistry.create('air', normalized);
-		}
+		if (!this.isLoadedBlock(normalized)) this.loadChunk(worldToChunk(normalized));
 
 		const placed = this.placedBlocks.get(key);
+		if (placed) return BlockRegistry.create(placed, normalized);
 
-		if (placed) {
-			return BlockRegistry.create(placed, normalized);
+		const transient = this.transientBlocks.get(key);
+		if (transient) return BlockRegistry.create(transient.type, normalized, transient.fillLevel);
+		if (this.transientAir.has(key) || this.removedBlocks.has(key)) {
+			return BlockRegistry.create('air', normalized);
 		}
 
 		const generated = this.generatedBlocks.get(key) ?? this.generateBlock(normalized);
@@ -263,6 +260,8 @@ export class VoxelWorld {
 
 		this.removedBlocks.delete(key);
 		this.placedBlocks.set(key, type);
+		this.indexPlacedBlock(normalized, type);
+		this.structureVersion += 1;
 
 		if (track) {
 			this.changes.push({
@@ -286,7 +285,9 @@ export class VoxelWorld {
 		}
 
 		this.placedBlocks.delete(key);
+		this.unindexPlacedBlock(normalized);
 		this.removedBlocks.add(key);
+		this.structureVersion += 1;
 
 		if (track) {
 			this.changes.push({
@@ -310,6 +311,143 @@ export class VoxelWorld {
 		const block = this.getLoadedBlock(position);
 
 		return block !== null && block.solid && !block.passable;
+	}
+
+	getLoadedWaterColumnProfile(x: number, z: number): LoadedWaterColumnProfile {
+		const blockX = Math.floor(x);
+		const blockZ = Math.floor(z);
+		if (!this.hasChunk(worldToChunk({ x: blockX, z: blockZ }))) {
+			return {
+				loaded: false,
+				groundSurfaceY: Math.floor(this.generator.heightAt(blockX, blockZ)) + 1,
+				generatedWaterBottomY: null,
+				generatedWaterSurfaceY: null,
+				generatedWaterDepth: 0
+			};
+		}
+
+		const key = columnKey(blockX, blockZ);
+		const generated = this.generatedColumnProfiles.get(key);
+		const placed = this.placedColumnBlocks.get(key);
+		let highestCandidate = Math.max(
+			Math.floor(this.generator.heightAt(blockX, blockZ)),
+			generated?.highestSolidY ?? WORLD_MIN_Y
+		);
+
+		if (placed) {
+			for (const [y, type] of placed) {
+				const definition = BlockRegistry.get(type);
+				if (definition.solid && !definition.passable)
+					highestCandidate = Math.max(highestCandidate, y);
+			}
+		}
+
+		let highestSolidY = WORLD_MIN_Y - 1;
+		for (let y = Math.min(WORLD_MAX_Y, highestCandidate); y >= WORLD_MIN_Y; y -= 1) {
+			const block = this.peekLoadedBlockWithoutTransient({ x: blockX, y, z: blockZ });
+			if (block.solid && !block.passable) {
+				highestSolidY = y;
+				break;
+			}
+		}
+
+		const groundSurfaceY = Math.max(WORLD_MIN_Y, highestSolidY + 1);
+		const waterBottomY = generated?.waterBottomY ?? null;
+		const waterSurfaceY =
+			generated?.waterTopY === null || generated?.waterTopY === undefined
+				? null
+				: generated.waterTopY + 1;
+		const generatedWaterDepth =
+			waterSurfaceY === null ? 0 : Math.max(0, waterSurfaceY - groundSurfaceY);
+
+		return {
+			loaded: true,
+			groundSurfaceY,
+			generatedWaterBottomY: waterBottomY,
+			generatedWaterSurfaceY: waterSurfaceY,
+			generatedWaterDepth
+		};
+	}
+
+	setTransientWaterColumn(
+		x: number,
+		z: number,
+		groundSurfaceY: number,
+		waterDepth: number,
+		naturalWaterBottomY: number | null,
+		naturalWaterSurfaceY: number | null
+	): boolean {
+		const blockX = Math.floor(x);
+		const blockZ = Math.floor(z);
+		const ground = Math.max(WORLD_MIN_Y, Math.min(WORLD_MAX_Y, Math.floor(groundSurfaceY)));
+		const depth = Math.max(0, Math.min(32, Number.isFinite(waterDepth) ? waterDepth : 0));
+		const signature = `${ground}:${Math.round(depth * 50)}:${naturalWaterBottomY ?? ''}:${naturalWaterSurfaceY ?? ''}`;
+		const column = columnKey(blockX, blockZ);
+		if (this.transientWaterSignatures.get(column) === signature) return false;
+
+		const cleared = this.clearTransientWaterColumn(blockX, blockZ);
+		const desiredTop = Math.min(WORLD_MAX_Y + 1, ground + Math.ceil(depth));
+		const naturalBottom = naturalWaterBottomY ?? desiredTop;
+		const naturalTop = naturalWaterSurfaceY ?? naturalBottom;
+		if (depth <= 0 && naturalTop <= naturalBottom) return cleared;
+
+		const keys = new Set<string>();
+		const startY = Math.max(WORLD_MIN_Y, Math.min(ground, naturalBottom));
+		const endY = Math.min(WORLD_MAX_Y + 1, Math.max(desiredTop, naturalTop));
+
+		for (let y = startY; y < endY; y += 1) {
+			const position = { x: blockX, y, z: blockZ };
+			const key = blockKey(position);
+			const relative = y - ground;
+			if (relative >= 0 && relative < depth) {
+				const fillLevel = Math.min(1, Math.max(0.02, depth - relative));
+				this.transientBlocks.set(key, { type: 'water', fillLevel });
+				this.transientAir.delete(key);
+			} else if (y >= naturalBottom && y < naturalTop) {
+				this.transientBlocks.delete(key);
+				this.transientAir.add(key);
+			} else {
+				continue;
+			}
+
+			keys.add(key);
+			this.indexTransientKey(position, key);
+		}
+
+		this.transientWaterColumns.set(column, keys);
+		this.transientWaterSignatures.set(column, signature);
+		return true;
+	}
+
+	clearTransientWaterColumn(x: number, z: number): boolean {
+		const column = columnKey(Math.floor(x), Math.floor(z));
+		const keys = this.transientWaterColumns.get(column);
+		if (!keys) return false;
+
+		for (const key of keys) {
+			this.transientBlocks.delete(key);
+			this.transientAir.delete(key);
+			const position = parseKey(key);
+			const chunkBlocks = this.transientChunkBlocks.get(chunkKey(worldToChunk(position)));
+			chunkBlocks?.delete(key);
+		}
+
+		this.transientWaterColumns.delete(column);
+		this.transientWaterSignatures.delete(column);
+		return true;
+	}
+
+	clearTransientOverridesInChunk(chunk: ChunkCoordinate): void {
+		const normalized = normalizeChunk(chunk);
+		const key = chunkKey(normalized);
+		const transientKeys = this.transientChunkBlocks.get(key);
+		if (transientKeys) {
+			for (const blockPositionKey of [...transientKeys]) {
+				const position = parseKey(blockPositionKey);
+				this.clearTransientWaterColumn(position.x, position.z);
+			}
+		}
+		this.transientChunkBlocks.delete(key);
 	}
 
 	safeRestorePosition(position: { x: number; y: number; z: number }): {
@@ -437,11 +575,14 @@ export class VoxelWorld {
 
 	loadModifications(snapshot: WorldModificationSnapshot): void {
 		this.placedBlocks.clear();
+		this.placedColumnBlocks.clear();
 		this.removedBlocks.clear();
 		this.changes.length = 0;
 
 		for (const block of snapshot.placedBlocks) {
-			this.placedBlocks.set(blockKey(normalizeBlock(block.position)), block.type);
+			const position = normalizeBlock(block.position);
+			this.placedBlocks.set(blockKey(position), block.type);
+			this.indexPlacedBlock(position, block.type);
 		}
 
 		for (const block of snapshot.removedBlocks) {
@@ -449,6 +590,7 @@ export class VoxelWorld {
 		}
 
 		this.changes.push(...snapshot.changes);
+		this.structureVersion += 1;
 	}
 
 	exportModifications(): WorldModificationSnapshot {
@@ -460,6 +602,48 @@ export class VoxelWorld {
 			removedBlocks: Array.from(this.removedBlocks, parseKey),
 			changes: [...this.changes]
 		};
+	}
+
+	private indexPlacedBlock(position: BlockCoordinate, type: BlockType): void {
+		const key = columnKey(position.x, position.z);
+		const column = this.placedColumnBlocks.get(key) ?? new Map<number, BlockType>();
+		column.set(position.y, type);
+		this.placedColumnBlocks.set(key, column);
+	}
+
+	private unindexPlacedBlock(position: BlockCoordinate): void {
+		const key = columnKey(position.x, position.z);
+		const column = this.placedColumnBlocks.get(key);
+		if (!column) return;
+		column.delete(position.y);
+		if (column.size === 0) this.placedColumnBlocks.delete(key);
+	}
+
+	private indexGeneratedBlock(position: BlockCoordinate, type: BlockType): void {
+		const key = columnKey(position.x, position.z);
+		const profile = this.generatedColumnProfiles.get(key) ?? {
+			highestSolidY: WORLD_MIN_Y - 1,
+			waterBottomY: null,
+			waterTopY: null
+		};
+		const definition = BlockRegistry.get(type);
+		if (definition.solid && !definition.passable && type !== 'wood' && type !== 'leaves') {
+			profile.highestSolidY = Math.max(profile.highestSolidY, position.y);
+		}
+		if (type === 'water') {
+			profile.waterBottomY =
+				profile.waterBottomY === null ? position.y : Math.min(profile.waterBottomY, position.y);
+			profile.waterTopY =
+				profile.waterTopY === null ? position.y : Math.max(profile.waterTopY, position.y);
+		}
+		this.generatedColumnProfiles.set(key, profile);
+	}
+
+	private indexTransientKey(position: BlockCoordinate, key: string): void {
+		const chunk = chunkKey(worldToChunk(position));
+		const keys = this.transientChunkBlocks.get(chunk) ?? new Set<string>();
+		keys.add(key);
+		this.transientChunkBlocks.set(chunk, keys);
 	}
 
 	private generateChunk(chunk: ChunkCoordinate): void {
@@ -476,6 +660,7 @@ export class VoxelWorld {
 			const blockPositionKey = blockKey(block.position);
 
 			this.generatedBlocks.set(blockPositionKey, block.type);
+			this.indexGeneratedBlock(block.position, block.type);
 			blockKeys.add(blockPositionKey);
 		}
 
@@ -492,6 +677,15 @@ export class VoxelWorld {
 
 		for (const blockPositionKey of blockKeys) {
 			this.generatedBlocks.delete(blockPositionKey);
+		}
+
+		const [chunkX = '0', chunkZ = '0'] = key.split(',');
+		const startX = Number.parseInt(chunkX, 10) * 16;
+		const startZ = Number.parseInt(chunkZ, 10) * 16;
+		for (let x = startX; x < startX + 16; x += 1) {
+			for (let z = startZ; z < startZ + 16; z += 1) {
+				this.generatedColumnProfiles.delete(columnKey(x, z));
+			}
 		}
 
 		this.generatedChunkBlocks.delete(key);
@@ -553,21 +747,38 @@ export class VoxelWorld {
 	private peekLoadedBlock(position: BlockCoordinate): VoxelBlock {
 		const normalized = normalizeBlock(position);
 		const key = blockKey(normalized);
-
-		if (this.removedBlocks.has(key)) {
-			return BlockRegistry.create('air', normalized);
-		}
-
 		const placed = this.placedBlocks.get(key);
 
 		if (placed) {
 			return BlockRegistry.create(placed, normalized);
 		}
 
+		const transient = this.transientBlocks.get(key);
+		if (transient) {
+			return BlockRegistry.create(transient.type, normalized, transient.fillLevel);
+		}
+
+		if (this.transientAir.has(key) || this.removedBlocks.has(key)) {
+			return BlockRegistry.create('air', normalized);
+		}
+
 		const generated = this.generatedBlocks.get(key);
 
 		return BlockRegistry.create(generated ?? 'air', normalized);
 	}
+
+	private peekLoadedBlockWithoutTransient(position: BlockCoordinate): VoxelBlock {
+		const normalized = normalizeBlock(position);
+		const key = blockKey(normalized);
+		const placed = this.placedBlocks.get(key);
+		if (placed) return BlockRegistry.create(placed, normalized);
+		if (this.removedBlocks.has(key)) return BlockRegistry.create('air', normalized);
+		return BlockRegistry.create(this.generatedBlocks.get(key) ?? 'air', normalized);
+	}
+}
+
+function columnKey(x: number, z: number): string {
+	return `${Math.floor(x)},${Math.floor(z)}`;
 }
 
 function normalizeChunk(chunk: ChunkCoordinate): ChunkCoordinate {

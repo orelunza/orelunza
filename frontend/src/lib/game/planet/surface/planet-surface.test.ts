@@ -3,6 +3,8 @@ import { Ray, Vector3 } from 'three';
 
 import { EARTH_PLANET } from '../PlanetDefinition';
 import { PlanetCoordinateSystem } from '../PlanetCoordinateSystem';
+import { planetTileKey } from '../PlanetTileId';
+import { canonicalTileToDataTile } from '../../geography/PlanetDataProjection';
 import { createPlanetSurfaceAnchor } from './PlanetSurfaceAnchor';
 import { PlanetLocalCoordinateSystem } from './PlanetLocalCoordinateSystem';
 import { rayToPlanetDestination, resolveSurfaceDestination } from './PlanetSurfaceDestination';
@@ -32,6 +34,8 @@ describe('planet Earth Lot 3 surface bridge', () => {
 			1150
 		);
 		expect(second.id).toBe(first.id);
+		const legacyTile = canonicalTileToDataTile(first.tile, 'legacy-positive-z-east');
+		expect(first.id).toBe(`earth/${planetTileKey(legacyTile)}`);
 		expect(first.frame.east.dot(first.frame.up)).toBeCloseTo(0, 10);
 		expect(first.frame.north.dot(first.frame.up)).toBeCloseTo(0, 10);
 		expect(first.frame.east.clone().cross(first.frame.up).dot(first.frame.north)).toBeCloseTo(
@@ -62,7 +66,7 @@ describe('planet Earth Lot 3 surface bridge', () => {
 		const coordinate = rayToPlanetDestination(ray, EARTH_PLANET, coordinateSystem);
 		expect(coordinate).not.toBeNull();
 		expect(coordinate?.latitudeRadians).toBeCloseTo(0, 8);
-		expect(Math.abs(coordinate?.longitudeRadians ?? 0)).toBeCloseTo(Math.PI / 2, 8);
+		expect(coordinate?.longitudeRadians).toBeCloseTo(-Math.PI / 2, 8);
 	});
 
 	test('rejects ocean destinations and accepts land destinations', () => {

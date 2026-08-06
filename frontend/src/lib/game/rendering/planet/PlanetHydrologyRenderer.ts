@@ -24,8 +24,8 @@ export interface PlanetHydrologyRendererDiagnostics {
 
 const point = new Vector3();
 const normal = new Vector3();
-const MAXIMUM_RIVER_SEGMENTS = 48_000;
-const MAXIMUM_LAKE_POINTS = 24_000;
+const MAXIMUM_RIVER_SEGMENTS = 12_000;
+const MAXIMUM_LAKE_POINTS = 3_000;
 const MAXIMUM_CACHED_TILES = 2048;
 
 interface PreparedHydrologyTile {
@@ -44,7 +44,7 @@ export class PlanetHydrologyRenderer {
 		new LineBasicMaterial({
 			color: new Color('#55c8ff'),
 			transparent: true,
-			opacity: 0.78,
+			opacity: 0.52,
 			depthWrite: false
 		})
 	);
@@ -52,10 +52,10 @@ export class PlanetHydrologyRenderer {
 		this.lakeGeometry,
 		new PointsMaterial({
 			color: new Color('#72d8ff'),
-			size: 2.4,
+			size: 1.25,
 			sizeAttenuation: true,
 			transparent: true,
-			opacity: 0.76,
+			opacity: 0.48,
 			depthWrite: false
 		})
 	);
@@ -106,7 +106,7 @@ export class PlanetHydrologyRenderer {
 				const downstream = hydrology.flowTo[index] ?? -1;
 				const strength = hydrology.riverStrength[index] ?? 0;
 				if (
-					strength > 0.08 &&
+					strength > 0.42 &&
 					downstream >= 0 &&
 					riverPositions.length / 6 < MAXIMUM_RIVER_SEGMENTS
 				) {
@@ -133,7 +133,7 @@ export class PlanetHydrologyRenderer {
 					waterfalls += Number((hydrology.waterfallDropMeters[index] ?? 0) > 0);
 				}
 				if (
-					(hydrology.lakeDepthMeters[index] ?? 0) > 0 &&
+					(hydrology.lakeDepthMeters[index] ?? 0) >= 40 &&
 					lakePositions.length / 3 < MAXIMUM_LAKE_POINTS
 				) {
 					this.pushCellPosition(
@@ -237,7 +237,7 @@ export class PlanetHydrologyRenderer {
 				elevationMeters: elevations,
 				landMask: land,
 				runoff,
-				riverThreshold: Math.max(2.5, resolution * 0.48),
+				riverThreshold: Math.max(4, resolution * 0.82),
 				minimumLakeDepthMeters: 18,
 				minimumWaterfallDropMeters: 90
 			})

@@ -43,6 +43,7 @@ import { BlockRegistry } from './world/BlockRegistry';
 import { VegetationRemovalState } from './vegetation/VegetationRemovalState';
 import { ChunkStreamingSystem } from './world/ChunkStreamingSystem';
 import { createStarterWorld } from './world/WorldGenerator';
+import { LocalWaterSystem, type LocalWaterDebugApi } from './world/water';
 import {
 	STARTER_WORLD_SEED,
 	WORLD_MAX_Y,
@@ -63,6 +64,7 @@ export class GameEngine {
 	private readonly renderer: GameRenderer;
 	private readonly sky: Sky;
 	private readonly world;
+	private readonly localWater: LocalWaterSystem;
 	private readonly chunkStreaming: ChunkStreamingSystem;
 	private readonly player: PlayerController;
 	private readonly keyboard: KeyboardInput;
@@ -236,6 +238,7 @@ export class GameEngine {
 			spawn,
 			Math.max(1, bounds.width) / Math.max(1, bounds.height)
 		);
+		this.localWater = new LocalWaterSystem(this.world);
 		this.placementSystem = new BlockPlacementSystem(
 			this.world,
 			this.inventory,
@@ -264,7 +267,15 @@ export class GameEngine {
 			}
 		);
 		this.persistence.setEnvironment(this.sky);
+		this.persistence.setLocalWater(this.localWater);
 		this.persistence.setVegetationRemovals(this.vegetationRemovals);
+		if (import.meta.env.DEV || import.meta.env.MODE === 'test') {
+			(
+				globalThis as typeof globalThis & {
+					__ORELUNZA_WATER__?: LocalWaterDebugApi;
+				}
+			).__ORELUNZA_WATER__ = this.localWater.createDebugApi();
+		}
 		this.removalSystem = new CreationRemovalSystem(
 			this.world,
 			this.breakingSystem,
@@ -313,6 +324,7 @@ export class GameEngine {
 
 			this.world.loadChunk(worldToChunk(this.player.state.position));
 			this.chunkStreaming.synchronizeLoaded(this.world.getLoadedChunks());
+			this.localWater.activate(this.player.state.position);
 
 			this.renderer.rebuildWorld(this.world);
 			this.diagnostics.worldRebuilds += 1;
@@ -538,9 +550,16 @@ export class GameEngine {
 			delete (
 				globalThis as typeof globalThis & {
 					__ORELUNZA_WEATHER__?: ReturnType<Sky['createDebugApi']>;
+					__ORELUNZA_WATER__?: LocalWaterDebugApi;
 				}
 			).__ORELUNZA_WEATHER__;
+			delete (
+				globalThis as typeof globalThis & {
+					__ORELUNZA_WATER__?: LocalWaterDebugApi;
+				}
+			).__ORELUNZA_WATER__;
 		}
+		this.localWater.dispose();
 		this.sky.dispose();
 		this.renderer.dispose();
 		this.emitSnapshot();
@@ -698,6 +717,19 @@ export class GameEngine {
 		this.sky.update(this.player.camera.camera.position, deltaSeconds);
 		this.updateWorldDayAnnouncement(frameStartedAt);
 		this.renderer.updateSurfaceWeather(this.sky.surfaceWeather);
+
+		if (this.status === 'playing') {
+			const waterUpdate = this.localWater.update(
+				this.player.state.position,
+				deltaSeconds,
+				this.sky.localWaterForcing
+			);
+			for (const chunk of waterUpdate.changedChunks) {
+				this.renderer.refreshChunk(this.world, chunk);
+				this.diagnostics.chunkRefreshes += 1;
+			}
+			if (waterUpdate.persistenceDirty) this.persistence.markDirty();
+		}
 		this.avatar.setColdBreath(
 			this.sky.breathVisibility,
 			this.sky.windDirection,

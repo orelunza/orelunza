@@ -40,7 +40,7 @@ def direction(face: str, u: float, v: float) -> tuple[float, float, float]:
 
 def latlon(face: str, u: float, v: float) -> tuple[float, float]:
     x, y, z = direction(face, u, v)
-    return math.degrees(math.asin(y)), math.degrees(math.atan2(z, x))
+    return math.degrees(math.asin(y)), math.degrees(math.atan2(-z, x))
 
 
 def write_tile(path: Path, face_index: int, level: int, x: int, y: int,
@@ -114,6 +114,7 @@ def main() -> None:
         'version': 1,
         'planetId': args.planet_id,
         'dataQuality': 'production',
+        'coordinateConvention': 'right-handed-negative-z-east',
         'tileResolution': args.resolution,
         'minimumLevel': 0,
         'maximumLevel': args.maximum_level,

@@ -4,6 +4,8 @@ import type { BlockChange, BlockCoordinate, BlockType } from './voxel-types';
 import type { CharacterAppearanceV1 } from '../character/CharacterAppearance';
 import type { EnvironmentSaveState } from '../environment/EnvironmentSystem';
 import type { PlanetSurfaceSaveState } from '../planet/surface/PlanetSurfaceState';
+import type { LocalWaterSaveState } from './water/LocalWaterState';
+import { isLocalWaterSaveState } from './water/LocalWaterState';
 
 export interface WorldSaveV1 {
 	version: 1;
@@ -43,6 +45,8 @@ export interface WorldSaveV3 {
 	environment: EnvironmentSaveState;
 	removedVegetationIds?: string[];
 	planetSurface?: PlanetSurfaceSaveState;
+	/** Added by Earth Lot 7; optional for every older V3 save. */
+	localWater?: LocalWaterSaveState;
 	updatedAt: number;
 }
 
@@ -113,6 +117,7 @@ export function isWorldSaveV3(value: unknown): value is WorldSaveV3 {
 				candidate.removedVegetationIds.every((id) => typeof id === 'string'))) &&
 		(candidate.planetSurface === undefined ||
 			(typeof candidate.planetSurface === 'object' && candidate.planetSurface !== null)) &&
+		(candidate.localWater === undefined || isLocalWaterSaveState(candidate.localWater)) &&
 		Array.isArray(candidate.placedBlocks) &&
 		Array.isArray(candidate.removedBlocks)
 	);

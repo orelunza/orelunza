@@ -1,5 +1,6 @@
 import { Vector3 } from 'three';
 import { directionToCubeFaceUv } from '../CubeSphere';
+import { canonicalTileToDataTile } from '../../geography/PlanetDataProjection';
 import type { GeodeticCoordinate, PlanetPosition } from '../GeodeticCoordinate';
 import type { LocalPlanetFrame } from '../LocalPlanetFrame';
 import type { PlanetCoordinateSystem } from '../PlanetCoordinateSystem';
@@ -53,7 +54,10 @@ export function createPlanetSurfaceAnchor(
 		x: Math.min(side - 1, Math.max(0, Math.floor(faceUv.u * side))),
 		y: Math.min(side - 1, Math.max(0, Math.floor(faceUv.v * side)))
 	};
-	const id = `earth/${planetTileKey(tile)}`;
+	// Keep region/save identifiers compatible with worlds created before the
+	// right-handed Earth migration. Runtime geometry uses the canonical tile.
+	const stableIdTile = canonicalTileToDataTile(tile, 'legacy-positive-z-east');
+	const id = `earth/${planetTileKey(stableIdTile)}`;
 
 	return {
 		id,

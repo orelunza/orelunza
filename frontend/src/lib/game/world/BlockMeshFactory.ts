@@ -95,7 +95,11 @@ export class BlockMeshFactory {
 				helper.rotation.set(0, 0, 0);
 				helper.scale.set(1, 1, 1);
 
-				if (type === 'flower') {
+				if (type === 'water') {
+					const fillLevel = Math.max(0.02, Math.min(1, block.fillLevel ?? 1));
+					helper.position.y = block.position.y + fillLevel * 0.5;
+					helper.scale.y = fillLevel;
+				} else if (type === 'flower') {
 					helper.position.y = block.position.y + 0.31;
 					helper.scale.setScalar(0.75 + pseudoRandom(block.position.x, block.position.z) * 0.45);
 					helper.rotation.y = pseudoRandom(block.position.z, block.position.x) * Math.PI;

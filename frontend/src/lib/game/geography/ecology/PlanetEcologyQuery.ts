@@ -1,8 +1,10 @@
-import { Vector3 } from 'three';
-import { directionToCubeFaceUv } from '../../planet/CubeSphere';
 import type { GeodeticCoordinate } from '../../planet/GeodeticCoordinate';
 import { geographicTileAncestor } from '../GeographicTileId';
-import type { PlanetDataManifest } from '../PlanetDataManifest';
+import {
+	resolvePlanetDataCoordinateConvention,
+	type PlanetDataManifest
+} from '../PlanetDataManifest';
+import { geodeticToDataFaceUv } from '../PlanetDataProjection';
 import { EcologicalTileCache } from './EcologicalTileCache';
 import type { EcologicalTileProvider } from './EcologicalTileProvider';
 import { sampleEcologicalTile } from './EcologicalTileSampler';
@@ -73,12 +75,10 @@ export class PlanetEcologyQuery {
 		if (![latitude, longitude].every(Number.isFinite)) {
 			throw new RangeError('Ecology query coordinate must be finite.');
 		}
-		const direction = new Vector3(
-			Math.cos(latitude) * Math.cos(longitude),
-			Math.sin(latitude),
-			Math.cos(latitude) * Math.sin(longitude)
+		const faceUv = geodeticToDataFaceUv(
+			coordinate,
+			resolvePlanetDataCoordinateConvention(manifest)
 		);
-		const faceUv = directionToCubeFaceUv(direction);
 		const targetLevel = Math.max(minimum, Math.min(maximum, Math.trunc(requestedLevel ?? maximum)));
 		const targetSide = 2 ** targetLevel;
 		const target = {

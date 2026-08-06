@@ -59,6 +59,8 @@ export interface PlanetRendererDiagnostics {
 	waterfalls: number;
 }
 
+const MAXIMUM_HYDROLOGY_ALTITUDE_METERS = 1_500_000;
+
 const SEGMENTS_PER_QUALITY: Readonly<Record<PlanetLodQuality, number>> = Object.freeze({
 	low: 2,
 	medium: 4,
@@ -84,7 +86,8 @@ export class PlanetRenderer {
 	private disposed = false;
 	private geometryRebuilds = 0;
 	private reliefExaggeration = 1;
-	private hydrologyRequestedVisible = true;
+	private hydrologyRequestedVisible = false;
+	private hydrologyDisplayActive = false;
 	private diagnosticsState: PlanetRendererDiagnostics = {
 		activeTiles: 0,
 		maximumLodLevel: 0,
@@ -128,6 +131,7 @@ export class PlanetRenderer {
 		this.surface.renderOrder = 2;
 		this.ocean = new PlanetOceanRenderer(definition);
 		this.hydrology = new PlanetHydrologyRenderer(definition);
+		this.hydrology.setVisible(false);
 		this.coastline = new CoastlineRenderer(definition);
 		void this.coastline.load();
 		this.countries = new CountryBoundaryRenderer(definition);
@@ -186,7 +190,13 @@ export class PlanetRenderer {
 			? geodetic.altitudeMeters
 			: Math.max(0, cameraDistance - this.definition.equatorialRadiusMeters);
 		this.reliefExaggeration = PlanetRenderer.reliefForAltitude(cameraAltitudeMeters);
-		this.hydrology.setVisible(this.hydrologyRequestedVisible && cameraAltitudeMeters >= 20_000);
+		const hydrologyDisplayActive =
+			this.hydrologyRequestedVisible && cameraAltitudeMeters <= MAXIMUM_HYDROLOGY_ALTITUDE_METERS;
+		if (hydrologyDisplayActive !== this.hydrologyDisplayActive) {
+			this.hydrologyDisplayActive = hydrologyDisplayActive;
+			this.hydrology.setVisible(hydrologyDisplayActive);
+			if (hydrologyDisplayActive) this.tileSignature = '';
+		}
 		const geography = this.streaming.geography.diagnostics;
 		this.geographyDebug.update(geography);
 		const signature = `${snapshot.tiles.map(planetTileKey).join('|')}@${geography.revision}@${this.reliefExaggeration}`;
@@ -241,7 +251,13 @@ export class PlanetRenderer {
 	}
 
 	setHydrologyVisible(visible: boolean): void {
+		if (visible === this.hydrologyRequestedVisible) return;
 		this.hydrologyRequestedVisible = visible;
+		if (!visible) {
+			this.hydrologyDisplayActive = false;
+			this.hydrology.setVisible(false);
+		}
+		this.tileSignature = '';
 	}
 
 	setCountryBoundariesVisible(visible: boolean): void {
@@ -288,7 +304,9 @@ export class PlanetRenderer {
 		this.surface.geometry.dispose();
 		this.surface.geometry = geometry.surface;
 		this.debugOverlay.setGeometry(geometry.grid);
-		this.hydrology.rebuild(snapshot.tiles, this.streaming.geography, this.reliefExaggeration);
+		if (this.hydrologyDisplayActive) {
+			this.hydrology.rebuild(snapshot.tiles, this.streaming.geography, this.reliefExaggeration);
+		}
 		this.geometryRebuilds += 1;
 		this.diagnosticsState = {
 			...this.diagnosticsState,
@@ -301,16 +319,16 @@ export class PlanetRenderer {
 
 	private static reliefForAltitude(altitudeMeters: number): number {
 		if (!Number.isFinite(altitudeMeters) || altitudeMeters >= 5_000_000) {
-			return 30;
+			return 3;
 		}
 		if (altitudeMeters >= 1_000_000) {
-			return 20;
+			return 2.5;
 		}
 		if (altitudeMeters >= 250_000) {
-			return 10;
+			return 2;
 		}
 		if (altitudeMeters >= 60_000) {
-			return 4;
+			return 1.4;
 		}
 		return 1;
 	}

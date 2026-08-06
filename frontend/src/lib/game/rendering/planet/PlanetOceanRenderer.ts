@@ -32,12 +32,13 @@ export class PlanetOceanRenderer {
 			uSunDirection: { value: new Vector3(0.45, 0.72, 0.52).normalize() }
 		};
 		this.object = new Mesh(
-			new SphereGeometry(definition.renderRadiusUnits * 1.00018, 128, 96),
+			new SphereGeometry(definition.renderRadiusUnits * 0.999985, 128, 96),
 			new ShaderMaterial({
 				uniforms: this.uniforms,
 				transparent: true,
 				opacity: 0.9,
-				depthWrite: true,
+				depthWrite: false,
+				depthTest: true,
 				vertexShader: `
 					uniform float uTime;
 					uniform float uRadius;
@@ -57,13 +58,13 @@ export class PlanetOceanRenderer {
 						float latitude = asin(clamp(radial.y, -1.0, 1.0));
 						vec2 p = vec2(longitude * 2.6, latitude * 4.0);
 						vec2 crossWind = vec2(-uWind.y, uWind.x);
-						float primary = wave(p, uWind, 3.2, 0.72);
-						float secondary = wave(p, crossWind, 5.6, -0.48);
-						float detail = wave(p, normalize(uWind + crossWind * 0.38), 10.5, 1.16);
+						float primary = wave(p, uWind, 3.2, 0.09);
+						float secondary = wave(p, crossWind, 5.6, -0.06);
+						float detail = wave(p, normalize(uWind + crossWind * 0.38), 10.5, 0.14);
 						float combined = primary * 0.58 + secondary * 0.28 + detail * 0.14;
-						float displacement = combined * (0.00016 + uWindStrength * 0.00022) * uRadius;
+						float displacement = combined * (0.000035 + uWindStrength * 0.000055) * uRadius;
 						vec3 displaced = position + radial * displacement;
-						vCrest = smoothstep(0.48, 0.94, combined) * (0.22 + uWindStrength * 0.78);
+						vCrest = smoothstep(0.82, 0.99, combined) * (0.08 + uWindStrength * 0.24);
 						vWorldNormal = normalize(mat3(modelMatrix) * radial);
 						vec4 world = modelMatrix * vec4(displaced, 1.0);
 						vWorldPosition = world.xyz;
@@ -88,8 +89,8 @@ export class PlanetOceanRenderer {
 						vec3 water = mix(uDeepColor, uShallowColor, clamp(latitudeLight + fresnel * 0.34, 0.0, 1.0));
 						water += vec3(0.35, 0.48, 0.56) * fresnel * 0.34;
 						water += vec3(1.0, 0.94, 0.78) * sun * 0.72;
-						water = mix(water, uFoamColor, vCrest * 0.38);
-						float alpha = 0.82 + fresnel * 0.14 + vCrest * 0.04;
+						water = mix(water, uFoamColor, vCrest * 0.08);
+						float alpha = 0.86 + fresnel * 0.1;
 						gl_FragColor = vec4(water, alpha);
 					}
 				`

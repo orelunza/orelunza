@@ -38,6 +38,8 @@ export interface VoxelBlock {
 	passable: boolean;
 	collectable: boolean;
 	transparent: boolean;
+	/** Fractional vertical fill used by the local shallow-water renderer. */
+	fillLevel?: number;
 }
 
 export interface BlockDefinition {

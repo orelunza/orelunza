@@ -80,6 +80,81 @@ describe('planet Earth Lot 1 foundation', () => {
 		}
 	});
 
+	test('uses a right-handed Earth frame with east on negative Z', () => {
+		const greenwich = coordinateSystem.geodeticToPlanet({
+			latitudeRadians: 0,
+			longitudeRadians: 0,
+			altitudeMeters: 0
+		});
+		const eastNinety = coordinateSystem.geodeticToPlanet({
+			latitudeRadians: 0,
+			longitudeRadians: Math.PI / 2,
+			altitudeMeters: 0
+		});
+		const frame = coordinateSystem.localFrameAt({
+			latitudeRadians: 0,
+			longitudeRadians: 0,
+			altitudeMeters: 0
+		});
+
+		expect(greenwich.x).toBeGreaterThan(0);
+		expect(Math.abs(greenwich.z)).toBeLessThan(1e-6);
+		expect(eastNinety.z).toBeLessThan(0);
+		expect(frame.east.x).toBeCloseTo(0, 10);
+		expect(frame.east.y).toBeCloseTo(0, 10);
+		expect(frame.east.z).toBeCloseTo(-1, 10);
+		expect(frame.north.x).toBeCloseTo(0, 10);
+		expect(frame.north.y).toBeCloseTo(1, 10);
+		expect(frame.north.z).toBeCloseTo(0, 10);
+		expect(frame.east.clone().cross(frame.north).dot(frame.up)).toBeCloseTo(1, 10);
+	});
+
+	test('projects eastern longitudes to the right of western longitudes', () => {
+		const camera = new PerspectiveCamera(45, 1, 0.1, 1000);
+		const centre = coordinateSystem.geodeticToPlanet({
+			latitudeRadians: 0,
+			longitudeRadians: (20 * Math.PI) / 180,
+			altitudeMeters: 0
+		});
+		camera.position
+			.set(centre.x, centre.y, centre.z)
+			.normalize()
+			.multiplyScalar(EARTH_PLANET.renderRadiusUnits * 3);
+		camera.lookAt(0, 0, 0);
+		camera.updateMatrixWorld(true);
+
+		const west = coordinateSystem.geodeticToPlanet({
+			latitudeRadians: 0,
+			longitudeRadians: (10 * Math.PI) / 180,
+			altitudeMeters: 0
+		});
+		const east = coordinateSystem.geodeticToPlanet({
+			latitudeRadians: 0,
+			longitudeRadians: (30 * Math.PI) / 180,
+			altitudeMeters: 0
+		});
+		const scale = EARTH_PLANET.renderRadiusUnits / EARTH_PLANET.equatorialRadiusMeters;
+		const westScreen = new Vector3(west.x, west.y, west.z).multiplyScalar(scale).project(camera);
+		const eastScreen = new Vector3(east.x, east.y, east.z).multiplyScalar(scale).project(camera);
+		const drc = coordinateSystem.geodeticToPlanet({
+			latitudeRadians: (-3 * Math.PI) / 180,
+			longitudeRadians: (23 * Math.PI) / 180,
+			altitudeMeters: 0
+		});
+		const madagascar = coordinateSystem.geodeticToPlanet({
+			latitudeRadians: (-19 * Math.PI) / 180,
+			longitudeRadians: (47 * Math.PI) / 180,
+			altitudeMeters: 0
+		});
+		const drcScreen = new Vector3(drc.x, drc.y, drc.z).multiplyScalar(scale).project(camera);
+		const madagascarScreen = new Vector3(madagascar.x, madagascar.y, madagascar.z)
+			.multiplyScalar(scale)
+			.project(camera);
+
+		expect(eastScreen.x).toBeGreaterThan(westScreen.x);
+		expect(madagascarScreen.x).toBeGreaterThan(drcScreen.x);
+	});
+
 	test('maps every cube face centre to a unique direction and back', () => {
 		const keys = new Set<string>();
 		for (const face of PLANET_FACES) {

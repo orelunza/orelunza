@@ -1,5 +1,7 @@
 import type { GeographicSample, GeographicTile } from '../geography/GeographicTile';
 import { sampleGeographicTile } from '../geography/GeographicTileSampler';
+import { canonicalFaceUvToDataFaceUv } from '../geography/PlanetDataProjection';
+import type { PlanetDataCoordinateConvention } from '../geography/PlanetDataManifest';
 import { planetTileUvBounds, type PlanetTileId } from './PlanetTileId';
 
 const EMPTY_SAMPLE: Readonly<GeographicSample> = Object.freeze({
@@ -14,9 +16,11 @@ export class PlanetTerrainSampler {
 		renderTile: Readonly<PlanetTileId>,
 		dataTile: Readonly<GeographicTile> | null,
 		faceU: number,
-		faceV: number
+		faceV: number,
+		convention: PlanetDataCoordinateConvention = 'legacy-positive-z-east'
 	): GeographicSample {
-		if (!dataTile || dataTile.id.face !== renderTile.face) {
+		const dataFaceUv = canonicalFaceUvToDataFaceUv(renderTile.face, faceU, faceV, convention);
+		if (!dataTile || dataTile.id.face !== dataFaceUv.face) {
 			return { ...EMPTY_SAMPLE };
 		}
 		const bounds = planetTileUvBounds(dataTile.id);
@@ -24,8 +28,8 @@ export class PlanetTerrainSampler {
 		const height = Math.max(Number.EPSILON, bounds.maxV - bounds.minV);
 		return sampleGeographicTile(
 			dataTile,
-			(faceU - bounds.minU) / width,
-			(faceV - bounds.minV) / height
+			(dataFaceUv.u - bounds.minU) / width,
+			(dataFaceUv.v - bounds.minV) / height
 		);
 	}
 }

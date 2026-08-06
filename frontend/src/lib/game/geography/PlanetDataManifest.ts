@@ -1,4 +1,6 @@
 export type PlanetDataQuality = 'preview' | 'production';
+export type PlanetDataCoordinateConvention =
+	'legacy-positive-z-east' | 'right-handed-negative-z-east';
 
 export interface PlanetDataSourceAttribution {
 	name: string;
@@ -12,6 +14,7 @@ export interface PlanetDataManifest {
 	version: 1;
 	planetId: string;
 	dataQuality: PlanetDataQuality;
+	coordinateConvention?: PlanetDataCoordinateConvention;
 	tileResolution: number;
 	minimumLevel: number;
 	maximumLevel: number;
@@ -64,7 +67,10 @@ export function validatePlanetDataManifest(value: unknown): PlanetDataManifest {
 		!manifest.tilePathTemplate.includes('{level}') ||
 		!manifest.tilePathTemplate.includes('{x}') ||
 		!manifest.tilePathTemplate.includes('{y}') ||
-		!Array.isArray(manifest.sources)
+		!Array.isArray(manifest.sources) ||
+		(manifest.coordinateConvention !== undefined &&
+			manifest.coordinateConvention !== 'legacy-positive-z-east' &&
+			manifest.coordinateConvention !== 'right-handed-negative-z-east')
 	) {
 		throw new TypeError('Invalid Orelunza geography manifest values.');
 	}
@@ -89,6 +95,12 @@ export function validatePlanetDataManifest(value: unknown): PlanetDataManifest {
 	}
 
 	return manifest;
+}
+
+export function resolvePlanetDataCoordinateConvention(
+	manifest: Readonly<PlanetDataManifest>
+): PlanetDataCoordinateConvention {
+	return manifest.coordinateConvention ?? 'legacy-positive-z-east';
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

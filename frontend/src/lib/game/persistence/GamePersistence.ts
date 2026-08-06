@@ -8,6 +8,7 @@ import type { CharacterAppearanceV1 } from '../character/CharacterAppearance';
 import type { EnvironmentSaveState } from '../environment/EnvironmentSystem';
 import { DEFAULT_DAY_LENGTH_SECONDS } from '../environment/CelestialClock';
 import type { PlanetSurfaceSaveState } from '../planet/surface/PlanetSurfaceState';
+import type { LocalWaterSaveState } from '../world/water/LocalWaterState';
 
 /**
  * Minimal environment surface the persistence layer talks to. The concrete
@@ -29,6 +30,11 @@ export interface PersistablePlanetSurface {
 	restore(state: PlanetSurfaceSaveState): void;
 }
 
+export interface PersistableLocalWater {
+	serialize(): LocalWaterSaveState;
+	restore(state: LocalWaterSaveState | null | undefined): void;
+}
+
 export class GamePersistence {
 	private dirty = false;
 	private status: SaveStatus = 'idle';
@@ -37,6 +43,7 @@ export class GamePersistence {
 	private environment: PersistableEnvironment | null = null;
 	private vegetationRemovals: PersistableVegetationRemovals | null = null;
 	private planetSurface: PersistablePlanetSurface | null = null;
+	private localWater: PersistableLocalWater | null = null;
 	private readonly store = new IndexedDbWorldStore();
 
 	constructor(
@@ -71,6 +78,10 @@ export class GamePersistence {
 		this.planetSurface = planetSurface;
 	}
 
+	setLocalWater(localWater: PersistableLocalWater): void {
+		this.localWater = localWater;
+	}
+
 	async load(): Promise<WorldSave | null> {
 		const save = await this.store.load(this.worldId);
 
@@ -95,8 +106,10 @@ export class GamePersistence {
 			if (save.planetSurface && this.planetSurface) {
 				this.planetSurface.restore(save.planetSurface);
 			}
+			this.localWater?.restore(save.localWater);
 		} else {
 			this.vegetationRemovals?.restore([]);
+			this.localWater?.restore(undefined);
 		}
 
 		this.lastSavedPayload = JSON.stringify(this.buildSave(save.updatedAt));
@@ -160,6 +173,7 @@ export class GamePersistence {
 			environment: this.buildEnvironmentSave(),
 			removedVegetationIds: this.vegetationRemovals?.serialize() ?? [],
 			planetSurface: this.planetSurface?.serialize(),
+			localWater: this.localWater?.serialize(),
 			updatedAt
 		};
 	}

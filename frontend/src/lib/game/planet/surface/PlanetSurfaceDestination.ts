@@ -53,7 +53,7 @@ export function rayToPlanetDestination(
 	coordinateSystem: PlanetCoordinateSystem,
 	target = new Vector3()
 ): GeodeticCoordinate | null {
-	const sphere = new Sphere(new Vector3(), definition.renderRadiusUnits);
+	const sphere = new Sphere(new Vector3(), definition.renderRadiusUnits * 1.012);
 	const intersection = ray.intersectSphere(sphere, target);
 	if (!intersection) {
 		return null;

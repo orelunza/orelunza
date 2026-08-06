@@ -65,7 +65,13 @@ export class PlanetTileRenderer {
 				const v = bounds.minV + ((bounds.maxV - bounds.minV) * row) / segments;
 				for (let column = 0; column <= segments; column += 1) {
 					const u = bounds.minU + ((bounds.maxU - bounds.minU) * column) / segments;
-					const sample = terrainSampler.sample(tile, dataTile, u, v);
+					const sample = terrainSampler.sample(
+						tile,
+						dataTile,
+						u,
+						v,
+						geography?.dataCoordinateConvention ?? 'legacy-positive-z-east'
+					);
 					const elevationMeters =
 						sample.land >= 0.5
 							? Math.max(25, sample.elevationMeters)
