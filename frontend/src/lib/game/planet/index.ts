@@ -11,3 +11,7 @@ export * from './PlanetQuadtree';
 export * from './PlanetState';
 export * from './PlanetTileId';
 export * from './PlanetVisibility';
+export * from './PlanetGeographySystem';
+export * from './PlanetStreamingSystem';
+export * from './PlanetTerrainSampler';
+export * from './PlanetTileDataState';

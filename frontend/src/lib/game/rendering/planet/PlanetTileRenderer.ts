@@ -1,22 +1,39 @@
 import { BufferAttribute, BufferGeometry, Color, Vector3 } from 'three';
 import { cubeSphereSurfacePoint } from '../../planet/CubeSphere';
 import { EARTH_PLANET, type PlanetDefinition } from '../../planet/PlanetDefinition';
+import type { PlanetGeographySystem } from '../../planet/PlanetGeographySystem';
+import { PlanetTerrainSampler } from '../../planet/PlanetTerrainSampler';
 import { planetTileUvBounds, type PlanetTileId } from '../../planet/PlanetTileId';
 
 export interface PlanetTileGeometryResult {
 	surface: BufferGeometry;
 	grid: BufferGeometry;
 	triangleCount: number;
+	loadedDataTiles: number;
+	landVertexFraction: number;
+	minimumElevationMeters: number;
+	maximumElevationMeters: number;
 }
 
 const point = new Vector3();
+const normal = new Vector3();
 const colour = new Color();
+const deepOcean = new Color('#071f4d');
+const shelfOcean = new Color('#217fb0');
+const beach = new Color('#d8c58e');
+const lowland = new Color('#4d8651');
+const highland = new Color('#8b7645');
+const mountain = new Color('#81766b');
+const snow = new Color('#e7e8e5');
+const terrainSampler = new PlanetTerrainSampler();
 
 export class PlanetTileRenderer {
 	static buildGeometry(
 		tiles: readonly PlanetTileId[],
 		segmentsPerTile: number,
-		definition: Readonly<PlanetDefinition> = EARTH_PLANET
+		definition: Readonly<PlanetDefinition> = EARTH_PLANET,
+		geography?: PlanetGeographySystem,
+		reliefExaggeration = 1
 	): PlanetTileGeometryResult {
 		const segments = Math.max(1, Math.floor(segmentsPerTile));
 		const verticesPerSide = segments + 1;
@@ -29,28 +46,49 @@ export class PlanetTileRenderer {
 		const indices = new IndexArray(tiles.length * indicesPerTile);
 		const gridPositions: number[] = [];
 		const renderScale = definition.renderRadiusUnits / definition.equatorialRadiusMeters;
+		const exaggeration = Math.max(0, Number.isFinite(reliefExaggeration) ? reliefExaggeration : 1);
 		let positionOffset = 0;
 		let indexOffset = 0;
+		let loadedDataTiles = 0;
+		let landVertices = 0;
+		let minimumElevationMeters = Number.POSITIVE_INFINITY;
+		let maximumElevationMeters = Number.NEGATIVE_INFINITY;
 
 		for (let tileIndex = 0; tileIndex < tiles.length; tileIndex += 1) {
 			const tile = tiles[tileIndex];
 			const bounds = planetTileUvBounds(tile);
 			const baseVertex = tileIndex * verticesPerTile;
-			const levelTint = Math.min(1, tile.level / Math.max(1, definition.maximumLodLevel));
-			colour.setHSL(0.56 + levelTint * 0.018, 0.55, 0.31 + levelTint * 0.08);
+			const dataTile = geography?.resolveTile(tile) ?? null;
+			loadedDataTiles += Number(dataTile !== null);
 
 			for (let row = 0; row <= segments; row += 1) {
 				const v = bounds.minV + ((bounds.maxV - bounds.minV) * row) / segments;
 				for (let column = 0; column <= segments; column += 1) {
 					const u = bounds.minU + ((bounds.maxU - bounds.minU) * column) / segments;
-					cubeSphereSurfacePoint(tile.face, u, v, definition, point).multiplyScalar(renderScale);
+					const sample = terrainSampler.sample(tile, dataTile, u, v);
+					const elevationMeters =
+						sample.land >= 0.5
+							? Math.max(25, sample.elevationMeters)
+							: Math.min(-10, sample.elevationMeters);
+					minimumElevationMeters = Math.min(minimumElevationMeters, elevationMeters);
+					maximumElevationMeters = Math.max(maximumElevationMeters, elevationMeters);
+					landVertices += Number(sample.land >= 0.5);
+
+					cubeSphereSurfacePoint(tile.face, u, v, definition, point);
+					normal.copy(point).normalize();
+					point.addScaledVector(normal, elevationMeters * exaggeration).multiplyScalar(renderScale);
 					positions[positionOffset] = point.x;
 					positions[positionOffset + 1] = point.y;
 					positions[positionOffset + 2] = point.z;
-					point.normalize();
-					normals[positionOffset] = point.x;
-					normals[positionOffset + 1] = point.y;
-					normals[positionOffset + 2] = point.z;
+					normals[positionOffset] = normal.x;
+					normals[positionOffset + 1] = normal.y;
+					normals[positionOffset + 2] = normal.z;
+					PlanetTileRenderer.sampleColour(
+						sample.land,
+						elevationMeters,
+						sample.coastProximity,
+						colour
+					);
 					colours[positionOffset] = colour.r;
 					colours[positionOffset + 1] = colour.g;
 					colours[positionOffset + 2] = colour.b;
@@ -87,11 +125,42 @@ export class PlanetTileRenderer {
 		grid.setAttribute('position', new BufferAttribute(new Float32Array(gridPositions), 3));
 		grid.computeBoundingSphere();
 
+		const totalVertices = Math.max(1, tiles.length * verticesPerTile);
 		return {
 			surface,
 			grid,
-			triangleCount: (tiles.length * indicesPerTile) / 3
+			triangleCount: (tiles.length * indicesPerTile) / 3,
+			loadedDataTiles,
+			landVertexFraction: landVertices / totalVertices,
+			minimumElevationMeters: Number.isFinite(minimumElevationMeters) ? minimumElevationMeters : 0,
+			maximumElevationMeters: Number.isFinite(maximumElevationMeters) ? maximumElevationMeters : 0
 		};
+	}
+
+	private static sampleColour(
+		land: number,
+		elevationMeters: number,
+		coastProximity: number,
+		target: Color
+	): void {
+		if (land < 0.5) {
+			const depth = Math.max(0, -elevationMeters);
+			target.lerpColors(shelfOcean, deepOcean, Math.min(1, depth / 7500));
+			return;
+		}
+		if (coastProximity > 0.42 && elevationMeters < 260) {
+			target.lerpColors(lowland, beach, Math.min(1, coastProximity));
+			return;
+		}
+		if (elevationMeters < 900) {
+			target.lerpColors(lowland, highland, Math.max(0, elevationMeters / 900) * 0.34);
+			return;
+		}
+		if (elevationMeters < 3500) {
+			target.lerpColors(highland, mountain, (elevationMeters - 900) / 2600);
+			return;
+		}
+		target.lerpColors(mountain, snow, Math.min(1, (elevationMeters - 3500) / 3500));
 	}
 
 	private static appendTileGrid(
@@ -113,7 +182,7 @@ export class PlanetTileRenderer {
 					startV + (endV - startV) * from,
 					definition,
 					point
-				).multiplyScalar(renderScale * 1.00035);
+				).multiplyScalar(renderScale * 1.0012);
 				positions.push(point.x, point.y, point.z);
 				cubeSphereSurfacePoint(
 					tile.face,
@@ -121,7 +190,7 @@ export class PlanetTileRenderer {
 					startV + (endV - startV) * to,
 					definition,
 					point
-				).multiplyScalar(renderScale * 1.00035);
+				).multiplyScalar(renderScale * 1.0012);
 				positions.push(point.x, point.y, point.z);
 			}
 		};

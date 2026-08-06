@@ -1,0 +1,40 @@
+{
+  "format": "orelunza-geography-pack",
+  "version": 1,
+  "planetId": "earth",
+  "dataQuality": "preview",
+  "tileResolution": 17,
+  "minimumLevel": 0,
+  "maximumLevel": 3,
+  "tileExtension": "orgt",
+  "elevationEncoding": "int16-meters",
+  "maskEncoding": "uint8-land-255-ocean-0",
+  "minimumElevationMeters": -10152,
+  "maximumElevationMeters": 8849,
+  "sources": [
+    {
+      "name": "Natural Earth low resolution country polygons",
+      "role": "land mask and coastline",
+      "license": "public domain",
+      "url": "https://www.naturalearthdata.com/"
+    },
+    {
+      "name": "ETOPO1 global colour relief preview",
+      "role": "coarse visual elevation and bathymetry proxy",
+      "license": "public-domain source imagery; preview values are not scientific measurements",
+      "url": "https://www.ncei.noaa.gov/products/etopo-global-relief-model"
+    },
+    {
+      "name": "GEBCO_2026",
+      "role": "production elevation and bathymetry import target",
+      "license": "public domain with source acknowledgement required",
+      "url": "https://www.gebco.net/data-products-gridded-bathymetry-data/gebco2026-grid"
+    }
+  ],
+  "coastlinePath": "coastlines-110m.json",
+  "countriesIndexPath": "countries-index.json",
+  "tilePathTemplate": "tiles/{face}/{level}/{x}/{y}.orgt",
+  "generatedSampleCount": 147390,
+  "landSampleFraction": 0.282597,
+  "note": "Bundled preview pack gives real continent/coastline shapes and a coarse ETOPO-derived visual relief proxy. Run the GEBCO importer for production terrain values."
+}

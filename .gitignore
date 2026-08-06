@@ -25,3 +25,10 @@ plan.md
 # Local Reallusion source assets
 frontend/static/assets/characters/orelunza-citizen/reallusion/
 reallusion-character-preview.png
+
+# Planet data build sources and generated full-resolution packs
+.cache/planet-data/
+planet-data/sources/
+planet-data/work/
+planet-data/full/
+frontend/static/planet-data/full/

@@ -15,7 +15,8 @@
 
 	let canvas = $state<HTMLCanvasElement | null>(null);
 	let quality = $state<PlanetLodQuality>('medium');
-	let gridVisible = $state(true);
+	let gridVisible = $state(false);
+	let coastlinesVisible = $state(true);
 	let latitude = $state(0);
 	let longitude = $state(0);
 	let altitudeKm = $state(0);
@@ -23,6 +24,16 @@
 	let triangles = $state(0);
 	let maximumLod = $state(0);
 	let geometryRebuilds = $state(0);
+	let geographyReady = $state(false);
+	let geographyQuality = $state('unavailable');
+	let loadedDataTiles = $state(0);
+	let requestedDataTiles = $state(0);
+	let fallbackDataTiles = $state(0);
+	let cacheEntries = $state(0);
+	let cacheKilobytes = $state(0);
+	let landPercent = $state(0);
+	let elevationRange = $state('0 / 0 m');
+	let reliefExaggeration = $state(1);
 	let planetRenderer: PlanetRenderer | null = null;
 
 	$effect(() => {
@@ -31,6 +42,10 @@
 
 	$effect(() => {
 		planetRenderer?.setDebugVisible(gridVisible);
+	});
+
+	$effect(() => {
+		planetRenderer?.setCoastlinesVisible(coastlinesVisible);
 	});
 
 	onMount(() => {
@@ -50,8 +65,9 @@
 		const planet = new PlanetRenderer(scene, undefined, quality);
 		planetRenderer = planet;
 		planet.setDebugVisible(gridVisible);
-		scene.add(new AmbientLight(0x6d86a7, 1.2));
-		const sun = new DirectionalLight(0xffffff, 3.2);
+		planet.setCoastlinesVisible(coastlinesVisible);
+		scene.add(new AmbientLight(0x7892b0, 1.4));
+		const sun = new DirectionalLight(0xffffff, 3.4);
 		sun.position.set(180, 120, 240);
 		scene.add(sun);
 
@@ -128,6 +144,16 @@
 				triangles = diagnostics.triangles;
 				maximumLod = diagnostics.maximumLodLevel;
 				geometryRebuilds = diagnostics.geometryRebuilds;
+				geographyReady = diagnostics.geographyReady;
+				geographyQuality = diagnostics.geographyQuality;
+				loadedDataTiles = diagnostics.loadedDataTiles;
+				requestedDataTiles = diagnostics.requestedDataTiles;
+				fallbackDataTiles = diagnostics.fallbackDataTiles;
+				cacheEntries = diagnostics.cacheEntries;
+				cacheKilobytes = diagnostics.cacheBytes / 1024;
+				landPercent = diagnostics.landVertexFraction * 100;
+				elevationRange = `${diagnostics.minimumElevationMeters.toFixed(0)} / ${diagnostics.maximumElevationMeters.toFixed(0)} m`;
+				reliefExaggeration = diagnostics.reliefExaggeration;
 			}
 
 			frame = requestAnimationFrame(renderFrame);
@@ -162,7 +188,7 @@
 	<canvas
 		bind:this={canvas}
 		class="absolute inset-0 h-full w-full touch-none outline-none"
-		aria-label="Orelunza experimental planetary globe"
+		aria-label="Orelunza real-world planetary geography preview"
 		data-testid="planet-preview-canvas"
 	></canvas>
 
@@ -173,12 +199,12 @@
 			class="pointer-events-auto max-w-md rounded-xl border border-white/10 bg-black/55 p-4 text-white shadow-2xl backdrop-blur-md"
 		>
 			<p class="text-xs font-semibold tracking-[0.28em] text-sky-300 uppercase">
-				Planet Earth · Lot 1
+				Planet Earth · Lot 2
 			</p>
-			<h1 class="mt-1 text-xl font-semibold">Planetary foundation</h1>
+			<h1 class="mt-1 text-xl font-semibold">Real-world geography</h1>
 			<p class="mt-2 text-sm leading-6 text-white/65">
-				Drag to orbit and use the wheel to change altitude. The grid shows cube-sphere tiles
-				selected by the planetary LOD system.
+				Natural Earth coastlines, streamed cube tiles, coarse global relief and a separate ocean
+				surface. Drag to orbit and zoom toward the terrain.
 			</p>
 			<div class="mt-4 grid grid-cols-2 gap-x-5 gap-y-2 text-sm">
 				<span class="text-white/45">Latitude</span><strong>{latitude.toFixed(3)}°</strong>
@@ -187,12 +213,22 @@
 				<span class="text-white/45">Visible tiles</span><strong>{activeTiles}</strong>
 				<span class="text-white/45">LOD limit</span><strong>{maximumLod}</strong>
 				<span class="text-white/45">Triangles</span><strong>{triangles.toLocaleString()}</strong>
+				<span class="text-white/45">Data pack</span>
+				<strong class:text-emerald-300={geographyReady}>{geographyQuality}</strong>
+				<span class="text-white/45">Data tiles</span>
+				<strong>{loadedDataTiles}/{requestedDataTiles}</strong>
+				<span class="text-white/45">Parent fallbacks</span><strong>{fallbackDataTiles}</strong>
+				<span class="text-white/45">Cache</span>
+				<strong>{cacheEntries} · {cacheKilobytes.toFixed(0)} KiB</strong>
+				<span class="text-white/45">Visible land</span><strong>{landPercent.toFixed(1)}%</strong>
+				<span class="text-white/45">Elevation range</span><strong>{elevationRange}</strong>
+				<span class="text-white/45">Relief display</span><strong>×{reliefExaggeration}</strong>
 				<span class="text-white/45">Rebuilds</span><strong>{geometryRebuilds}</strong>
 			</div>
 		</section>
 
 		<section
-			class="pointer-events-auto flex items-center gap-3 rounded-xl border border-white/10 bg-black/55 p-3 text-sm text-white backdrop-blur-md"
+			class="pointer-events-auto flex flex-wrap items-center gap-3 rounded-xl border border-white/10 bg-black/55 p-3 text-sm text-white backdrop-blur-md"
 		>
 			<label class="flex items-center gap-2">
 				<span class="text-white/55">Quality</span>
@@ -204,6 +240,10 @@
 					<option value="medium">Medium</option>
 					<option value="high">High</option>
 				</select>
+			</label>
+			<label class="flex items-center gap-2">
+				<input bind:checked={coastlinesVisible} type="checkbox" />
+				<span>Coastlines</span>
 			</label>
 			<label class="flex items-center gap-2">
 				<input bind:checked={gridVisible} type="checkbox" />
@@ -220,8 +260,8 @@
 	</div>
 
 	<div
-		class="pointer-events-none absolute inset-x-0 bottom-5 text-center text-xs tracking-[0.16em] text-white/40 uppercase"
+		class="pointer-events-none absolute inset-x-0 bottom-5 text-center text-xs tracking-[0.12em] text-white/45 uppercase"
 	>
-		Provisional ocean surface · continents and elevation arrive in Earth Lot 2
+		Natural Earth coastlines · bundled preview relief · GEBCO importer included for production data
 	</div>
 </div>

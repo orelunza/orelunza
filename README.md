@@ -263,3 +263,7 @@ This project does not generate `public/` or `views/`, and `AppBootstrap` does no
 - Keep reusable helpers under `support/`.
 - Put business logic under `application/` and `domain/` as the app grows.
 - Put database, files, and external services under `infrastructure/`.
+
+## Experimental Earth preview
+
+Run the frontend and open `/planet`. The Lot 2 preview streams cube-sphere geography tiles, displays Natural Earth coastlines, separates the ocean surface from the seabed, and visualizes coarse global relief. See `tools/planet-data/README.md` for generating a production GEBCO pack.

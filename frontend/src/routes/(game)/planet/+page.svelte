@@ -3,10 +3,10 @@
 </script>
 
 <svelte:head>
-	<title>Planet Earth Preview — Orelunza</title>
+	<title>Real Earth Geography Preview — Orelunza</title>
 	<meta
 		name="description"
-		content="Experimental cube-sphere, planetary LOD and geodetic foundation for Orelunza."
+		content="Streamed Natural Earth continents, coastlines, global relief and ocean bathymetry preview for Orelunza."
 	/>
 </svelte:head>
 
