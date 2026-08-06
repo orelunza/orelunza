@@ -15,3 +15,5 @@ export * from './PlanetGeographyQuery';
 
 export * from './countries';
 export * from './ecology';
+
+export * from './ocean';

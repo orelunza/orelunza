@@ -14,6 +14,7 @@ import {
 	vegetationSeedValue
 } from '../../vegetation/VegetationDistribution';
 import type { TreeSpeciesId } from '../../vegetation/VegetationFamily';
+import { CoastalLandformResolver } from '../../geography/ocean/CoastalLandformResolver';
 import { PlanetTerrainColumnSampler } from './PlanetTerrainColumnSampler';
 
 export interface PlanetTerrainGeneratorOptions {
@@ -34,6 +35,7 @@ export class PlanetTerrainGenerator implements WorldTerrainGenerator {
 	readonly ecology: PlanetSurfaceEcology;
 	private readonly seedValue: number;
 	private readonly vegetationSeed: number;
+	private readonly coastalLandforms = new CoastalLandformResolver();
 
 	constructor(
 		readonly anchor: Readonly<PlanetSurfaceAnchor>,
@@ -71,8 +73,12 @@ export class PlanetTerrainGenerator implements WorldTerrainGenerator {
 
 	zoneAt(x: number, z: number): string {
 		const sample = this.columns.sample(x, z);
-		if (sample.land < 0.5) return sample.coastProximity > 0.35 ? 'Planet Coast' : 'Planet Ocean';
-		if (sample.coastProximity > 0.68 && this.ecology.biome !== 'mangrove') return 'Planet Coast';
+		const coast = this.coastalLandforms.resolve(sample);
+		if (coast.landform === 'open-ocean') return 'Planet Ocean';
+		if (coast.landform === 'shallow-water') return 'Shallow Coast';
+		if (coast.landform === 'beach') return 'Planet Beach';
+		if (coast.landform === 'cliff') return 'Coastal Cliffs';
+		if (coast.landform === 'rocky-coast') return 'Rocky Coast';
 		return this.ecology.zoneName;
 	}
 
@@ -100,9 +106,15 @@ export class PlanetTerrainGenerator implements WorldTerrainGenerator {
 				const height = this.heightAt(x, z);
 				const sample = this.columns.sample(x, z);
 				const water = sample.land < 0.5 || sample.elevationMeters < 0;
-				const coastal = sample.coastProximity > 0.52;
-				const surfaceType = water || coastal ? 'sand' : profile.surfaceBlock;
-				const subsurfaceType = water || coastal ? 'sand' : profile.subsurfaceBlock;
+				const coast = this.coastalLandforms.resolve(sample);
+				const beach = coast.landform === 'beach' || coast.landform === 'shallow-water';
+				const rocky = coast.landform === 'cliff' || coast.landform === 'rocky-coast';
+				const surfaceType: BlockType = beach ? 'sand' : rocky ? 'stone' : profile.surfaceBlock;
+				const subsurfaceType: BlockType = beach
+					? 'sand'
+					: rocky
+						? 'stone'
+						: profile.subsurfaceBlock;
 
 				for (let y = 0; y <= height; y += 1) {
 					let type: BlockType = 'stone';

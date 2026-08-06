@@ -13,6 +13,8 @@ export interface PlanetTerrainColumnSample {
 	relativeHeightMeters: number;
 	land: number;
 	coastProximity: number;
+	slope: number;
+	depthMeters: number;
 }
 
 export class PlanetTerrainColumnSampler {
@@ -28,11 +30,20 @@ export class PlanetTerrainColumnSampler {
 		const v = clamp01((zMeters + this.grid.halfExtentMeters) / (this.grid.halfExtentMeters * 2));
 		const elevationMeters = bilinear(this.grid.elevationMeters, this.grid.resolution, u, v);
 		const land = bilinear(this.grid.landMask, this.grid.resolution, u, v) / 255;
+		const texel = 1 / Math.max(1, this.grid.resolution - 1);
+		const west = bilinear(this.grid.elevationMeters, this.grid.resolution, clamp01(u - texel), v);
+		const east = bilinear(this.grid.elevationMeters, this.grid.resolution, clamp01(u + texel), v);
+		const north = bilinear(this.grid.elevationMeters, this.grid.resolution, u, clamp01(v - texel));
+		const south = bilinear(this.grid.elevationMeters, this.grid.resolution, u, clamp01(v + texel));
+		const metresPerTexel = (this.grid.halfExtentMeters * 2) / Math.max(1, this.grid.resolution - 1);
+		const gradient = Math.hypot(east - west, south - north) / Math.max(1, metresPerTexel * 2);
 		return {
 			elevationMeters,
 			relativeHeightMeters: elevationMeters - this.grid.referenceElevationMeters,
 			land: clamp01(land),
-			coastProximity: 1 - Math.min(1, Math.abs(land - 0.5) * 2)
+			coastProximity: 1 - Math.min(1, Math.abs(land - 0.5) * 2),
+			slope: clamp01(gradient / 1.25),
+			depthMeters: Math.max(0, -elevationMeters)
 		};
 	}
 }

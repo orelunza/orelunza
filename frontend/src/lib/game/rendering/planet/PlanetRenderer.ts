@@ -163,6 +163,9 @@ export class PlanetRenderer {
 			maximumTiles: this.quality === 'low' ? 768 : this.quality === 'medium' ? 1280 : 2048
 		});
 		this.streaming.update(snapshot.tiles);
+		this.ocean.update(
+			typeof performance !== 'undefined' ? performance.now() / 1000 : Date.now() / 1000
+		);
 
 		const geodetic = this.coordinateSystem.planetToGeodetic(this.logicalCameraPosition);
 		const cameraDistance = this.logicalCameraPosition.length();
