@@ -9,9 +9,10 @@
 		onHotbarSelect?: (index: number) => void;
 		onPause?: () => void;
 		onCalendar?: () => void;
+		onWorldMap?: () => void;
 	}
 
-	let { snapshot, onHotbarSelect, onPause, onCalendar }: Props = $props();
+	let { snapshot, onHotbarSelect, onPause, onCalendar, onWorldMap }: Props = $props();
 
 	let selectedSlot = $derived(
 		snapshot.buildMode && snapshot.selectedBuildBlock
@@ -90,14 +91,25 @@
 		</div>
 	{/if}
 
-	<button
-		type="button"
-		class="pointer-events-auto absolute top-3 right-3 rounded-sm border border-white/10 bg-[#1a1e22]/76 px-3 py-2 text-xs backdrop-blur-md hover:bg-white/10"
-		aria-label="Open pause menu"
-		onclick={onPause}
-	>
-		Menu
-	</button>
+	<div class="pointer-events-auto absolute top-3 right-3 flex items-center gap-2">
+		<button
+			type="button"
+			class="rounded-sm border border-white/10 bg-[#1a1e22]/76 px-3 py-2 text-xs backdrop-blur-md hover:bg-white/10"
+			aria-label="Open the world globe"
+			onclick={onWorldMap}
+		>
+			Globe · M
+		</button>
+
+		<button
+			type="button"
+			class="rounded-sm border border-white/10 bg-[#1a1e22]/76 px-3 py-2 text-xs backdrop-blur-md hover:bg-white/10"
+			aria-label="Open pause menu"
+			onclick={onPause}
+		>
+			Menu
+		</button>
+	</div>
 
 	{#if !snapshot.buildMode}
 		<div

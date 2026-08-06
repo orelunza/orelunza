@@ -29,6 +29,12 @@
 	import PlanetTravelHud from './PlanetTravelHud.svelte';
 	import PlanetLocationHud from './PlanetLocationHud.svelte';
 
+	interface Props {
+		onExit?: () => void;
+	}
+
+	let { onExit }: Props = $props();
+
 	let canvas = $state<HTMLCanvasElement | null>(null);
 	let quality = $state<PlanetLodQuality>('medium');
 	let gridVisible = $state(false);
@@ -280,8 +286,25 @@
 		};
 
 		const keyDown = (event: KeyboardEvent): void => {
-			if (event.code === 'Enter' && explorationMode === 'globe') enterRegion();
-			if (event.code === 'KeyG' && explorationMode === 'surface') returnToGlobe();
+			if (event.repeat) return;
+
+			if (event.code === 'Enter' && explorationMode === 'globe') {
+				enterRegion();
+				return;
+			}
+
+			if (event.code === 'KeyG' && explorationMode === 'surface') {
+				returnToGlobe();
+				return;
+			}
+
+			if (event.code === 'Escape' || event.code === 'KeyM') {
+				if (explorationMode === 'surface') {
+					returnToGlobe();
+				} else {
+					onExit?.();
+				}
+			}
 		};
 
 		const contextMenu = (event: MouseEvent): void => event.preventDefault();
@@ -360,7 +383,7 @@
 	<canvas
 		bind:this={canvas}
 		class="absolute inset-0 h-full w-full touch-none outline-none"
-		aria-label="Orelunza planet and local voxel surface preview"
+		aria-label="Orelunza world globe and planetary surface"
 		data-testid="planet-preview-canvas"
 	></canvas>
 
@@ -371,12 +394,10 @@
 			<section
 				class="pointer-events-auto max-w-md rounded-xl border border-white/10 bg-black/55 p-4 text-white shadow-2xl backdrop-blur-md"
 			>
-				<p class="text-xs font-semibold tracking-[0.28em] text-sky-300 uppercase">
-					Planet Earth · Lot 3
-				</p>
-				<h1 class="mt-1 text-xl font-semibold">Globe to voxel surface</h1>
+				<p class="text-xs font-semibold tracking-[0.28em] text-sky-300 uppercase">Orelunza Earth</p>
+				<h1 class="mt-1 text-xl font-semibold">World globe</h1>
 				<p class="mt-2 text-sm leading-6 text-white/65">
-					Select real land, prepare a tangent local frame and descend into editable voxel terrain.
+					Choose a real place on Earth and enter its local voxel region without leaving the game.
 				</p>
 				<div class="mt-4 grid grid-cols-2 gap-x-5 gap-y-2 text-sm">
 					<span class="text-white/45">Latitude</span><strong>{latitude.toFixed(3)}°</strong>
@@ -423,7 +444,7 @@
 				<button
 					type="button"
 					class="rounded-md border border-white/15 px-3 py-1 hover:bg-white/10"
-					onclick={() => window.history.back()}>Back</button
+					onclick={onExit}>Return to world · M</button
 				>
 			</section>
 		{:else}

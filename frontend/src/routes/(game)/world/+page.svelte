@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
 
 	import BuildCatalogOverlay from '$lib/components/game/BuildCatalogOverlay.svelte';
 	import CalendarPanel from '$lib/components/game/CalendarPanel.svelte';
@@ -10,6 +10,7 @@
 	import InventoryOverlay from '$lib/components/game/InventoryOverlay.svelte';
 	import LoadingWorld from '$lib/components/game/LoadingWorld.svelte';
 	import PauseMenu from '$lib/components/game/PauseMenu.svelte';
+	import PlanetPreviewCanvas from '$lib/components/game/PlanetPreviewCanvas.svelte';
 	import { ApiError } from '$lib/api/ApiError';
 	import type { CharacterAppearanceV1 } from '$lib/game/character/CharacterAppearance';
 	import { CharacterStore } from '$lib/game/character/CharacterStore';
@@ -52,6 +53,7 @@
 	let command = $state<GameCommand | undefined>(undefined);
 	let commandToken = 0;
 	let controller: AbortController | null = null;
+	let worldView = $state<'surface' | 'globe'>('surface');
 
 	const characterStore = new CharacterStore();
 
@@ -123,6 +125,29 @@
 		}
 	}
 
+	async function openWorldGlobe(): Promise<void> {
+		if (worldView === 'globe' || loading || !appearance) {
+			return;
+		}
+
+		// Commands use a single reactive channel, so let save reach the engine before pause.
+		sendCommand('save');
+		await tick();
+		sendCommand('pause');
+		await tick();
+		worldView = 'globe';
+	}
+
+	async function closeWorldGlobe(): Promise<void> {
+		if (worldView !== 'globe') {
+			return;
+		}
+
+		worldView = 'surface';
+		await tick();
+		sendCommand('resume');
+	}
+
 	async function logout(): Promise<void> {
 		sendCommand('save');
 		await sessionState.logout().catch(() => undefined);
@@ -132,8 +157,23 @@
 	onMount(() => {
 		void initialize();
 
+		const handleWorldGlobeShortcut = (event: KeyboardEvent): void => {
+			if (event.repeat || event.code !== 'KeyM') {
+				return;
+			}
+
+			if (worldView === 'globe') {
+				void closeWorldGlobe();
+			} else if (snapshot?.status === 'playing' || snapshot?.status === 'paused') {
+				void openWorldGlobe();
+			}
+		};
+
+		window.addEventListener('keydown', handleWorldGlobeShortcut);
+
 		return () => {
 			controller?.abort();
+			window.removeEventListener('keydown', handleWorldGlobeShortcut);
 		};
 	});
 </script>
@@ -280,6 +320,9 @@
 				onCalendar={() => {
 					sendCommand('open-calendar');
 				}}
+				onWorldMap={() => {
+					void openWorldGlobe();
+				}}
 			/>
 
 			{#if snapshot.status === 'calendar'}
@@ -310,6 +353,9 @@
 					onSave={() => {
 						sendCommand('save');
 					}}
+					onOpenWorldMap={() => {
+						void openWorldGlobe();
+					}}
 					onLogout={logout}
 				/>
 			{/if}
@@ -332,5 +378,15 @@
 				<p class="m-0 mt-1 text-white/58">{loadError.message}</p>
 			</div>
 		{/if}
+	{/if}
+
+	{#if appearance && worldView === 'globe'}
+		<div class="absolute inset-0 z-[70]" data-testid="world-globe-mode">
+			<PlanetPreviewCanvas
+				onExit={() => {
+					void closeWorldGlobe();
+				}}
+			/>
+		</div>
 	{/if}
 </main>

@@ -4,10 +4,11 @@
 	interface Props {
 		onResume?: () => void;
 		onSave?: () => void | Promise<void>;
+		onOpenWorldMap?: () => void | Promise<void>;
 		onLogout?: () => void | Promise<void>;
 	}
 
-	let { onResume, onSave, onLogout }: Props = $props();
+	let { onResume, onSave, onOpenWorldMap, onLogout }: Props = $props();
 </script>
 
 <div
@@ -23,6 +24,7 @@
 
 		<div class="grid gap-2">
 			<button class="game-menu-button" type="button" onclick={onResume}>Resume</button>
+			<button class="game-menu-button" type="button" onclick={onOpenWorldMap}>World globe</button>
 			<button class="game-menu-button" type="button" onclick={onSave}>Save</button>
 			<a class="game-menu-button" href={resolve('/profile')}>Profile</a>
 			<button class="game-menu-button" type="button" disabled>Settings</button>
