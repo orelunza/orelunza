@@ -178,12 +178,17 @@ export class PlanetRenderer {
 			this.hydrology.setVisible(hydrologyDisplayActive);
 			if (hydrologyDisplayActive) this.tileSignature = '';
 		}
-		const geography = this.streaming.geography.diagnostics;
+		const geographySystem = this.streaming.geography;
+		const geography = geographySystem.diagnostics;
 		this.geographyDebug.update(geography);
-		const signature = `${snapshot.tiles.map(planetTileKey).join('|')}@${geography.revision}@${this.reliefExaggeration}`;
-		if (signature !== this.tileSignature) {
-			this.tileSignature = signature;
-			this.rebuild(snapshot);
+		const renderReady = geographySystem.readyForRendering;
+		this.object.visible = renderReady;
+		if (renderReady) {
+			const signature = `${snapshot.tiles.map(planetTileKey).join('|')}@${geography.revision}@${this.reliefExaggeration}`;
+			if (signature !== this.tileSignature) {
+				this.tileSignature = signature;
+				this.rebuild(snapshot);
+			}
 		}
 		const hydrology = this.hydrology.diagnostics;
 

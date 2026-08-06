@@ -96,13 +96,14 @@ export class PlanetTerrainMaterial extends ShaderMaterial {
 
 				void main() {
 					vec3 radial = normalize(position);
-					float ocean = 1.0 - smoothstep(0.46, 0.54, landMask);
 					float longitude = atan(-radial.z, radial.x);
 					float latitude = asin(clamp(radial.y, -1.0, 1.0));
-					float waveA = sin(longitude * 22.0 + latitude * 11.0 + uTime * 0.008);
-					float waveB = sin(longitude * -13.0 + latitude * 27.0 - uTime * 0.006);
+					// Individual waves are invisible from orbit. Keep only a static,
+					// sub-pixel variation so the ocean does not look like a moving blur.
+					float waveA = sin(longitude * 22.0 + latitude * 11.0);
+					float waveB = sin(longitude * -13.0 + latitude * 27.0);
 					float wave = waveA * 0.62 + waveB * 0.38;
-					vec3 displaced = position + radial * ocean * wave * 0.00008;
+					vec3 displaced = position;
 
 					vBaseColor = color;
 					vPlanetNormal = radial;
@@ -217,18 +218,18 @@ export class PlanetTerrainMaterial extends ShaderMaterial {
 					vec3 oceanColor = mix(uShelfOceanColor, uDeepOceanColor, smoothstep(0.04, 0.9, depth));
 					float longitude = atan(-radial.z, radial.x);
 					float latitudeRadians = asin(clamp(radial.y, -1.0, 1.0));
-					float waveSlopeX = cos(longitude * 22.0 + latitudeRadians * 11.0 + uTime * 0.008);
-					float waveSlopeY = cos(longitude * -13.0 + latitudeRadians * 27.0 - uTime * 0.006);
+					float waveSlopeX = cos(longitude * 22.0 + latitudeRadians * 11.0);
+					float waveSlopeY = cos(longitude * -13.0 + latitudeRadians * 27.0);
 					vec3 east = normalize(vec3(radial.z, 0.0, -radial.x) + vec3(0.0001));
 					vec3 north = normalize(cross(radial, east));
-					vec3 oceanNormal = normalize(normal + east * waveSlopeX * 0.006 + north * waveSlopeY * 0.004);
+					vec3 oceanNormal = normalize(normal + east * waveSlopeX * 0.0012 + north * waveSlopeY * 0.0008);
 					float oceanDiffuse = max(dot(oceanNormal, lightDirection), 0.0);
 					float fresnel = pow(1.0 - max(dot(oceanNormal, viewDirection), 0.0), 4.0);
 					float specular = pow(max(dot(reflect(-lightDirection, oceanNormal), viewDirection), 0.0), 120.0);
 					oceanColor *= 0.32 + oceanDiffuse * 0.68;
 					oceanColor += uAtmosphereColor * fresnel * 0.22;
 					oceanColor += vec3(1.0, 0.92, 0.72) * specular * 0.22;
-					float coastFoam = vCoastProximity * smoothstep(0.82, 0.99, vWaveCrest) * 0.12;
+					float coastFoam = vCoastProximity * smoothstep(0.9, 1.0, vWaveCrest) * 0.045;
 					oceanColor = mix(oceanColor, vec3(0.78, 0.92, 0.95), coastFoam);
 
 					vec3 finalColor = mix(oceanColor, landColor, land);

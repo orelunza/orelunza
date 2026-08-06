@@ -47,6 +47,10 @@ export class GeographicTileCache {
 		};
 	}
 
+	has(id: Readonly<GeographicTileId>): boolean {
+		return this.entries.has(geographicTileKey(id));
+	}
+
 	peek(id: Readonly<GeographicTileId>): GeographicTile | null {
 		const entry = this.entries.get(geographicTileKey(id));
 		if (!entry) {

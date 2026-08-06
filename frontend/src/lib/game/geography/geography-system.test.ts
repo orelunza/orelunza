@@ -63,24 +63,28 @@ function createTile(id: PlanetTileId, value: number): GeographicTile {
 class MemoryProvider implements GeographicTileProvider {
 	loads = 0;
 	disposed = false;
-	readonly manifest: PlanetDataManifest = {
-		format: 'orelunza-geography-pack',
-		version: 1,
-		planetId: 'earth',
-		dataQuality: 'preview',
-		tileResolution: 2,
-		minimumLevel: 0,
-		maximumLevel: 0,
-		tileExtension: 'orgt',
-		elevationEncoding: 'int16-meters',
-		maskEncoding: 'uint8-land-255-ocean-0',
-		minimumElevationMeters: -100,
-		maximumElevationMeters: 100,
-		sources: [],
-		coastlinePath: 'coast.json',
-		countriesIndexPath: 'countries.json',
-		tilePathTemplate: 'tiles/{face}/{level}/{x}/{y}.orgt'
-	};
+	readonly manifest: PlanetDataManifest;
+
+	constructor(maximumLevel = 0) {
+		this.manifest = {
+			format: 'orelunza-geography-pack',
+			version: 1,
+			planetId: 'earth',
+			dataQuality: 'preview',
+			tileResolution: 2,
+			minimumLevel: 0,
+			maximumLevel,
+			tileExtension: 'orgt',
+			elevationEncoding: 'int16-meters',
+			maskEncoding: 'uint8-land-255-ocean-0',
+			minimumElevationMeters: -100,
+			maximumElevationMeters: 100,
+			sources: [],
+			coastlinePath: 'coast.json',
+			countriesIndexPath: 'countries.json',
+			tilePathTemplate: 'tiles/{face}/{level}/{x}/{y}.orgt'
+		};
+	}
 
 	async loadManifest(): Promise<PlanetDataManifest> {
 		return this.manifest;
@@ -198,6 +202,41 @@ describe('planet Earth Lot 2 geography and streamed terrain', () => {
 		geometry.surface.dispose();
 		geometry.grid.dispose();
 		geography.dispose();
+		geography.dispose();
+	});
+
+	test('keeps the complete preview hierarchy cached so LOD tiles cannot turn into blue ocean', async () => {
+		const provider = new MemoryProvider(3);
+		const geography = new PlanetGeographySystem(provider, 'low');
+		await geography.initialize();
+
+		const levelThreeTiles: PlanetTileId[] = [];
+		for (const face of [
+			'positive-x',
+			'negative-x',
+			'positive-y',
+			'negative-y',
+			'positive-z',
+			'negative-z'
+		] as const) {
+			for (let y = 0; y < 8; y += 1) {
+				for (let x = 0; x < 8; x += 1) {
+					levelThreeTiles.push({ face, level: 3, x, y });
+				}
+			}
+		}
+
+		geography.update(levelThreeTiles);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(geography.readyForRendering).toBe(true);
+
+		geography.update(levelThreeTiles);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		geography.update(levelThreeTiles);
+
+		expect(geography.diagnostics.cacheEntries).toBe(510);
+		expect(geography.diagnostics.cacheEvictions).toBe(0);
+		expect(geography.diagnostics.resolvedTiles).toBe(levelThreeTiles.length);
 		geography.dispose();
 	});
 });
