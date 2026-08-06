@@ -21,10 +21,14 @@ const colour = new Color();
 const deepOcean = new Color('#071f4d');
 const shelfOcean = new Color('#217fb0');
 const beach = new Color('#d8c58e');
-const lowland = new Color('#4d8651');
 const highland = new Color('#8b7645');
 const mountain = new Color('#81766b');
 const snow = new Color('#e7e8e5');
+const tropicalForest = new Color('#1f5e38');
+const savanna = new Color('#9b9a52');
+const aridLowland = new Color('#b89a61');
+const temperateLowland = new Color('#4f7d49');
+const borealLowland = new Color('#365d45');
 const terrainSampler = new PlanetTerrainSampler();
 
 export class PlanetTileRenderer {
@@ -42,12 +46,17 @@ export class PlanetTileRenderer {
 		const positions = new Float32Array(tiles.length * verticesPerTile * 3);
 		const normals = new Float32Array(tiles.length * verticesPerTile * 3);
 		const colours = new Float32Array(tiles.length * verticesPerTile * 3);
+		const landMasks = new Float32Array(tiles.length * verticesPerTile);
+		const coastProximities = new Float32Array(tiles.length * verticesPerTile);
+		const waterDepths = new Float32Array(tiles.length * verticesPerTile);
+		const elevations = new Float32Array(tiles.length * verticesPerTile);
 		const IndexArray = tiles.length * verticesPerTile > 65_535 ? Uint32Array : Uint16Array;
 		const indices = new IndexArray(tiles.length * indicesPerTile);
 		const gridPositions: number[] = [];
 		const renderScale = definition.renderRadiusUnits / definition.equatorialRadiusMeters;
 		const exaggeration = Math.max(0, Number.isFinite(reliefExaggeration) ? reliefExaggeration : 1);
 		let positionOffset = 0;
+		let vertexOffset = 0;
 		let indexOffset = 0;
 		let loadedDataTiles = 0;
 		let landVertices = 0;
@@ -72,17 +81,19 @@ export class PlanetTileRenderer {
 						v,
 						geography?.dataCoordinateConvention ?? 'legacy-positive-z-east'
 					);
-					const elevationMeters =
-						sample.land >= 0.5
-							? Math.max(25, sample.elevationMeters)
-							: Math.min(-10, sample.elevationMeters);
-					minimumElevationMeters = Math.min(minimumElevationMeters, elevationMeters);
-					maximumElevationMeters = Math.max(maximumElevationMeters, elevationMeters);
+					const sampledElevationMeters = sample.elevationMeters;
+					const landBlend = PlanetTileRenderer.smoothstep(0.46, 0.54, sample.land);
+					const landElevationMeters = Math.max(25, sampledElevationMeters);
+					const visualElevationMeters = Math.max(0, landElevationMeters) * landBlend;
+					minimumElevationMeters = Math.min(minimumElevationMeters, sampledElevationMeters);
+					maximumElevationMeters = Math.max(maximumElevationMeters, sampledElevationMeters);
 					landVertices += Number(sample.land >= 0.5);
 
 					cubeSphereSurfacePoint(tile.face, u, v, definition, point);
 					normal.copy(point).normalize();
-					point.addScaledVector(normal, elevationMeters * exaggeration).multiplyScalar(renderScale);
+					point
+						.addScaledVector(normal, visualElevationMeters * exaggeration)
+						.multiplyScalar(renderScale);
 					positions[positionOffset] = point.x;
 					positions[positionOffset + 1] = point.y;
 					positions[positionOffset + 2] = point.z;
@@ -91,14 +102,20 @@ export class PlanetTileRenderer {
 					normals[positionOffset + 2] = normal.z;
 					PlanetTileRenderer.sampleColour(
 						sample.land,
-						elevationMeters,
+						sampledElevationMeters,
 						sample.coastProximity,
+						normal.y,
 						colour
 					);
 					colours[positionOffset] = colour.r;
 					colours[positionOffset + 1] = colour.g;
 					colours[positionOffset + 2] = colour.b;
+					landMasks[vertexOffset] = sample.land;
+					coastProximities[vertexOffset] = sample.coastProximity;
+					waterDepths[vertexOffset] = Math.max(0, -sampledElevationMeters);
+					elevations[vertexOffset] = Math.max(0, sampledElevationMeters);
 					positionOffset += 3;
+					vertexOffset += 1;
 				}
 			}
 
@@ -108,12 +125,16 @@ export class PlanetTileRenderer {
 					const topRight = topLeft + 1;
 					const bottomLeft = topLeft + verticesPerSide;
 					const bottomRight = bottomLeft + 1;
+					// Keep every cube-sphere triangle counter-clockwise when seen
+					// from outside the planet. The previous winding pointed inward,
+					// so front-face culling hid the visible hemisphere and exposed
+					// fragments of the far side through the globe.
 					indices[indexOffset++] = topLeft;
-					indices[indexOffset++] = bottomLeft;
-					indices[indexOffset++] = topRight;
 					indices[indexOffset++] = topRight;
 					indices[indexOffset++] = bottomLeft;
+					indices[indexOffset++] = topRight;
 					indices[indexOffset++] = bottomRight;
+					indices[indexOffset++] = bottomLeft;
 				}
 			}
 
@@ -124,6 +145,10 @@ export class PlanetTileRenderer {
 		surface.setAttribute('position', new BufferAttribute(positions, 3));
 		surface.setAttribute('normal', new BufferAttribute(normals, 3));
 		surface.setAttribute('color', new BufferAttribute(colours, 3));
+		surface.setAttribute('landMask', new BufferAttribute(landMasks, 1));
+		surface.setAttribute('coastProximity', new BufferAttribute(coastProximities, 1));
+		surface.setAttribute('waterDepthMeters', new BufferAttribute(waterDepths, 1));
+		surface.setAttribute('elevationMeters', new BufferAttribute(elevations, 1));
 		surface.setIndex(new BufferAttribute(indices, 1));
 		surface.computeBoundingSphere();
 
@@ -147,6 +172,7 @@ export class PlanetTileRenderer {
 		land: number,
 		elevationMeters: number,
 		coastProximity: number,
+		normalY: number,
 		target: Color
 	): void {
 		if (land < 0.5) {
@@ -154,12 +180,22 @@ export class PlanetTileRenderer {
 			target.lerpColors(shelfOcean, deepOcean, Math.min(1, depth / 7500));
 			return;
 		}
+		const latitude = Math.abs(Math.asin(Math.max(-1, Math.min(1, normalY)))) / (Math.PI / 2);
+		if (latitude > 0.86) {
+			target.copy(snow);
+			return;
+		}
 		if (coastProximity > 0.42 && elevationMeters < 260) {
-			target.lerpColors(lowland, beach, Math.min(1, coastProximity));
+			target.lerpColors(temperateLowland, beach, Math.min(1, coastProximity));
 			return;
 		}
 		if (elevationMeters < 900) {
-			target.lerpColors(lowland, highland, Math.max(0, elevationMeters / 900) * 0.34);
+			if (latitude < 0.17) target.copy(tropicalForest);
+			else if (latitude < 0.34) target.copy(savanna);
+			else if (latitude < 0.56) target.copy(aridLowland);
+			else if (latitude < 0.76) target.copy(temperateLowland);
+			else target.copy(borealLowland);
+			target.lerp(highland, Math.max(0, elevationMeters / 900) * 0.22);
 			return;
 		}
 		if (elevationMeters < 3500) {
@@ -167,6 +203,14 @@ export class PlanetTileRenderer {
 			return;
 		}
 		target.lerpColors(mountain, snow, Math.min(1, (elevationMeters - 3500) / 3500));
+	}
+
+	private static smoothstep(edge0: number, edge1: number, value: number): number {
+		const normalized = Math.max(
+			0,
+			Math.min(1, (value - edge0) / Math.max(Number.EPSILON, edge1 - edge0))
+		);
+		return normalized * normalized * (3 - 2 * normalized);
 	}
 
 	private static appendTileGrid(

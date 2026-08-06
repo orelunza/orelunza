@@ -274,6 +274,36 @@ describe('planet Earth Lot 1 foundation', () => {
 		const geometry = PlanetTileRenderer.buildGeometry(roots, 2);
 		expect(geometry.triangleCount).toBe(48);
 		expect(geometry.surface.getAttribute('position').count).toBe(54);
+		expect(geometry.surface.getAttribute('landMask').count).toBe(54);
+		expect(geometry.surface.getAttribute('coastProximity').count).toBe(54);
+		expect(geometry.surface.getAttribute('waterDepthMeters').count).toBe(54);
+		expect(geometry.surface.getAttribute('elevationMeters').count).toBe(54);
+
+		const positions = geometry.surface.getAttribute('position');
+		const triangleIndices = geometry.surface.getIndex();
+		expect(triangleIndices).not.toBeNull();
+		const a = new Vector3();
+		const b = new Vector3();
+		const c = new Vector3();
+		const edgeAb = new Vector3();
+		const edgeAc = new Vector3();
+		const faceNormal = new Vector3();
+		const centroid = new Vector3();
+		for (let offset = 0; offset < (triangleIndices?.count ?? 0); offset += 3) {
+			a.fromBufferAttribute(positions, triangleIndices!.getX(offset));
+			b.fromBufferAttribute(positions, triangleIndices!.getX(offset + 1));
+			c.fromBufferAttribute(positions, triangleIndices!.getX(offset + 2));
+			edgeAb.subVectors(b, a);
+			edgeAc.subVectors(c, a);
+			faceNormal.crossVectors(edgeAb, edgeAc);
+			centroid
+				.copy(a)
+				.add(b)
+				.add(c)
+				.multiplyScalar(1 / 3);
+			expect(faceNormal.dot(centroid)).toBeGreaterThan(0);
+		}
+
 		expect(geometry.grid.getAttribute('position').count).toBeGreaterThan(0);
 		geometry.surface.dispose();
 		geometry.grid.dispose();

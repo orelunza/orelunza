@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import {
+		ACESFilmicToneMapping,
 		AmbientLight,
 		Color,
 		DirectionalLight,
@@ -9,6 +10,7 @@
 		Raycaster,
 		Scene,
 		Spherical,
+		SRGBColorSpace,
 		Vector2,
 		Vector3,
 		WebGLRenderer
@@ -47,6 +49,7 @@
 	let coastlinesVisible = $state(true);
 	let hydrologyVisible = $state(false);
 	let countryBoundariesVisible = $state(true);
+	let cloudsVisible = $state(true);
 	let ecologyOverlayMode = $state<PlanetEcologyOverlayMode>('none');
 	let latitude = $state(0);
 	let longitude = $state(0);
@@ -105,6 +108,10 @@
 	});
 
 	$effect(() => {
+		planetRenderer?.setCloudsVisible(cloudsVisible);
+	});
+
+	$effect(() => {
 		planetRenderer?.setEcologyOverlayMode(ecologyOverlayMode);
 	});
 
@@ -121,6 +128,9 @@
 			powerPreference: 'high-performance'
 		});
 		renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+		renderer.outputColorSpace = SRGBColorSpace;
+		renderer.toneMapping = ACESFilmicToneMapping;
+		renderer.toneMappingExposure = 1.05;
 		const camera = new PerspectiveCamera(45, 1, 0.1, 5000);
 		const planet = new PlanetRenderer(scene, undefined, quality);
 		planetRenderer = planet;
@@ -128,6 +138,7 @@
 		planet.setCoastlinesVisible(coastlinesVisible);
 		planet.setCountryBoundariesVisible(countryBoundariesVisible);
 		planet.setHydrologyVisible(hydrologyVisible);
+		planet.setCloudsVisible(cloudsVisible);
 		planet.setEcologyOverlayMode(ecologyOverlayMode);
 		const marker = new PlanetDestinationMarker(planet.definition, planet.coordinateSystem);
 		planet.object.add(marker.object);
@@ -306,10 +317,10 @@
 			previousY = event.clientY;
 			pointerTravel += Math.abs(deltaX) + Math.abs(deltaY);
 			if (explorationMode === 'globe') {
-				orbitYaw -= deltaX * 0.005;
+				orbitYaw += deltaX * 0.005;
 				orbitPolar = Math.max(0.08, Math.min(Math.PI - 0.08, orbitPolar + deltaY * 0.005));
 			} else {
-				surfaceYaw -= deltaX * 0.006;
+				surfaceYaw += deltaX * 0.006;
 				surfacePolar = Math.max(0.18, Math.min(Math.PI / 2 - 0.05, surfacePolar + deltaY * 0.006));
 			}
 		};
@@ -516,6 +527,9 @@
 				<label class="flex items-center gap-2"
 					><input bind:checked={countryBoundariesVisible} type="checkbox" /><span>Countries</span
 					></label
+				>
+				<label class="flex items-center gap-2"
+					><input bind:checked={cloudsVisible} type="checkbox" /><span>Clouds</span></label
 				>
 				<label class="flex items-center gap-2"
 					><input bind:checked={hydrologyVisible} type="checkbox" /><span

@@ -1,3 +1,5 @@
+export * from './PlanetCloudRenderer';
+export * from './PlanetAtmosphereRenderer';
 export * from './CoastlineRenderer';
 export * from './PlanetDebugOverlay';
 export * from './PlanetGeographyDebugOverlay';

@@ -17,7 +17,13 @@ export class CoastlineRenderer {
 		this.coordinateSystem = new PlanetCoordinateSystem(definition);
 		this.object = new LineSegments(
 			new BufferGeometry(),
-			new LineBasicMaterial({ color: 0xd6e6cf, transparent: true, opacity: 0.58 })
+			new LineBasicMaterial({
+				color: 0xd7e7dc,
+				transparent: true,
+				opacity: 0.34,
+				depthWrite: false,
+				depthTest: true
+			})
 		);
 		this.object.renderOrder = 3;
 		this.object.frustumCulled = false;
@@ -51,6 +57,11 @@ export class CoastlineRenderer {
 		} catch {
 			// The terrain remains usable when optional vector coastlines are unavailable.
 		}
+	}
+
+	updateForAltitude(altitudeMeters: number): void {
+		const normalized = Math.max(0, Math.min(1, (altitudeMeters - 250_000) / 5_000_000));
+		(this.object.material as LineBasicMaterial).opacity = 0.48 - normalized * 0.2;
 	}
 
 	setVisible(visible: boolean): void {
@@ -95,7 +106,7 @@ export class CoastlineRenderer {
 					{
 						latitudeRadians: (previousLatitude * Math.PI) / 180,
 						longitudeRadians: (previousLongitude * Math.PI) / 180,
-						altitudeMeters: 80
+						altitudeMeters: 18_000
 					},
 					previous
 				);
@@ -104,7 +115,7 @@ export class CoastlineRenderer {
 					{
 						latitudeRadians: (latitude * Math.PI) / 180,
 						longitudeRadians: (longitude * Math.PI) / 180,
-						altitudeMeters: 80
+						altitudeMeters: 18_000
 					},
 					current
 				);

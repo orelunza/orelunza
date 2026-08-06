@@ -1,14 +1,4 @@
-import {
-	BufferGeometry,
-	Color,
-	Group,
-	Mesh,
-	MeshBasicMaterial,
-	PerspectiveCamera,
-	Scene,
-	SphereGeometry,
-	Vector3
-} from 'three';
+import { BufferGeometry, Group, Mesh, PerspectiveCamera, Scene, Vector3 } from 'three';
 import { PlanetCoordinateSystem } from '../../planet/PlanetCoordinateSystem';
 import { EARTH_PLANET, type PlanetDefinition } from '../../planet/PlanetDefinition';
 import {
@@ -20,16 +10,14 @@ import { PlanetStreamingSystem } from '../../planet/PlanetStreamingSystem';
 import { planetTileKey } from '../../planet/PlanetTileId';
 import { CoastlineRenderer } from './CoastlineRenderer';
 import { CountryBoundaryRenderer } from './CountryBoundaryRenderer';
-import {
-	PlanetEcologyOverlayRenderer,
-	type PlanetEcologyOverlayMode
-} from './PlanetEcologyOverlayRenderer';
+import type { PlanetEcologyOverlayMode } from './PlanetEcologyOverlayRenderer';
 import { PlanetDebugOverlay } from './PlanetDebugOverlay';
 import { PlanetGeographyDebugOverlay } from './PlanetGeographyDebugOverlay';
-import { createPlanetTerrainMaterial } from './PlanetTerrainMaterial';
+import { createPlanetTerrainMaterial, type PlanetTerrainMaterial } from './PlanetTerrainMaterial';
 import { PlanetTerrainRenderer } from './PlanetTerrainRenderer';
-import { PlanetOceanRenderer } from './PlanetOceanRenderer';
 import { PlanetHydrologyRenderer } from './PlanetHydrologyRenderer';
+import { PlanetAtmosphereRenderer } from './PlanetAtmosphereRenderer';
+import { PlanetCloudRenderer } from './PlanetCloudRenderer';
 
 export interface PlanetRendererDiagnostics {
 	activeTiles: number;
@@ -72,15 +60,15 @@ export class PlanetRenderer {
 	readonly coordinateSystem: PlanetCoordinateSystem;
 	private readonly lod: PlanetLodSystem;
 	private readonly streaming: PlanetStreamingSystem;
-	private readonly surface: Mesh;
-	private readonly ocean: PlanetOceanRenderer;
+	private readonly surface: Mesh<BufferGeometry, PlanetTerrainMaterial>;
+	private readonly surfaceMaterial: PlanetTerrainMaterial;
+	private readonly clouds: PlanetCloudRenderer;
 	private readonly hydrology: PlanetHydrologyRenderer;
 	private readonly coastline: CoastlineRenderer;
 	private readonly countries: CountryBoundaryRenderer;
-	private readonly ecologyOverlay: PlanetEcologyOverlayRenderer;
 	private readonly debugOverlay = new PlanetDebugOverlay();
 	private readonly geographyDebug = new PlanetGeographyDebugOverlay();
-	private readonly atmosphere: Mesh;
+	private readonly atmosphere: PlanetAtmosphereRenderer;
 	private readonly logicalCameraPosition = new Vector3();
 	private tileSignature = '';
 	private disposed = false;
@@ -124,38 +112,28 @@ export class PlanetRenderer {
 		this.coordinateSystem = new PlanetCoordinateSystem(definition);
 		this.lod = new PlanetLodSystem(definition);
 		this.streaming = new PlanetStreamingSystem(quality);
-		this.surface = new Mesh(new BufferGeometry(), createPlanetTerrainMaterial());
+		this.surfaceMaterial = createPlanetTerrainMaterial();
+		this.surface = new Mesh(new BufferGeometry(), this.surfaceMaterial);
 		this.surface.frustumCulled = false;
 		this.surface.castShadow = false;
 		this.surface.receiveShadow = true;
-		this.surface.renderOrder = 2;
-		this.ocean = new PlanetOceanRenderer(definition);
+		this.surface.renderOrder = 1;
+		this.clouds = new PlanetCloudRenderer(definition);
 		this.hydrology = new PlanetHydrologyRenderer(definition);
 		this.hydrology.setVisible(false);
 		this.coastline = new CoastlineRenderer(definition);
 		void this.coastline.load();
 		this.countries = new CountryBoundaryRenderer(definition);
 		void this.countries.load().catch(() => undefined);
-		this.ecologyOverlay = new PlanetEcologyOverlayRenderer(definition);
-		this.atmosphere = new Mesh(
-			new SphereGeometry(definition.renderRadiusUnits * 1.025, 48, 32),
-			new MeshBasicMaterial({
-				color: new Color('#6cbcff'),
-				transparent: true,
-				opacity: 0.075,
-				depthWrite: false
-			})
-		);
-		this.atmosphere.renderOrder = 4;
+		this.atmosphere = new PlanetAtmosphereRenderer(definition);
 		this.object.add(
 			this.surface,
-			this.ocean.object,
+			this.clouds.object,
 			this.hydrology.object,
 			this.coastline.object,
-			this.ecologyOverlay.object,
 			this.countries.object,
 			this.debugOverlay.object,
-			this.atmosphere
+			this.atmosphere.object
 		);
 		this.scene.add(this.object);
 	}
@@ -180,9 +158,10 @@ export class PlanetRenderer {
 			maximumTiles: this.quality === 'low' ? 768 : this.quality === 'medium' ? 1280 : 2048
 		});
 		this.streaming.update(snapshot.tiles);
-		this.ocean.update(
-			typeof performance !== 'undefined' ? performance.now() / 1000 : Date.now() / 1000
-		);
+		const elapsedSeconds =
+			typeof performance !== 'undefined' ? performance.now() / 1000 : Date.now() / 1000;
+		this.surfaceMaterial.update(elapsedSeconds);
+		this.clouds.update(elapsedSeconds);
 
 		const geodetic = this.coordinateSystem.planetToGeodetic(this.logicalCameraPosition);
 		const cameraDistance = this.logicalCameraPosition.length();
@@ -190,6 +169,8 @@ export class PlanetRenderer {
 			? geodetic.altitudeMeters
 			: Math.max(0, cameraDistance - this.definition.equatorialRadiusMeters);
 		this.reliefExaggeration = PlanetRenderer.reliefForAltitude(cameraAltitudeMeters);
+		this.coastline.updateForAltitude(cameraAltitudeMeters);
+		this.countries.updateForAltitude(cameraAltitudeMeters);
 		const hydrologyDisplayActive =
 			this.hydrologyRequestedVisible && cameraAltitudeMeters <= MAXIMUM_HYDROLOGY_ALTITUDE_METERS;
 		if (hydrologyDisplayActive !== this.hydrologyDisplayActive) {
@@ -223,7 +204,7 @@ export class PlanetRenderer {
 			reliefExaggeration: this.reliefExaggeration,
 			coastlinesReady: this.coastline.ready,
 			countriesReady: this.countries.ready,
-			ecologyOverlayReady: this.ecologyOverlay.ready,
+			ecologyOverlayReady: this.surfaceMaterial.mapsReady,
 			hydrologyReady: hydrology.ready,
 			riverSegments: hydrology.riverSegments,
 			lakePoints: hydrology.lakePoints,
@@ -269,7 +250,11 @@ export class PlanetRenderer {
 	}
 
 	setEcologyOverlayMode(mode: PlanetEcologyOverlayMode): void {
-		this.ecologyOverlay.setMode(mode);
+		this.surfaceMaterial.setMapMode(mode);
+	}
+
+	setCloudsVisible(visible: boolean): void {
+		this.clouds.setVisible(visible);
 	}
 
 	dispose(): void {
@@ -279,17 +264,15 @@ export class PlanetRenderer {
 		this.disposed = true;
 		this.scene.remove(this.object);
 		this.surface.geometry.dispose();
-		(this.surface.material as ReturnType<typeof createPlanetTerrainMaterial>).dispose();
-		this.ocean.dispose();
+		this.surfaceMaterial.dispose();
+		this.clouds.dispose();
 		this.hydrology.dispose();
 		this.coastline.dispose();
 		this.countries.dispose();
-		this.ecologyOverlay.dispose();
 		this.debugOverlay.dispose();
 		this.geographyDebug.dispose();
 		this.streaming.dispose();
-		this.atmosphere.geometry.dispose();
-		(this.atmosphere.material as MeshBasicMaterial).dispose();
+		this.atmosphere.dispose();
 		this.object.clear();
 	}
 
@@ -318,18 +301,16 @@ export class PlanetRenderer {
 	}
 
 	private static reliefForAltitude(altitudeMeters: number): number {
-		if (!Number.isFinite(altitudeMeters) || altitudeMeters >= 5_000_000) {
-			return 3;
-		}
-		if (altitudeMeters >= 1_000_000) {
-			return 2.5;
-		}
-		if (altitudeMeters >= 250_000) {
-			return 2;
+		// Mixed LOD tiles do not share identical elevation samples along every edge.
+		// At globe scale, geometric exaggeration therefore exposes tile seams as
+		// moving bands. Keep the orbital globe spherical and express relief through
+		// colour and lighting; only introduce a subtle displacement very close up.
+		if (!Number.isFinite(altitudeMeters) || altitudeMeters >= 250_000) {
+			return 0;
 		}
 		if (altitudeMeters >= 60_000) {
-			return 1.4;
+			return 0.18;
 		}
-		return 1;
+		return 0.35;
 	}
 }

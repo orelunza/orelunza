@@ -23,8 +23,9 @@ export class CountryBoundaryRenderer {
 		new LineBasicMaterial({
 			color: 0xb9ddff,
 			transparent: true,
-			opacity: 0.42,
-			depthWrite: false
+			opacity: 0.24,
+			depthWrite: false,
+			depthTest: true
 		})
 	);
 	private readonly highlight = new LineSegments(
@@ -32,8 +33,9 @@ export class CountryBoundaryRenderer {
 		new LineBasicMaterial({
 			color: 0xffcf5a,
 			transparent: true,
-			opacity: 0.88,
-			depthWrite: false
+			opacity: 0.96,
+			depthWrite: false,
+			depthTest: true
 		})
 	);
 	private payload: CountryBoundaryPayload | null = null;
@@ -63,6 +65,12 @@ export class CountryBoundaryRenderer {
 		this.replaceGeometry(this.base, this.buildGeometry(this.payload.countries));
 		this.loaded = true;
 		this.refreshHighlight();
+	}
+
+	updateForAltitude(altitudeMeters: number): void {
+		const normalized = Math.max(0, Math.min(1, (altitudeMeters - 250_000) / 5_000_000));
+		(this.base.material as LineBasicMaterial).opacity = 0.34 - normalized * 0.2;
+		(this.highlight.material as LineBasicMaterial).opacity = 0.96;
 	}
 
 	setVisible(visible: boolean): void {
@@ -130,7 +138,7 @@ export class CountryBoundaryRenderer {
 		const planet = this.coordinateSystem.geodeticToPlanet({
 			latitudeRadians: (latitudeDegrees * Math.PI) / 180,
 			longitudeRadians: (longitudeDegrees * Math.PI) / 180,
-			altitudeMeters: 32_000
+			altitudeMeters: 26_000
 		});
 		point.set(
 			planet.x / metersPerRenderUnit,
