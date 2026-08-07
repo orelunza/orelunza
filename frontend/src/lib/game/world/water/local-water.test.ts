@@ -6,6 +6,7 @@ import type { VoxelWorld, LoadedWaterColumnProfile } from '../VoxelWorld';
 
 const DRY: LocalWaterForcing = {
 	rainIntensity: 0,
+	snowIntensity: 0,
 	rainShelter: 0,
 	precipitationType: 'none',
 	temperatureCelsius: 0,
@@ -107,6 +108,31 @@ describe('LocalWaterSaveState', () => {
 		).toBe(true);
 		expect(
 			isLocalWaterSaveState({
+				version: 2,
+				cells: [
+					{
+						x: 2,
+						z: -4,
+						waterDepth: 0.75,
+						velocityX: 0.2,
+						velocityZ: -0.1,
+						snowWaterEquivalent: 0.15
+					}
+				],
+				cycle: {
+					elapsedSeconds: 10,
+					rainfallAdded: 1,
+					snowfallAdded: 1,
+					snowmeltReleased: 0.5,
+					evaporated: 0.1,
+					sourceInflow: 0.2,
+					boundaryOutflow: 0.3,
+					runoffTransferred: 2
+				}
+			})
+		).toBe(true);
+		expect(
+			isLocalWaterSaveState({
 				version: 1,
 				cells: [{ x: 0, z: 0, waterDepth: -1, velocityX: 0, velocityZ: 0 }]
 			})
@@ -115,6 +141,49 @@ describe('LocalWaterSaveState', () => {
 });
 
 describe('LocalWaterSystem', () => {
+	it('stores snow, melts it into runoff and keeps the Lot 8 budget finite', () => {
+		const fake = new FakeLocalWaterWorld();
+		const water = new LocalWaterSystem(fake as unknown as VoxelWorld, {
+			activeRadius: 8,
+			recenterDistance: 4
+		});
+		water.activate({ x: 0, z: 0 });
+
+		const snow: LocalWaterForcing = {
+			...DRY,
+			snowIntensity: 1,
+			precipitationType: 'snow',
+			temperatureCelsius: -8,
+			humidity: 0.8
+		};
+		for (let step = 0; step < 120; step += 1) {
+			water.update({ x: 0, z: 0 }, 1 / 60, snow);
+		}
+
+		const frozen = water.createDebugApi().getDiagnostics();
+		expect(frozen.snowWaterEquivalent).toBeGreaterThan(0);
+		expect(frozen.snowCells).toBeGreaterThan(0);
+		expect(Math.abs(frozen.waterBudgetResidual)).toBeLessThan(1e-8);
+
+		const warm: LocalWaterForcing = {
+			...DRY,
+			temperatureCelsius: 15,
+			daylight: 1,
+			humidity: 0.5
+		};
+		for (let step = 0; step < 240; step += 1) {
+			water.update({ x: 0, z: 0 }, 1 / 60, warm);
+		}
+
+		const thawed = water.createDebugApi().getDiagnostics();
+		expect(thawed.snowMelted).toBeGreaterThan(0);
+		expect(thawed.runoffTransferred).toBeGreaterThanOrEqual(0);
+		expect(Number.isFinite(thawed.maximumErosionPotential)).toBe(true);
+		const save = water.serialize();
+		expect(save.version).toBe(2);
+		expect(save.cycle?.snowfallAdded).toBeGreaterThan(0);
+		water.dispose();
+	});
 	it('sleeps a local window, persists changes and rebuilds after voxel edits', () => {
 		const fake = new FakeLocalWaterWorld();
 		fake.setNaturalWater(0, 0, 1, 1);

@@ -74,7 +74,10 @@ export class Sky {
 		const state = this.environment.currentState;
 		return {
 			rainIntensity: state.rainIntensity,
-			rainShelter: Math.min(0.35, state.rainShelter),
+			snowIntensity: state.snowIntensity,
+			// Camera shelter is a rendering/local-player concept. The landscape still
+			// receives regional precipitation even when the player stands under a roof.
+			rainShelter: 0,
 			precipitationType: state.precipitationType,
 			temperatureCelsius: state.temperatureCelsius,
 			humidity: state.humidity,

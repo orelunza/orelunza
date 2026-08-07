@@ -49,6 +49,7 @@ export class EnvironmentState {
 	lightningProbability = 0;
 	overcast = 0;
 	rainIntensity = 0;
+	snowIntensity = 0;
 	rainVisibleIntensity = 0;
 	rainShelter = 0;
 	rainHaze = 0;
@@ -233,6 +234,7 @@ export class EnvironmentState {
 
 	applyPrecipitation(frame: Readonly<PrecipitationFrameState>): void {
 		this.rainIntensity = clamp01(frame.rainIntensity);
+		this.snowIntensity = clamp01(frame.snowIntensity);
 		this.rainVisibleIntensity = clamp01(frame.visibleRainIntensity);
 		this.rainShelter = clamp01(frame.shelter);
 	}

@@ -1,11 +1,12 @@
 import type { VoxelWorld, LoadedWaterColumnProfile } from '../VoxelWorld';
 import { chunkKey, worldToChunk, type ChunkCoordinate } from '../voxel-types';
 import {
-	createEmptyLocalWaterSaveState,
+	createEmptyNaturalWaterCycleSaveState,
 	isLocalWaterSaveState,
 	type LocalWaterCellSaveState,
 	type LocalWaterDiagnosticsSnapshot,
 	type LocalWaterForcing,
+	type NaturalWaterCycleSaveState,
 	type LocalWaterSaveState
 } from './LocalWaterState';
 import {
@@ -13,6 +14,12 @@ import {
 	type ShallowWaterCellInitialization,
 	type ShallowWaterStepResult
 } from './ShallowWaterSolver';
+import {
+	classifyNaturalWaterBody,
+	erosionPotential,
+	stepSnowpack,
+	type NaturalWaterBodyKind
+} from './NaturalWaterCycle';
 
 export interface LocalWaterUpdateResult {
 	changedChunks: ChunkCoordinate[];
@@ -28,6 +35,7 @@ export interface LocalWaterSystemOptions {
 
 export interface LocalWaterDebugApi {
 	getDiagnostics(): LocalWaterDiagnosticsSnapshot;
+	getCycleState(): NaturalWaterCycleSaveState;
 	addWater(x: number, z: number, depth?: number): boolean;
 	drainWater(x: number, z: number, depth?: number): boolean;
 	addWaterAtPlayer(depth?: number): boolean;
@@ -36,12 +44,23 @@ export interface LocalWaterDebugApi {
 	pause(): void;
 	resume(): void;
 	setRainScale(scale: number): void;
+	setPrecipitationScale(scale: number): void;
 }
 
 interface ActiveCellMetadata {
 	x: number;
 	z: number;
 	profile: LoadedWaterColumnProfile;
+	waterBody: NaturalWaterBodyKind;
+}
+
+interface NaturalCycleFrameAggregate {
+	snowAdded: number;
+	snowMelted: number;
+	riverExchange: number;
+	lakeExchange: number;
+	oceanExchange: number;
+	waterBudgetResidual: number;
 }
 
 const DEFAULT_ACTIVE_RADIUS = 24;
@@ -54,6 +73,7 @@ const SAVE_DIRTY_INTERVAL_SECONDS = 2;
 const RENDER_DEPTH_QUANTUM = 0.02;
 const SAVED_DEPTH_EPSILON = 0.015;
 const SAVED_SPEED_EPSILON = 0.02;
+const SAVED_SNOW_EPSILON = 0.00001;
 const MAXIMUM_SAVED_CELLS = 20_000;
 const CHUNK_REFRESH_INTERVAL_SECONDS = 0.12;
 const MAXIMUM_CHUNK_REFRESHES_PER_INTERVAL = 1;
@@ -75,6 +95,8 @@ export class LocalWaterSystem {
 	private solver: ShallowWaterSolver | null = null;
 	private metadata: ActiveCellMetadata[] = [];
 	private renderedDepth = new Float64Array(0);
+	private snowWaterEquivalent = new Float64Array(0);
+	private cycle: NaturalWaterCycleSaveState = createEmptyNaturalWaterCycleSaveState();
 	private centerX = 0;
 	private centerZ = 0;
 	private originX = 0;
@@ -176,25 +198,36 @@ export class LocalWaterSystem {
 		let substeps = 0;
 		let changed = false;
 		let aggregate: ShallowWaterStepResult | null = null;
+		const cycleFrame = emptyNaturalCycleFrameAggregate();
 		const startedAt = nowMilliseconds();
 
 		while (this.accumulator >= this.simulationStepSeconds && substeps < this.maximumSubsteps) {
-			const result = solver.step(
-				this.simulationStepSeconds,
-				{
-					...forcing,
-					rainIntensity: clamp01(forcing.rainIntensity) * this.rainScale
-				},
-				{
-					allowBoundaryOutflow: true,
-					worldOriginX: this.originX,
-					worldOriginZ: this.originZ,
-					boundaryGroundAt: (x, z) => this.boundaryProfile(x, z).groundSurfaceY,
-					boundaryWaterDepthAt: (x, z) => this.boundaryProfile(x, z).generatedWaterDepth
-				}
-			);
+			const scaledForcing: LocalWaterForcing = {
+				...forcing,
+				rainIntensity: clamp01(forcing.rainIntensity) * this.rainScale,
+				snowIntensity: clamp01(forcing.snowIntensity) * this.rainScale
+			};
+			const storedBefore = this.totalStoredWater(solver);
+			const snowResult = this.advanceSnowpack(this.simulationStepSeconds, scaledForcing);
+			const exchanges = { river: 0, lake: 0, ocean: 0 };
 
-			for (const index of result.changedIndices) {
+			const result = solver.step(this.simulationStepSeconds, scaledForcing, {
+				allowBoundaryOutflow: true,
+				worldOriginX: this.originX,
+				worldOriginZ: this.originZ,
+				boundaryGroundAt: (x, z) => this.boundaryProfile(x, z).groundSurfaceY,
+				boundaryWaterDepthAt: (x, z) => this.boundaryProfile(x, z).generatedWaterDepth,
+				onSourceInflow: (index, amount) => {
+					this.recordWaterBodyExchange(exchanges, this.metadata[index]?.waterBody, amount);
+				},
+				onBoundaryOutflow: (x, z, amount) => {
+					this.recordWaterBodyExchange(exchanges, this.waterBodyAt(x, z), amount);
+				}
+			});
+
+			const changedIndices = new Set(result.changedIndices);
+			for (const index of snowResult.meltedIndices) changedIndices.add(index);
+			for (const index of changedIndices) {
 				if (this.synchronizeRenderedCell(index)) {
 					const cell = this.metadata[index];
 					if (cell) {
@@ -204,7 +237,31 @@ export class LocalWaterSystem {
 				}
 			}
 
-			changed = changed || result.changedIndices.length > 0;
+			const storedAfter = result.totalVolume + this.totalSnowWaterEquivalent();
+			const expectedChange =
+				result.rainAdded +
+				snowResult.snowAdded +
+				result.sourceInflow -
+				result.evaporated -
+				result.boundaryOutflow;
+			cycleFrame.snowAdded += snowResult.snowAdded;
+			cycleFrame.snowMelted += snowResult.snowMelted;
+			cycleFrame.riverExchange += exchanges.river;
+			cycleFrame.lakeExchange += exchanges.lake;
+			cycleFrame.oceanExchange += exchanges.ocean;
+			cycleFrame.waterBudgetResidual += storedAfter - storedBefore - expectedChange;
+
+			this.cycle.elapsedSeconds += this.simulationStepSeconds;
+			this.cycle.rainfallAdded += result.rainAdded;
+			this.cycle.snowfallAdded += snowResult.snowAdded;
+			this.cycle.snowmeltReleased += snowResult.snowMelted;
+			this.cycle.evaporated += result.evaporated;
+			this.cycle.sourceInflow += result.sourceInflow;
+			this.cycle.boundaryOutflow += result.boundaryOutflow;
+			this.cycle.runoffTransferred += result.runoffTransferred;
+
+			changed =
+				changed || changedIndices.size > 0 || snowResult.snowAdded > 0 || snowResult.snowMelted > 0;
 			aggregate = aggregate
 				? mergeStepResults(aggregate, result)
 				: { ...result, changedIndices: [...result.changedIndices] };
@@ -216,6 +273,7 @@ export class LocalWaterSystem {
 		if (aggregate) {
 			this.updateDiagnostics(
 				aggregate,
+				cycleFrame,
 				this.pendingChunkRefreshes.size,
 				nowMilliseconds() - startedAt
 			);
@@ -236,18 +294,19 @@ export class LocalWaterSystem {
 
 	serialize(): LocalWaterSaveState {
 		this.persistCurrentCells();
-		if (this.savedCells.size === 0) return createEmptyLocalWaterSaveState();
 
 		return {
-			version: 1,
+			version: 2,
 			cells: [...this.savedCells.values()]
 				.map((cell) => ({ ...cell }))
-				.sort((left, right) => left.x - right.x || left.z - right.z)
+				.sort((left, right) => left.x - right.x || left.z - right.z),
+			cycle: { ...this.cycle }
 		};
 	}
 
 	restore(save: LocalWaterSaveState | null | undefined): void {
 		this.savedCells.clear();
+		this.cycle = createEmptyNaturalWaterCycleSaveState();
 		if (save && isLocalWaterSaveState(save)) {
 			for (const cell of save.cells) {
 				this.savedCells.set(cellKey(cell.x, cell.z), {
@@ -255,9 +314,11 @@ export class LocalWaterSystem {
 					z: Math.floor(cell.z),
 					waterDepth: Math.max(0, finiteOr(cell.waterDepth, 0)),
 					velocityX: finiteOr(cell.velocityX, 0),
-					velocityZ: finiteOr(cell.velocityZ, 0)
+					velocityZ: finiteOr(cell.velocityZ, 0),
+					snowWaterEquivalent: Math.max(0, finiteOr(cell.snowWaterEquivalent, 0))
 				});
 			}
+			if (save.cycle) this.cycle = { ...save.cycle };
 		}
 		this.needsRebuild = true;
 		this.structureRebuildElapsed = STRUCTURE_REBUILD_DELAY_SECONDS;
@@ -269,6 +330,7 @@ export class LocalWaterSystem {
 		this.metadata = [];
 		this.solver = null;
 		this.renderedDepth = new Float64Array(0);
+		this.snowWaterEquivalent = new Float64Array(0);
 		this.pendingChunkRefreshes.clear();
 		this.diagnosticsState.sleeping = true;
 	}
@@ -280,6 +342,7 @@ export class LocalWaterSystem {
 	createDebugApi(): LocalWaterDebugApi {
 		return {
 			getDiagnostics: () => this.diagnostics,
+			getCycleState: () => ({ ...this.cycle }),
 			addWater: (x, z, depth = 1) => this.changeWaterAt(x, z, Math.abs(depth)),
 			drainWater: (x, z, depth = 1) => this.changeWaterAt(x, z, -Math.abs(depth)),
 			addWaterAtPlayer: (depth = 1) =>
@@ -294,6 +357,9 @@ export class LocalWaterSystem {
 				this.paused = false;
 			},
 			setRainScale: (scale) => {
+				this.rainScale = Math.max(0, Math.min(20, finiteOr(scale, 1)));
+			},
+			setPrecipitationScale: (scale) => {
 				this.rainScale = Math.max(0, Math.min(20, finiteOr(scale, 1)));
 			}
 		};
@@ -314,6 +380,7 @@ export class LocalWaterSystem {
 		this.originZ = this.centerZ - this.activeRadius;
 		const diameter = this.activeRadius * 2 + 1;
 		const initialization: ShallowWaterCellInitialization[] = [];
+		const snowWaterEquivalent: number[] = [];
 		const metadata: ActiveCellMetadata[] = [];
 
 		for (let localZ = 0; localZ < diameter; localZ += 1) {
@@ -330,12 +397,14 @@ export class LocalWaterSystem {
 					velocityZ: saved?.velocityZ ?? 0,
 					active: profile.loaded
 				});
-				metadata.push({ x, z, profile });
+				snowWaterEquivalent.push(Math.max(0, finiteOr(saved?.snowWaterEquivalent, 0)));
+				metadata.push({ x, z, profile, waterBody: this.waterBodyAt(x, z, profile) });
 			}
 		}
 
 		this.solver = new ShallowWaterSolver(diameter, diameter, initialization);
 		this.metadata = metadata;
+		this.snowWaterEquivalent = Float64Array.from(snowWaterEquivalent);
 		this.renderedDepth = new Float64Array(metadata.length);
 		this.renderedDepth.fill(Number.NaN);
 		this.observedWorldVersion = this.world.modificationVersion;
@@ -355,11 +424,13 @@ export class LocalWaterSystem {
 			const depth = Math.max(0, solver.waterDepth[index]);
 			const velocityX = finiteOr(solver.velocityX[index], 0);
 			const velocityZ = finiteOr(solver.velocityZ[index], 0);
+			const snowWaterEquivalent = Math.max(0, finiteOr(this.snowWaterEquivalent[index], 0));
 			const differsFromNatural = Math.abs(depth - solver.sourceDepth[index]) > SAVED_DEPTH_EPSILON;
 			const moving = Math.hypot(velocityX, velocityZ) > SAVED_SPEED_EPSILON;
+			const storesSnow = snowWaterEquivalent > SAVED_SNOW_EPSILON;
 			const key = cellKey(cell.x, cell.z);
 
-			if (!differsFromNatural && !moving) {
+			if (!differsFromNatural && !moving && !storesSnow) {
 				this.savedCells.delete(key);
 				continue;
 			}
@@ -369,7 +440,8 @@ export class LocalWaterSystem {
 				z: cell.z,
 				waterDepth: depth,
 				velocityX,
-				velocityZ
+				velocityZ,
+				snowWaterEquivalent
 			});
 		}
 
@@ -446,6 +518,93 @@ export class LocalWaterSystem {
 		return true;
 	}
 
+	private advanceSnowpack(
+		deltaSeconds: number,
+		forcing: Readonly<LocalWaterForcing>
+	): { snowAdded: number; snowMelted: number; meltedIndices: number[] } {
+		const solver = this.solver;
+		if (!solver) return { snowAdded: 0, snowMelted: 0, meltedIndices: [] };
+
+		let snowAdded = 0;
+		let snowMelted = 0;
+		const meltedIndices: number[] = [];
+		for (let index = 0; index < solver.length; index += 1) {
+			if (!solver.active[index]) continue;
+			const result = stepSnowpack(this.snowWaterEquivalent[index] ?? 0, deltaSeconds, forcing);
+			this.snowWaterEquivalent[index] = result.snowWaterEquivalent;
+			snowAdded += result.snowfallAdded;
+			snowMelted += result.meltReleased;
+			if (result.meltReleased > 0) {
+				solver.waterDepth[index] += result.meltReleased;
+				this.renderedDepth[index] = Number.NaN;
+				meltedIndices.push(index);
+			}
+		}
+
+		return { snowAdded, snowMelted, meltedIndices };
+	}
+
+	private totalStoredWater(solver: Readonly<ShallowWaterSolver>): number {
+		let liquid = 0;
+		for (let index = 0; index < solver.length; index += 1) {
+			if (solver.active[index]) liquid += Math.max(0, solver.waterDepth[index]);
+		}
+		return liquid + this.totalSnowWaterEquivalent();
+	}
+
+	private totalSnowWaterEquivalent(): number {
+		const solver = this.solver;
+		let total = 0;
+		for (let index = 0; index < this.snowWaterEquivalent.length; index += 1) {
+			if (!solver || solver.active[index])
+				total += Math.max(0, this.snowWaterEquivalent[index] ?? 0);
+		}
+		return total;
+	}
+
+	private waterBodyAt(
+		x: number,
+		z: number,
+		profile: LoadedWaterColumnProfile = this.boundaryProfile(x, z)
+	): NaturalWaterBodyKind {
+		const generator = (
+			this.world as VoxelWorld & {
+				terrainGenerator?: { zoneAt?: (x: number, z: number) => string };
+			}
+		).terrainGenerator;
+		const zone = generator?.zoneAt?.(x, z);
+		return classifyNaturalWaterBody(zone, profile.generatedWaterDepth);
+	}
+
+	private recordWaterBodyExchange(
+		exchanges: { river: number; lake: number; ocean: number },
+		kind: NaturalWaterBodyKind | undefined,
+		amount: number
+	): void {
+		if (!Number.isFinite(amount) || amount <= 0 || !kind || kind === 'land') return;
+		exchanges[kind] += amount;
+	}
+
+	private groundSlopeAt(index: number): number {
+		const solver = this.solver;
+		if (!solver || index < 0 || index >= solver.length) return 0;
+		const x = index % solver.width;
+		const z = Math.floor(index / solver.width);
+		const centre = solver.groundHeight[index] ?? 0;
+		let maximum = 0;
+		for (const [dx, dz] of [
+			[-1, 0],
+			[1, 0],
+			[0, -1],
+			[0, 1]
+		] as const) {
+			const neighbour = solver.indexAt(x + dx, z + dz);
+			if (neighbour < 0 || !solver.active[neighbour]) continue;
+			maximum = Math.max(maximum, Math.abs(centre - (solver.groundHeight[neighbour] ?? centre)));
+		}
+		return maximum;
+	}
+
 	private drainChunkRefreshes(deltaSeconds: number): ChunkCoordinate[] {
 		this.chunkRefreshElapsed += Math.max(0, deltaSeconds);
 		if (
@@ -467,29 +626,55 @@ export class LocalWaterSystem {
 
 	private updateDiagnostics(
 		result: Readonly<ShallowWaterStepResult>,
+		cycleFrame: Readonly<NaturalCycleFrameAggregate>,
 		changedChunks: number,
 		lastStepMilliseconds: number
 	): void {
 		const solver = this.solver;
 		let wetCells = 0;
+		let snowCells = 0;
+		let maximumErosionPotential = 0;
 		if (solver) {
 			for (let index = 0; index < solver.length; index += 1) {
-				if (solver.active[index] && solver.waterDepth[index] > 0.001) wetCells += 1;
+				if (!solver.active[index]) continue;
+				const depth = solver.waterDepth[index] ?? 0;
+				if (depth > 0.001) wetCells += 1;
+				if ((this.snowWaterEquivalent[index] ?? 0) > SAVED_SNOW_EPSILON) snowCells += 1;
+				maximumErosionPotential = Math.max(
+					maximumErosionPotential,
+					erosionPotential(
+						depth,
+						Math.hypot(solver.velocityX[index] ?? 0, solver.velocityZ[index] ?? 0),
+						this.groundSlopeAt(index)
+					)
+				);
 			}
 		}
 
+		const snowWaterEquivalent = this.totalSnowWaterEquivalent();
 		this.diagnosticsState = {
 			activeCells: solver ? countActive(solver.active) : 0,
 			wetCells,
+			snowCells,
 			activeRadius: this.activeRadius,
 			solverSteps: this.solverSteps,
 			totalVolume: result.totalVolume,
+			snowWaterEquivalent,
+			totalStoredWater: result.totalVolume + snowWaterEquivalent,
 			maximumDepth: result.maximumDepth,
 			maximumSpeed: result.maximumSpeed,
 			rainAdded: result.rainAdded,
+			snowAdded: cycleFrame.snowAdded,
+			snowMelted: cycleFrame.snowMelted,
 			evaporated: result.evaporated,
 			sourceInflow: result.sourceInflow,
 			boundaryOutflow: result.boundaryOutflow,
+			runoffTransferred: result.runoffTransferred,
+			riverExchange: cycleFrame.riverExchange,
+			lakeExchange: cycleFrame.lakeExchange,
+			oceanExchange: cycleFrame.oceanExchange,
+			maximumErosionPotential,
+			waterBudgetResidual: cycleFrame.waterBudgetResidual,
 			changedChunks,
 			lastStepMilliseconds,
 			sleeping: this.paused
@@ -507,9 +692,21 @@ function mergeStepResults(
 		evaporated: left.evaporated + right.evaporated,
 		sourceInflow: left.sourceInflow + right.sourceInflow,
 		boundaryOutflow: left.boundaryOutflow + right.boundaryOutflow,
+		runoffTransferred: left.runoffTransferred + right.runoffTransferred,
 		totalVolume: right.totalVolume,
 		maximumDepth: Math.max(left.maximumDepth, right.maximumDepth),
 		maximumSpeed: Math.max(left.maximumSpeed, right.maximumSpeed)
+	};
+}
+
+function emptyNaturalCycleFrameAggregate(): NaturalCycleFrameAggregate {
+	return {
+		snowAdded: 0,
+		snowMelted: 0,
+		riverExchange: 0,
+		lakeExchange: 0,
+		oceanExchange: 0,
+		waterBudgetResidual: 0
 	};
 }
 
@@ -517,15 +714,26 @@ function emptyDiagnostics(activeRadius: number): LocalWaterDiagnosticsSnapshot {
 	return {
 		activeCells: 0,
 		wetCells: 0,
+		snowCells: 0,
 		activeRadius,
 		solverSteps: 0,
 		totalVolume: 0,
+		snowWaterEquivalent: 0,
+		totalStoredWater: 0,
 		maximumDepth: 0,
 		maximumSpeed: 0,
 		rainAdded: 0,
+		snowAdded: 0,
+		snowMelted: 0,
 		evaporated: 0,
 		sourceInflow: 0,
 		boundaryOutflow: 0,
+		runoffTransferred: 0,
+		riverExchange: 0,
+		lakeExchange: 0,
+		oceanExchange: 0,
+		maximumErosionPotential: 0,
+		waterBudgetResidual: 0,
 		changedChunks: 0,
 		lastStepMilliseconds: 0,
 		sleeping: true

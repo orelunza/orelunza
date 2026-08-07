@@ -20,6 +20,8 @@ export interface ShallowWaterStepOptions {
 	worldOriginZ?: number;
 	rainScale?: number;
 	evaporationScale?: number;
+	onBoundaryOutflow?: (worldX: number, worldZ: number, amount: number) => void;
+	onSourceInflow?: (index: number, amount: number) => void;
 }
 
 export interface ShallowWaterStepResult {
@@ -28,6 +30,7 @@ export interface ShallowWaterStepResult {
 	evaporated: number;
 	sourceInflow: number;
 	boundaryOutflow: number;
+	runoffTransferred: number;
 	totalVolume: number;
 	maximumDepth: number;
 	maximumSpeed: number;
@@ -131,14 +134,10 @@ export class ShallowWaterSolver {
 		this.changedMask.fill(0);
 
 		const flowRate = positiveOr(options.flowRate, DEFAULT_FLOW_RATE);
-		const maximumTransfer = positiveOr(
-			options.maximumTransferPerStep,
-			DEFAULT_MAXIMUM_TRANSFER
-		);
-		const sourceRechargeRate = nonNegative(
-			options.sourceRechargeRate ?? DEFAULT_SOURCE_RECHARGE
-		);
+		const maximumTransfer = positiveOr(options.maximumTransferPerStep, DEFAULT_MAXIMUM_TRANSFER);
+		const sourceRechargeRate = nonNegative(options.sourceRechargeRate ?? DEFAULT_SOURCE_RECHARGE);
 		let boundaryOutflow = 0;
+		let runoffTransferred = 0;
 
 		for (let z = 0; z < this.height; z += 1) {
 			for (let x = 0; x < this.width; x += 1) {
@@ -148,11 +147,27 @@ export class ShallowWaterSolver {
 				}
 
 				if (x + 1 < this.width) {
-					this.transferPair(index, this.indexAt(x + 1, z), 1, 0, dt, flowRate, maximumTransfer);
+					runoffTransferred += this.transferPair(
+						index,
+						this.indexAt(x + 1, z),
+						1,
+						0,
+						dt,
+						flowRate,
+						maximumTransfer
+					);
 				}
 
 				if (z + 1 < this.height) {
-					this.transferPair(index, this.indexAt(x, z + 1), 0, 1, dt, flowRate, maximumTransfer);
+					runoffTransferred += this.transferPair(
+						index,
+						this.indexAt(x, z + 1),
+						0,
+						1,
+						dt,
+						flowRate,
+						maximumTransfer
+					);
 				}
 
 				if (options.allowBoundaryOutflow) {
@@ -202,6 +217,7 @@ export class ShallowWaterSolver {
 				const recharge = Math.min(baseline - nextDepth, sourceRechargeRate * dt);
 				nextDepth += recharge;
 				sourceInflow += recharge;
+				options.onSourceInflow?.(index, recharge);
 			}
 
 			if (!Number.isFinite(nextDepth) || nextDepth < MINIMUM_STORED_DEPTH) {
@@ -232,7 +248,8 @@ export class ShallowWaterSolver {
 			rainAdded,
 			evaporated,
 			sourceInflow,
-			boundaryOutflow
+			boundaryOutflow,
+			runoffTransferred
 		};
 	}
 
@@ -244,9 +261,9 @@ export class ShallowWaterSolver {
 		dt: number,
 		flowRate: number,
 		maximumTransfer: number
-	): void {
+	): number {
 		if (!this.active[leftIndex] || !this.active[rightIndex]) {
-			return;
+			return 0;
 		}
 
 		const leftDepth = Math.max(0, this.waterDepth[leftIndex] + this.depthDelta[leftIndex]);
@@ -256,7 +273,7 @@ export class ShallowWaterSolver {
 		const difference = leftSurface - rightSurface;
 
 		if (Math.abs(difference) <= WATER_EPSILON) {
-			return;
+			return 0;
 		}
 
 		const sourceIndex = difference > 0 ? leftIndex : rightIndex;
@@ -271,14 +288,11 @@ export class ShallowWaterSolver {
 		const overflowHead = sourceSurface - Math.max(destinationSurface, barrierHeight);
 
 		if (overflowHead <= WATER_EPSILON) {
-			return;
+			return 0;
 		}
 
 		const available = Math.max(0, sourceSurface - barrierHeight);
-		const remainingDepth = Math.max(
-			0,
-			this.waterDepth[sourceIndex] + this.depthDelta[sourceIndex]
-		);
+		const remainingDepth = Math.max(0, this.waterDepth[sourceIndex] + this.depthDelta[sourceIndex]);
 		const transfer = Math.min(
 			remainingDepth,
 			available,
@@ -287,7 +301,7 @@ export class ShallowWaterSolver {
 		);
 
 		if (transfer <= WATER_EPSILON) {
-			return;
+			return 0;
 		}
 
 		this.depthDelta[sourceIndex] -= transfer;
@@ -301,6 +315,7 @@ export class ShallowWaterSolver {
 		this.momentumZ[sourceIndex] += signedZ * transfer;
 		this.momentumX[destinationIndex] += signedX * transfer;
 		this.momentumZ[destinationIndex] += signedZ * transfer;
+		return transfer;
 	}
 
 	private transferBoundary(
@@ -329,13 +344,8 @@ export class ShallowWaterSolver {
 				options.boundaryGroundAt?.(outsideX, outsideZ),
 				this.groundHeight[index]
 			);
-			const outsideDepth = nonNegative(
-				options.boundaryWaterDepthAt?.(outsideX, outsideZ)
-			);
-			const remainingDepth = Math.max(
-				0,
-				this.waterDepth[index] + this.depthDelta[index]
-			);
+			const outsideDepth = nonNegative(options.boundaryWaterDepthAt?.(outsideX, outsideZ));
+			const remainingDepth = Math.max(0, this.waterDepth[index] + this.depthDelta[index]);
 			const insideSurface = this.groundHeight[index] + remainingDepth;
 			const outsideSurface = outsideGround + outsideDepth;
 			const barrierHeight = Math.max(this.groundHeight[index], outsideGround);
@@ -362,6 +372,7 @@ export class ShallowWaterSolver {
 			this.momentumX[index] += dx * transfer;
 			this.momentumZ[index] += dz * transfer;
 			outflow += transfer;
+			options.onBoundaryOutflow?.(outsideX, outsideZ, transfer);
 		}
 
 		return outflow;
@@ -390,6 +401,7 @@ export class ShallowWaterSolver {
 			evaporated: 0,
 			sourceInflow: 0,
 			boundaryOutflow: 0,
+			runoffTransferred: 0,
 			totalVolume,
 			maximumDepth,
 			maximumSpeed
@@ -420,8 +432,10 @@ export function evaporationDepthPerSecond(forcing: Readonly<LocalWaterForcing>):
 	const sunlight = clamp01(forcing.daylight);
 	const wind = clamp01(forcing.windStrength);
 
-	return 0.0000001 +
-		warmth * (0.00000045 + sunlight * 0.0000011 + dryness * 0.00000055 + wind * 0.00000035);
+	return (
+		0.0000001 +
+		warmth * (0.00000045 + sunlight * 0.0000011 + dryness * 0.00000055 + wind * 0.00000035)
+	);
 }
 
 function finiteOr(value: number | undefined, fallback: number): number {
