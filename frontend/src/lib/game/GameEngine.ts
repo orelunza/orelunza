@@ -757,6 +757,21 @@ export class GameEngine {
 			this.needsWorldRebuild = false;
 		}
 
+		if (this.status === 'playing' && this.human.canAct) {
+			const movementActive = Math.hypot(humanMovement.forward, humanMovement.right) > 0.05;
+			const movementYaw = this.player.state.desiredMovementYaw;
+			for (const position of this.civilizationInteractions.updateAutomaticDoors(
+				this.player.state.position,
+				{
+					moving: movementActive,
+					directionX: Math.sin(movementYaw),
+					directionZ: Math.cos(movementYaw)
+				}
+			)) {
+				this.refreshBlockRendering(position);
+			}
+		}
+
 		const canTargetCreation =
 			this.status === 'playing' && this.human.canAct && this.buildMode && this.pointerLock.isLocked;
 		const canTargetInteraction =
@@ -872,7 +887,7 @@ export class GameEngine {
 			deltaSeconds,
 			this.human.snapshot.lifeState
 		);
-		this.renderer.updateCivilization(this.player.camera.camera.position);
+		this.renderer.updateCivilization(this.player.camera.camera.position, this.sky.daylight);
 		this.civilizationRadioAudio.update(this.player.state.position);
 		this.renderer.updateVegetation(
 			this.player.camera.camera.position,
@@ -1041,11 +1056,16 @@ export class GameEngine {
 	}
 
 	private interactWithCivilization(): void {
-		if (this.target?.kind !== 'block') return;
-		const position = this.target.block.block;
-		const result = this.civilizationInteractions.interact(position);
+		const targetedPosition = this.target?.kind === 'block' ? this.target.block.block : null;
+		let result = targetedPosition
+			? this.civilizationInteractions.interact(targetedPosition)
+			: { handled: false, worldChanged: false };
+		if (!result.handled) {
+			result = this.civilizationInteractions.interactNearestDoor(this.player.state.position);
+		}
 		if (!result.handled) return;
-		if (result.worldChanged) this.markBlockChanged(position);
+		const changedPosition = result.position ?? targetedPosition;
+		if (result.worldChanged && changedPosition) this.markBlockChanged(changedPosition);
 		if (result.action === 'sleep') {
 			this.human.requestSleepToggle();
 			this.persistence.markDirty();
@@ -1082,6 +1102,14 @@ export class GameEngine {
 	}
 
 	private breakTarget(): void {
+		if (
+			this.target?.kind === 'block' &&
+			this.world.isProtectedBuildPosition(this.target.block.block)
+		) {
+			this.message = 'Native city is protected';
+			return;
+		}
+
 		const removed = this.removalSystem.remove(this.target);
 
 		if (!removed) {
@@ -1145,7 +1173,11 @@ export class GameEngine {
 		if (target?.kind === 'block') {
 			const definition = BlockRegistry.get(target.block.type);
 
-			if (target.block.type === 'water') {
+			if (this.world.isProtectedBuildPosition(target.block.block)) {
+				element.dataset.target = 'invalid';
+				element.dataset.state = 'invalid';
+				element.dataset.label = 'Protected native city';
+			} else if (target.block.type === 'water') {
 				element.dataset.target = 'invalid';
 				element.dataset.state = 'invalid';
 				element.dataset.label = 'Water requires a terrain tool';
@@ -1256,10 +1288,42 @@ export class GameEngine {
 		this.selectedBuildBlock = resolveSelectedBuildBlock(state);
 	}
 
-	private markBlockChanged(position: BlockCoordinate): void {
+	private refreshBlockRendering(position: BlockCoordinate): void {
 		this.renderer.refreshChunk(this.world, worldToChunk(position));
 		this.diagnostics.chunkRefreshes += 1;
+	}
+
+	private markBlockChanged(position: BlockCoordinate): void {
+		this.refreshBlockRendering(position);
 		this.persistence.markDirty();
+	}
+
+	private snapshotTargetedBlock(): TargetedBlock | null {
+		if (this.target?.kind === 'block') {
+			const target = this.target.block;
+			const block = this.world.getLoadedBlock(target.block);
+			if (block && BlockRegistry.isInteractive(block.type)) {
+				return block.state?.open === undefined ? target : { ...target, open: block.state.open };
+			}
+		}
+
+		if (this.status === 'playing' && !this.buildMode && this.human.canAct) {
+			const nearbyDoor = this.civilizationInteractions.findNearbyDoor(this.player.state.position);
+			if (nearbyDoor) {
+				return {
+					block: { ...nearbyDoor.position },
+					normal: { x: 0, y: 0, z: 0 },
+					type: nearbyDoor.type,
+					open: nearbyDoor.open
+				};
+			}
+		}
+
+		if (this.target?.kind !== 'block') return null;
+		const target = this.target.block;
+		const block = this.world.getLoadedBlock(target.block);
+		if (block?.state?.open === undefined) return target;
+		return { ...target, open: block.state.open };
 	}
 
 	private weatherSurfaceHeightAt(x: number, z: number, maxY: number): number | null {
@@ -1423,6 +1487,7 @@ export class GameEngine {
 		const position = this.player.state.position;
 		const chunk = worldToChunk(position);
 		const human = this.human.snapshot;
+		const interactionTarget = this.snapshotTargetedBlock();
 
 		return [
 			this.status,
@@ -1441,8 +1506,8 @@ export class GameEngine {
 			this.sky.worldTime.minuteKey,
 			this.dayAnnouncement?.id ?? '',
 			this.world.terrainGenerator.zoneAt(position.x, position.z),
-			this.target?.kind === 'block'
-				? `block:${this.target.block.block.x},${this.target.block.block.y},${this.target.block.block.z}`
+			interactionTarget
+				? `block:${interactionTarget.block.x},${interactionTarget.block.y},${interactionTarget.block.z}:${interactionTarget.open ? 1 : 0}`
 				: this.target?.kind === 'vegetation'
 					? `vegetation:${this.target.instanceId}`
 					: '',
@@ -1516,7 +1581,7 @@ export class GameEngine {
 			},
 			human: this.human.snapshot,
 			dayAnnouncement: this.dayAnnouncement ? { ...this.dayAnnouncement } : null,
-			targetedBlock: this.target?.kind === 'block' ? this.target.block : null,
+			targetedBlock: this.snapshotTargetedBlock(),
 			buildMode: this.buildMode,
 			buildCatalogOpen: this.status === 'build-catalog',
 			selectedBuildBlock: this.selectedBuildBlock,

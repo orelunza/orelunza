@@ -319,6 +319,7 @@ export class TallGrassRenderer {
 			for (let localZ = 0; localZ < CHUNK_SIZE; localZ += 1) {
 				const x = startX + localX;
 				const z = startZ + localZ;
+				if (world.isProtectedBuildPosition({ x, z })) continue;
 				const surfaceY = world.terrainGenerator.heightAt(x, z);
 				const surface = world.getLoadedBlock({ x, y: surfaceY, z });
 				const above = world.getLoadedBlock({ x, y: surfaceY + 1, z });

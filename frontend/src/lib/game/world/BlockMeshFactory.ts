@@ -55,6 +55,11 @@ const LEAF_GEOMETRIES = new Map<CanopyShape, BufferGeometry>(
 	LEAF_SHAPES.map((shape) => [shape, createLeafCanopyGeometry(shape)])
 );
 const INSTANCE_COLOR_TYPES = new Set<BlockType>(['grass', 'leaves', 'wood']);
+const GEOMETRY_VERTEX_COLOR_TYPES = new Set<BlockType>([
+	'store_shelf',
+	'produce_crate',
+	'drink_cooler'
+]);
 
 export class BlockMeshFactory {
 	private readonly materials = new Map<string, Material>();
@@ -197,7 +202,7 @@ export class BlockMeshFactory {
 
 		const definition = BlockRegistry.get(type);
 		if (definition.orientable) helper.rotation.y = yawForFacing(block.state?.facing);
-		if (type === 'wooden_door' && block.state?.open) {
+		if ((type === 'wooden_door' || type === 'glass_door') && block.state?.open) {
 			const closedYaw = helper.rotation.y;
 			const openYaw = closedYaw + Math.PI / 2;
 			const halfWidth = 0.45;
@@ -259,6 +264,7 @@ export class BlockMeshFactory {
 		if (cached) return cached;
 		const definition = BlockRegistry.get(type);
 		const usesInstanceColor = INSTANCE_COLOR_TYPES.has(type);
+		const usesGeometryVertexColors = GEOMETRY_VERTEX_COLOR_TYPES.has(type);
 		const renderTransparent =
 			type === 'water' ||
 			type === 'glass' ||
@@ -266,7 +272,10 @@ export class BlockMeshFactory {
 			type === 'curtain' ||
 			type === 'mirror' ||
 			type === 'shower' ||
-			type === 'glass_cup';
+			type === 'glass_cup' ||
+			type === 'glass_door' ||
+			type === 'bus_shelter' ||
+			type === 'drink_cooler';
 		let material: MeshLambertMaterial | MeshStandardMaterial;
 
 		if (definition.light && stateVariant === 'lit') {
@@ -280,8 +289,8 @@ export class BlockMeshFactory {
 			});
 		} else {
 			material = new MeshLambertMaterial({
-				color: usesInstanceColor ? 0xffffff : definition.color,
-				vertexColors: type === 'grass' || type === 'leaves',
+				color: usesInstanceColor || usesGeometryVertexColors ? 0xffffff : definition.color,
+				vertexColors: type === 'grass' || type === 'leaves' || usesGeometryVertexColors,
 				transparent: renderTransparent,
 				opacity:
 					type === 'water'
@@ -298,14 +307,19 @@ export class BlockMeshFactory {
 											? 0.55
 											: type === 'glass_cup'
 												? 0.5
-												: 1,
+												: type === 'glass_door' || type === 'bus_shelter' || type === 'drink_cooler'
+													? 0.48
+													: 1,
 				depthWrite:
 					type !== 'water' &&
 					type !== 'glass' &&
 					type !== 'glass_panel' &&
 					type !== 'mirror' &&
 					type !== 'shower' &&
-					type !== 'glass_cup'
+					type !== 'glass_cup' &&
+					type !== 'glass_door' &&
+					type !== 'bus_shelter' &&
+					type !== 'drink_cooler'
 			});
 		}
 

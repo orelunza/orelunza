@@ -50,6 +50,10 @@ export class Sky {
 		return this.environment.currentState.windDirection;
 	}
 
+	get daylight(): number {
+		return this.environment.currentState.daylight;
+	}
+
 	get windStrength(): number {
 		return this.environment.currentState.windStrength;
 	}

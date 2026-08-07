@@ -47,7 +47,7 @@ function smoothNoise(seed: number, x: number, z: number): number {
 }
 
 export interface GeneratedChunk {
-	blocks: Array<{ position: BlockCoordinate; type: BlockType }>;
+	blocks: Array<{ position: BlockCoordinate; type: BlockType; protected?: boolean }>;
 }
 
 export interface WorldTerrainGenerator {
@@ -58,6 +58,7 @@ export interface WorldTerrainGenerator {
 	isPath(x: number, z: number): boolean;
 	generateChunk(chunkX: number, chunkZ: number): GeneratedChunk;
 	treeSpeciesAt?(x: number, z: number): TreeSpeciesId | null;
+	isProtectedBuildColumn?(x: number, z: number): boolean;
 }
 
 export class TerrainGenerator implements WorldTerrainGenerator {
@@ -78,7 +79,11 @@ export class TerrainGenerator implements WorldTerrainGenerator {
 			return 9;
 		}
 
-		if (this.isPath(x, z) || cityDistance < 28) {
+		if (this.city.isPoolInterior(x, z)) {
+			return 7;
+		}
+
+		if (this.isPath(x, z) || cityDistance < 46) {
 			return 9;
 		}
 
@@ -108,12 +113,20 @@ export class TerrainGenerator implements WorldTerrainGenerator {
 	}
 
 	zoneAt(x: number, z: number): string {
-		if (Math.hypot(x - CENTRAL_CITY_CENTER.x, z - CENTRAL_CITY_CENTER.z) < 30) {
-			return 'Central City';
+		// Keep the actual landing clearing readable as Spawn Meadow even though
+		// the native city deliberately sits close enough to be visible from it.
+		if (Math.hypot(x, z) < 24) {
+			return 'Spawn Meadow';
 		}
 
+		// Natural river identity wins where the nearby urban district overlaps
+		// the river corridor. This preserves the starter world's geography.
 		if (this.isRiver(x, z)) {
 			return 'Riverbank';
+		}
+
+		if (Math.hypot(x - CENTRAL_CITY_CENTER.x, z - CENTRAL_CITY_CENTER.z) < 46) {
+			return 'Central City';
 		}
 
 		if (x < -72 && z > 18) {
@@ -167,13 +180,21 @@ export class TerrainGenerator implements WorldTerrainGenerator {
 					}
 				}
 
-				blocks.push(...this.city.generateForColumn(x, height, z));
+				blocks.push(
+					...this.city
+						.generateForColumn(x, height, z)
+						.map((block) => ({ ...block, protected: true }))
+				);
 			}
 		}
 
 		this.addTreesForChunk(blocks, chunkX, chunkZ);
 
 		return { blocks };
+	}
+
+	isProtectedBuildColumn(x: number, z: number): boolean {
+		return this.city.isProtectedColumn(x, z);
 	}
 
 	treeSpeciesAt(x: number, z: number): TreeSpeciesId | null {
@@ -221,6 +242,7 @@ export class TerrainGenerator implements WorldTerrainGenerator {
 					const blockZone = this.zoneAt(x, z);
 
 					if (
+						this.city.isProtectedColumn(x, z) ||
 						blockZone === 'Central City' ||
 						blockZone === 'Free Build Meadow' ||
 						this.isPath(x, z)
@@ -237,7 +259,12 @@ export class TerrainGenerator implements WorldTerrainGenerator {
 	}
 
 	private canGrowTreeAt(x: number, z: number): boolean {
-		if (Math.hypot(x, z) < 14 || this.isPath(x, z) || this.isRiver(x, z)) {
+		if (
+			Math.hypot(x, z) < 14 ||
+			this.city.isProtectedColumn(x, z) ||
+			this.isPath(x, z) ||
+			this.isRiver(x, z)
+		) {
 			return false;
 		}
 

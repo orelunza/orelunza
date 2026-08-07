@@ -51,7 +51,25 @@ export type BlockType =
 	| 'bread_loaf'
 	| 'fresh_fruit'
 	| 'rice_meal'
-	| 'bottled_water';
+	| 'bottled_water'
+	| 'asphalt'
+	| 'sidewalk'
+	| 'road_marking'
+	| 'glass_door'
+	| 'street_lamp'
+	| 'bench'
+	| 'trash_bin'
+	| 'bollard'
+	| 'bus_shelter'
+	| 'store_shelf'
+	| 'produce_crate'
+	| 'drink_cooler'
+	| 'checkout_counter'
+	| 'shopping_cart'
+	| 'store_sign'
+	| 'pool_tile'
+	| 'pool_ladder'
+	| 'changing_bench';
 
 export type BlockFacing = 'north' | 'east' | 'south' | 'west';
 
@@ -119,7 +137,21 @@ export type BlockRenderShape =
 	| 'frying-pan'
 	| 'plate-stack'
 	| 'glass-cup'
-	| 'fruit-bowl';
+	| 'fruit-bowl'
+	| 'road-marking'
+	| 'glass-door'
+	| 'street-lamp'
+	| 'bench'
+	| 'trash-bin'
+	| 'bollard'
+	| 'bus-shelter'
+	| 'store-shelf'
+	| 'produce-crate'
+	| 'drink-cooler'
+	| 'checkout-counter'
+	| 'shopping-cart'
+	| 'store-sign'
+	| 'pool-ladder';
 
 /** Local AABB in a voxel cell. Values stay in [0, 1]. */
 export interface BlockCollisionBox {

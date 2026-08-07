@@ -48,7 +48,25 @@ export type BlockIconShape =
 	| 'frying-pan'
 	| 'plate-stack'
 	| 'glass-cup'
-	| 'fruit-bowl';
+	| 'fruit-bowl'
+	| 'asphalt-road'
+	| 'sidewalk-tile'
+	| 'road-marking'
+	| 'glass-door'
+	| 'street-lamp'
+	| 'public-bench'
+	| 'trash-bin'
+	| 'bollard'
+	| 'bus-shelter'
+	| 'store-shelf'
+	| 'produce-crate'
+	| 'drink-cooler'
+	| 'checkout-counter'
+	| 'shopping-cart'
+	| 'store-sign'
+	| 'pool-tile'
+	| 'pool-ladder'
+	| 'changing-bench';
 
 const BLOCK_ICON_SHAPES: Record<BlockType, BlockIconShape> = {
 	air: 'empty',
@@ -101,7 +119,25 @@ const BLOCK_ICON_SHAPES: Record<BlockType, BlockIconShape> = {
 	bread_loaf: 'wooden-boards',
 	fresh_fruit: 'flower-stem',
 	rice_meal: 'stone-slab',
-	bottled_water: 'water-tile'
+	bottled_water: 'water-tile',
+	asphalt: 'asphalt-road',
+	sidewalk: 'sidewalk-tile',
+	road_marking: 'road-marking',
+	glass_door: 'glass-door',
+	street_lamp: 'street-lamp',
+	bench: 'public-bench',
+	trash_bin: 'trash-bin',
+	bollard: 'bollard',
+	bus_shelter: 'bus-shelter',
+	store_shelf: 'store-shelf',
+	produce_crate: 'produce-crate',
+	drink_cooler: 'drink-cooler',
+	checkout_counter: 'checkout-counter',
+	shopping_cart: 'shopping-cart',
+	store_sign: 'store-sign',
+	pool_tile: 'pool-tile',
+	pool_ladder: 'pool-ladder',
+	changing_bench: 'changing-bench'
 };
 
 export function blockIconShape(type: BlockType): BlockIconShape {

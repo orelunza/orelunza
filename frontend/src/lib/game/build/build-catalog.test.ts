@@ -102,6 +102,7 @@ describe('build catalog helper', () => {
 			'grass'
 		);
 		expect(filterCatalogEntries(entries, 'all', 'door').map((entry) => entry.type)).toEqual([
+			'glass_door',
 			'wooden_door'
 		]);
 	});

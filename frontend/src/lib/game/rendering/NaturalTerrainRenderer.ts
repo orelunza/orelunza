@@ -169,7 +169,11 @@ export class NaturalTerrainRenderer {
 				const wx = startX + x + jitter(startX + x, startZ + z, 0) * 1.4;
 				const wz = startZ + z + jitter(startX + x, startZ + z, 1) * 1.4;
 
-				if (world.terrainGenerator.isWater(wx, wz) || world.terrainGenerator.isPath(wx, wz)) {
+				if (
+					world.isProtectedBuildPosition({ x: wx, z: wz }) ||
+					world.terrainGenerator.isWater(wx, wz) ||
+					world.terrainGenerator.isPath(wx, wz)
+				) {
 					continue;
 				}
 

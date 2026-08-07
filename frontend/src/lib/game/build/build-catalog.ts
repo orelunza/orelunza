@@ -315,6 +315,41 @@ function buildSynonyms(definition: BlockDefinition): readonly string[] {
 			return ['glass', 'cup', 'drinkware'];
 		case 'fruit_bowl':
 			return ['fruit', 'food', 'bowl', 'kitchen'];
+		case 'asphalt':
+			return ['road', 'street', 'avenue', 'parking'];
+		case 'sidewalk':
+			return ['pavement', 'walkway', 'urban', 'plaza'];
+		case 'road_marking':
+			return ['lane', 'crosswalk', 'parking line', 'street'];
+		case 'glass_door':
+			return ['door', 'shop entrance', 'storefront', 'glass'];
+		case 'street_lamp':
+			return ['lamp', 'streetlight', 'public light', 'road'];
+		case 'bench':
+		case 'changing_bench':
+			return ['bench', 'seat', 'park', 'public furniture'];
+		case 'trash_bin':
+			return ['bin', 'waste', 'street', 'public'];
+		case 'bollard':
+			return ['post', 'street', 'pedestrian', 'barrier'];
+		case 'bus_shelter':
+			return ['bus stop', 'transit', 'shelter', 'street'];
+		case 'store_shelf':
+			return ['shelf', 'supermarket', 'shop', 'grocery', 'aisle'];
+		case 'produce_crate':
+			return ['fruit', 'market', 'produce', 'supermarket'];
+		case 'drink_cooler':
+			return ['drinks', 'water', 'supermarket', 'fridge'];
+		case 'checkout_counter':
+			return ['checkout', 'cash register', 'supermarket', 'shop'];
+		case 'shopping_cart':
+			return ['cart', 'trolley', 'supermarket', 'shopping'];
+		case 'store_sign':
+			return ['sign', 'shop', 'storefront', 'commercial'];
+		case 'pool_tile':
+			return ['pool', 'tile', 'swimming', 'leisure'];
+		case 'pool_ladder':
+			return ['pool', 'ladder', 'swimming', 'water'];
 		default:
 			return [];
 	}

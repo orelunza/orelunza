@@ -211,8 +211,8 @@ export class GameRenderer {
 		this.groundFoliage.updateSurfaceWeather(state);
 	}
 
-	updateCivilization(cameraPosition: Readonly<Vector3>): void {
-		this.fixtures.update(cameraPosition);
+	updateCivilization(cameraPosition: Readonly<Vector3>, daylight = 0): void {
+		this.fixtures.update(cameraPosition, daylight);
 	}
 
 	updateVegetation(

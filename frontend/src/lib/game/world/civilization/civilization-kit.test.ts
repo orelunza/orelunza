@@ -30,6 +30,9 @@ describe('civilization kit', () => {
 		expect(BlockRegistry.get('bed').interaction).toBe('bed');
 		expect(BlockRegistry.get('wardrobe').interaction).toBe('wardrobe');
 		expect(BlockRegistry.get('floor_lamp').light?.distance).toBeGreaterThan(0);
+		expect(
+			BlockRegistry.collisionBox(BlockRegistry.create('floor_lamp', { x: 0, y: 0, z: 0 }))
+		).not.toBeNull();
 		expect(BlockRegistry.get('fire_pit').heatCelsius).toBeGreaterThan(0);
 	});
 

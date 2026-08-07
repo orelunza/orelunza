@@ -55,7 +55,9 @@ export class BlockPlacementSystem {
 			return null;
 		}
 
-		let allowed = destination.type === 'air' || destination.type === 'water';
+		let allowed =
+			(destination.type === 'air' || destination.type === 'water') &&
+			!this.world.isProtectedBuildPosition(position);
 		let pillarLiftPosition: { x: number; y: number; z: number } | null = null;
 
 		if (

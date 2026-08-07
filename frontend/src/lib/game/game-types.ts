@@ -40,6 +40,8 @@ export interface TargetedBlock {
 	block: BlockCoordinate;
 	normal: BlockCoordinate;
 	type: BlockType;
+	/** HUD-only live state for openable blocks; raycasters may omit it. */
+	open?: boolean;
 }
 
 export interface WorldEnvironmentSnapshot {

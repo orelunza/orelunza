@@ -274,6 +274,78 @@
 				cy="24"
 				r="6"
 			/><circle class="top" cx="28" cy="22" r="6" />
+		{:else if shape === 'asphalt-road'}
+			<path class="right" d="M5 31 24 20l19 10-19 11Z" />
+			<path class="detail-light-stroke" d="m10 31 8-5m5-3 6-3m5 8 5-3" />
+		{:else if shape === 'sidewalk-tile'}
+			<path class="top" d="M6 25 24 15l18 10-18 10Z" />
+			<path class="detail-dark" d="M15 20v10m9-15v20m9-15v10M8 25h32" />
+		{:else if shape === 'road-marking'}
+			<path class="right" d="M5 31 24 20l19 10-19 11Z" />
+			<path class="detail-light-stroke" d="m11 32 8-5m5-3 8-5m3 11 5-3" />
+		{:else if shape === 'glass-door'}
+			<rect class="glass-fill" x="12" y="5" width="24" height="38" rx="1" />
+			<path class="glass-frame" d="M11 4h26v40H11Zm4 4v32h18V8Z" fill-rule="evenodd" />
+			<path class="glass-shine" d="m17 25 12-12m-8 18 10-10" />
+			<circle class="detail-light" cx="31" cy="26" r="1.6" />
+		{:else if shape === 'street-lamp'}
+			<path class="detail-dark" d="M23 39V13h11" />
+			<path class="top" d="m29 11 10 0-2 9h-6Z" />
+			<circle class="detail-light" cx="34" cy="17" r="3" />
+			<path class="right" d="M16 39h15v4H16Z" />
+		{:else if shape === 'public-bench'}
+			<path class="top" d="M8 24h32v7H8Zm2-13h28v8H10Z" />
+			<path class="detail-dark" d="M12 31v10m24-10v10M12 19v5m24-5v5" />
+		{:else if shape === 'trash-bin'}
+			<path class="right" d="M14 15h20l-2 27H16Z" />
+			<path class="top" d="M12 11h24v6H12Z" />
+			<path class="detail-dark" d="M18 21v15m6-15v15m6-15v15" />
+		{:else if shape === 'bollard'}
+			<path class="right" d="M20 14h8l2 27H18Z" />
+			<ellipse class="top" cx="24" cy="14" rx="5" ry="3" />
+			<path class="detail-light-stroke" d="M19 27h10" />
+		{:else if shape === 'bus-shelter'}
+			<path class="glass-fill" d="M9 12h30v27H9Z" />
+			<path class="glass-frame" d="M7 9h34v4H7Zm2 3h3v29H9Zm27 0h3v29h-3Z" />
+			<path class="top" d="M14 30h20v5H14Z" />
+		{:else if shape === 'store-shelf'}
+			<rect class="top" x="8" y="8" width="32" height="34" />
+			<path class="detail-dark" d="M9 18h30M9 29h30M14 12v4m7-4v4m7 11v4m7-4v4" />
+		{:else if shape === 'produce-crate'}
+			<path class="right" d="M8 23h32v17H8Z" />
+			<path class="detail-light-stroke" d="M11 27h26M11 34h26" />
+			<circle class="top" cx="17" cy="20" r="5" /><circle
+				class="top"
+				cx="26"
+				cy="18"
+				r="5"
+			/><circle class="top" cx="34" cy="21" r="4" />
+		{:else if shape === 'drink-cooler'}
+			<rect class="glass-fill" x="11" y="5" width="26" height="39" rx="2" />
+			<path class="glass-frame" d="M10 4h28v41H10Zm4 5v31h20V9Z" fill-rule="evenodd" />
+			<path class="detail-light-stroke" d="M17 17h14M17 25h14M17 33h14" />
+		{:else if shape === 'checkout-counter'}
+			<path class="top" d="M6 21h36v18H6Z" />
+			<path class="detail-dark" d="M8 26h20m8-13v10h6M30 16h6" />
+		{:else if shape === 'shopping-cart'}
+			<path class="detail-dark" d="M8 12h5l4 20h19l4-13H16m1 4h20M20 34v3m13-3v3" />
+			<circle class="right" cx="20" cy="40" r="3" /><circle class="right" cx="33" cy="40" r="3" />
+		{:else if shape === 'store-sign'}
+			<rect class="top" x="7" y="10" width="34" height="20" rx="2" />
+			<path class="detail-light-stroke" d="M12 17h24M12 23h16" />
+			<path class="detail-dark" d="M17 30v10m14-10v10" />
+		{:else if shape === 'pool-tile'}
+			<path class="top" d="M6 25 24 15l18 10-18 10Z" />
+			<path class="water-wave" d="M10 25c3-2 5-2 8 0s5 2 8 0 5-2 9 0" />
+			<path class="detail-light-stroke" d="M24 16v18M8 25h32" />
+		{:else if shape === 'pool-ladder'}
+			<path
+				class="detail-dark"
+				d="M15 40V14c0-5 5-7 9-4 2 1 3 3 3 6v24M15 22h12M15 29h12M15 36h12"
+			/>
+		{:else if shape === 'changing-bench'}
+			<path class="top" d="M8 22h32v8H8Z" />
+			<path class="detail-dark" d="M13 30v11m22-11v11M11 25h26" />
 		{/if}
 	</svg>
 </span>

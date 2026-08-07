@@ -3,9 +3,9 @@ import type { CharacterAppearanceV1 } from '../../character/CharacterAppearance'
 export interface OutfitPreset {
 	id: string;
 	label: string;
-	shirtColor: string;
-	pantsColor: string;
-	shoesColor: string;
+	shirtColor: CharacterAppearanceV1['shirtColor'];
+	pantsColor: CharacterAppearanceV1['pantsColor'];
+	shoesColor: CharacterAppearanceV1['shoesColor'];
 }
 
 export const OUTFIT_PRESETS: readonly OutfitPreset[] = [

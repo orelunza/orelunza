@@ -56,6 +56,7 @@ export class VoxelWorld {
 	private readonly generator: WorldTerrainGenerator;
 	private readonly generatedBlocks = new Map<string, BlockType>();
 	private readonly generatedChunkBlocks = new Map<string, Set<string>>();
+	private readonly protectedGeneratedBlocks = new Set<string>();
 	private readonly generatedColumnProfiles = new Map<string, GeneratedColumnProfile>();
 	private readonly loadedChunks = new Set<string>();
 	private readonly placedBlocks = new Map<string, { type: BlockType; state?: BlockState }>();
@@ -89,6 +90,13 @@ export class VoxelWorld {
 
 	get modificationVersion(): number {
 		return this.structureVersion;
+	}
+
+	isProtectedBuildPosition(position: Pick<BlockCoordinate, 'x' | 'z'>): boolean {
+		return (
+			this.generator.isProtectedBuildColumn?.(Math.floor(position.x), Math.floor(position.z)) ===
+			true
+		);
 	}
 
 	getLoadedChunks(): ChunkCoordinate[] {
@@ -272,6 +280,8 @@ export class VoxelWorld {
 	setBlock(position: BlockCoordinate, type: BlockType, track = true, state?: BlockState): boolean {
 		const normalized = normalizeBlock(position);
 
+		if (track && this.isProtectedBuildPosition(normalized)) return false;
+
 		if (type === 'air' || normalized.y < WORLD_MIN_Y || normalized.y > WORLD_MAX_Y) {
 			return false;
 		}
@@ -336,6 +346,13 @@ export class VoxelWorld {
 		const normalized = normalizeBlock(position);
 		const key = blockKey(normalized);
 		const current = this.getBlock(normalized);
+
+		if (
+			track &&
+			(this.protectedGeneratedBlocks.has(key) || this.isProtectedBuildPosition(normalized))
+		) {
+			return null;
+		}
 
 		if (current.type === 'air' || !current.collectable) {
 			return null;
@@ -657,12 +674,21 @@ export class VoxelWorld {
 		}
 
 		const feet = { x: position.x, y: position.y, z: position.z };
+		const restoreRadius = 0.32;
+		const restoreHeight = 1.78;
 
-		if (this.validatePlayerPosition(feet)) {
+		// A persisted position outside the playable vertical world is not a local
+		// obstruction to repair. Fall back to the canonical spawn so restores are
+		// deterministic instead of selecting an arbitrary neighbouring column.
+		if (feet.y < WORLD_MIN_Y + 1 || feet.y + restoreHeight > WORLD_MAX_Y) {
+			return this.spawnPosition();
+		}
+
+		if (this.validatePlayerPosition(feet, restoreRadius, restoreHeight)) {
 			return { ...feet };
 		}
 
-		const repaired = this.findSafeSpawnPosition(0.32, 1.78, feet, 8);
+		const repaired = this.findSafeSpawnPosition(restoreRadius, restoreHeight, feet, 8);
 
 		return this.validatePlayerPosition(repaired) ? repaired : this.spawnPosition();
 	}
@@ -775,19 +801,40 @@ export class VoxelWorld {
 
 		for (const block of snapshot.placedBlocks) {
 			const position = normalizeBlock(block.position);
+			const key = blockKey(position);
+			if (this.isProtectedBuildPosition(position)) {
+				this.loadChunk(worldToChunk(position));
+				const generatedType = this.generatedBlocks.get(key);
+				// Preserve legitimate state overlays (open doors, depleted shelves,
+				// radios, etc.) but discard old player replacements inside the native city.
+				if (!this.protectedGeneratedBlocks.has(key) || generatedType !== block.type) continue;
+			}
 			const state = BlockRegistry.normalizeState(block.type, block.state);
-			this.placedBlocks.set(blockKey(position), { type: block.type, state });
+			this.placedBlocks.set(key, { type: block.type, state });
 			this.indexPlacedBlock(position, block.type);
 			this.playerModifiedColumns.add(columnKey(position.x, position.z));
 		}
 
 		for (const block of snapshot.removedBlocks) {
 			const position = normalizeBlock(block);
+			if (this.isProtectedBuildPosition(position)) continue;
 			this.removedBlocks.add(blockKey(position));
 			this.playerModifiedColumns.add(columnKey(position.x, position.z));
 		}
 
-		this.changes.push(...snapshot.changes);
+		this.changes.push(
+			...snapshot.changes.filter((change) => {
+				const position = normalizeBlock(change.block);
+				if (!this.isProtectedBuildPosition(position)) return true;
+				if (change.type !== 'placed') return false;
+				this.loadChunk(worldToChunk(position));
+				const key = blockKey(position);
+				return (
+					this.protectedGeneratedBlocks.has(key) &&
+					this.generatedBlocks.get(key) === change.blockType
+				);
+			})
+		);
 		this.structureVersion += 1;
 	}
 
@@ -859,6 +906,7 @@ export class VoxelWorld {
 			const blockPositionKey = blockKey(block.position);
 
 			this.generatedBlocks.set(blockPositionKey, block.type);
+			if (block.protected) this.protectedGeneratedBlocks.add(blockPositionKey);
 			this.indexGeneratedBlock(block.position, block.type);
 			blockKeys.add(blockPositionKey);
 		}
@@ -876,6 +924,7 @@ export class VoxelWorld {
 
 		for (const blockPositionKey of blockKeys) {
 			this.generatedBlocks.delete(blockPositionKey);
+			this.protectedGeneratedBlocks.delete(blockPositionKey);
 		}
 
 		const [chunkX = '0', chunkZ = '0'] = key.split(',');
