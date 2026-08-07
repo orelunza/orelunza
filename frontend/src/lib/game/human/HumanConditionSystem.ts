@@ -3,6 +3,7 @@ import type { PlayerState } from '../player/PlayerState';
 import { fallDamageForImpactSpeed } from './HumanDamageSystem';
 import { stepMetabolism } from './HumanMetabolism';
 import { stepRespiration } from './HumanRespiration';
+import { stepHumanRest } from './HumanRestSystem';
 import {
 	MAXIMUM_HEALTH,
 	createHumanConditionSnapshot,
@@ -13,12 +14,17 @@ import {
 	type HumanConditionSnapshot,
 	type HumanDamageCause
 } from './HumanConditionState';
+import type { HumanExposureSnapshot } from './HumanExposure';
 import { stepThermoregulation } from './HumanThermoregulation';
 
 export interface HumanEnvironmentInput {
 	temperatureCelsius: number;
 	windChillCelsius: number;
 	rainIntensity: number;
+	snowIntensity: number;
+	windStrength: number;
+	daylight: number;
+	humidity: number;
 }
 
 export interface HumanWaterInput {
@@ -30,6 +36,7 @@ export interface HumanConditionUpdateInput {
 	player: Readonly<PlayerState>;
 	movement: Readonly<MovementInput>;
 	environment: Readonly<HumanEnvironmentInput>;
+	exposure: Readonly<HumanExposureSnapshot>;
 	water: Readonly<HumanWaterInput>;
 	headObstructed: boolean;
 }
@@ -37,6 +44,7 @@ export interface HumanConditionUpdateInput {
 export interface HumanConditionUpdateResult {
 	persistenceDirty: boolean;
 	damageApplied: number;
+	sleepChanged: boolean;
 }
 
 export interface HumanConditionDebugApi {
@@ -45,11 +53,14 @@ export interface HumanConditionDebugApi {
 	heal(amount: number): void;
 	setHydration(value: number): void;
 	setNutrition(value: number): void;
+	setFatigue(value: number): void;
+	toggleSleep(): void;
 	refill(): void;
 }
 
 const SAVE_DIRTY_INTERVAL_SECONDS = 5;
 const REGENERATION_PER_SECOND = 0.05;
+const SLEEP_REGENERATION_MULTIPLIER = 2.25;
 
 export class HumanConditionSystem {
 	private stateValue = createHumanConditionSnapshot();
@@ -58,17 +69,32 @@ export class HumanConditionSystem {
 	private maximumAirborneDownwardSpeed = 0;
 	private dirtyElapsed = 0;
 	private lastPersistenceFingerprint = '';
+	private sleepToggleRequested = false;
 
 	get snapshot(): HumanConditionSnapshot {
 		return { ...this.stateValue };
 	}
 
 	get canAct(): boolean {
-		return this.stateValue.lifeState !== 'unconscious' && this.stateValue.lifeState !== 'dead';
+		return (
+			!this.stateValue.sleeping &&
+			this.stateValue.lifeState !== 'unconscious' &&
+			this.stateValue.lifeState !== 'dead'
+		);
 	}
 
 	get canSprint(): boolean {
-		return this.canAct && this.stateValue.stamina >= 5;
+		return this.canAct && this.stateValue.stamina >= 5 && this.stateValue.fatigue < 88;
+	}
+
+	requestSleepToggle(): void {
+		if (this.stateValue.sleeping) {
+			this.stateValue.sleeping = false;
+			this.stateValue.restState = 'active';
+			this.sleepToggleRequested = false;
+			return;
+		}
+		this.sleepToggleRequested = true;
 	}
 
 	update(
@@ -76,10 +102,11 @@ export class HumanConditionSystem {
 		input: Readonly<HumanConditionUpdateInput>
 	): HumanConditionUpdateResult {
 		const dt = safeDelta(deltaSeconds);
-		if (dt <= 0) return { persistenceDirty: false, damageApplied: 0 };
+		if (dt <= 0) return { persistenceDirty: false, damageApplied: 0, sleepChanged: false };
 
 		this.stateValue.lastDamageAmount = 0;
 		let damageApplied = 0;
+		let sleepChanged = false;
 		const eyeY = input.player.position.y + input.player.height * 0.92;
 		const bodyY = input.player.position.y + Math.min(0.42, input.player.height * 0.28);
 		const waterSurface = input.water.waterSurfaceY;
@@ -87,6 +114,11 @@ export class HumanConditionSystem {
 		const immersed = waterSurface !== null && input.water.waterDepth > 0.02 && waterSurface > bodyY;
 		this.stateValue.underwater = underwater;
 		this.stateValue.suffocating = input.headObstructed;
+		this.stateValue.sheltered = input.exposure.sheltered;
+		this.stateValue.skyExposure = clamp(input.exposure.skyExposure, 0, 1);
+		this.stateValue.windExposure = clamp(input.exposure.windExposure, 0, 1);
+		this.stateValue.precipitationExposure = clamp(input.exposure.precipitationExposure, 0, 1);
+		this.stateValue.nearbyHeatCelsius = Math.max(0, finiteOr(input.exposure.nearbyHeatCelsius, 0));
 
 		if (!this.groundInitialized) {
 			this.groundInitialized = true;
@@ -115,10 +147,60 @@ export class HumanConditionSystem {
 			}
 
 			const speed = Math.hypot(input.player.velocity.x, input.player.velocity.z);
+			const moving = speed > 0.15;
+			const sprinting = input.movement.sprint && speed > 5.2;
+			const jumping = input.movement.jump && !input.player.onGround;
+
+			const restBefore = stepHumanRest(this.stateValue.fatigue, dt, {
+				moving,
+				sprinting,
+				jumping,
+				onGround: input.player.onGround,
+				underwater,
+				sheltered: input.exposure.sheltered,
+				lifeState: this.stateValue.lifeState,
+				bodyTemperatureCelsius: this.stateValue.bodyTemperatureCelsius,
+				sleeping: this.stateValue.sleeping
+			});
+			this.stateValue.canSleep = restBefore.canSleep;
+			this.stateValue.sleepBlockedReason = restBefore.sleepBlockedReason;
+
+			if (this.sleepToggleRequested) {
+				this.sleepToggleRequested = false;
+				if (restBefore.canSleep) {
+					this.stateValue.sleeping = true;
+					sleepChanged = true;
+				}
+			}
+			if (this.stateValue.sleeping && !restBefore.canSleep) {
+				this.stateValue.sleeping = false;
+				sleepChanged = true;
+			}
+
+			const rest = stepHumanRest(this.stateValue.fatigue, dt, {
+				moving: this.stateValue.sleeping ? false : moving,
+				sprinting: this.stateValue.sleeping ? false : sprinting,
+				jumping: this.stateValue.sleeping ? false : jumping,
+				onGround: input.player.onGround,
+				underwater,
+				sheltered: input.exposure.sheltered,
+				lifeState: this.stateValue.lifeState,
+				bodyTemperatureCelsius: this.stateValue.bodyTemperatureCelsius,
+				sleeping: this.stateValue.sleeping
+			});
+			this.stateValue.fatigue = rest.fatigue;
+			this.stateValue.restState = rest.restState;
+			this.stateValue.sleeping = rest.sleeping;
+			this.stateValue.canSleep = rest.canSleep;
+			this.stateValue.sleepBlockedReason = rest.sleepBlockedReason;
+
 			const metabolism = stepMetabolism(this.stateValue, dt, {
-				moving: speed > 0.15,
-				sprinting: input.movement.sprint && speed > 5.2,
-				jumping: input.movement.jump && !input.player.onGround,
+				moving: this.stateValue.sleeping ? false : moving,
+				sprinting: this.stateValue.sleeping ? false : sprinting,
+				jumping: this.stateValue.sleeping ? false : jumping,
+				sleeping: this.stateValue.sleeping,
+				staminaRecoveryMultiplier: rest.staminaRecoveryMultiplier,
+				fatigue: this.stateValue.fatigue,
 				ambientTemperatureCelsius: input.environment.temperatureCelsius
 			});
 			this.stateValue.nutrition = metabolism.nutrition;
@@ -129,10 +211,19 @@ export class HumanConditionSystem {
 			if (metabolism.dehydrationDamage > 0)
 				damageApplied += this.applyDamage(metabolism.dehydrationDamage, 'dehydration');
 
+			const activityIntensity = this.stateValue.sleeping ? 0 : sprinting ? 1 : moving ? 0.45 : 0;
 			const thermoregulation = stepThermoregulation(this.stateValue, dt, {
 				ambientTemperatureCelsius: input.environment.temperatureCelsius,
 				windChillCelsius: input.environment.windChillCelsius,
 				rainIntensity: input.environment.rainIntensity,
+				snowIntensity: input.environment.snowIntensity,
+				skyExposure: input.exposure.skyExposure,
+				windExposure: input.exposure.windExposure,
+				precipitationExposure: input.exposure.precipitationExposure,
+				nearbyHeatCelsius: input.exposure.nearbyHeatCelsius,
+				daylight: input.environment.daylight,
+				humidity: input.environment.humidity,
+				activityIntensity,
 				immersed
 			});
 			this.stateValue.bodyTemperatureCelsius = thermoregulation.bodyTemperatureCelsius;
@@ -146,10 +237,16 @@ export class HumanConditionSystem {
 		}
 
 		this.stateValue.lifeState = deriveLifeState(this.stateValue.health);
+		if (this.stateValue.lifeState !== 'alive' && this.stateValue.sleeping) {
+			this.stateValue.sleeping = false;
+			sleepChanged = true;
+		}
+
 		this.dirtyElapsed += dt;
 		const fingerprint = this.persistenceFingerprint();
 		const significant =
 			damageApplied > 0 ||
+			sleepChanged ||
 			fingerprint.split('|').at(-1) !== this.lastPersistenceFingerprint.split('|').at(-1);
 		const persistenceDirty =
 			significant ||
@@ -159,7 +256,7 @@ export class HumanConditionSystem {
 			this.dirtyElapsed = 0;
 			this.lastPersistenceFingerprint = fingerprint;
 		}
-		return { persistenceDirty, damageApplied };
+		return { persistenceDirty, damageApplied, sleepChanged };
 	}
 
 	serialize(): HumanConditionSaveState {
@@ -172,6 +269,7 @@ export class HumanConditionSystem {
 		this.groundInitialized = false;
 		this.wasGrounded = false;
 		this.dirtyElapsed = 0;
+		this.sleepToggleRequested = false;
 		this.lastPersistenceFingerprint = this.persistenceFingerprint();
 	}
 
@@ -195,15 +293,22 @@ export class HumanConditionSystem {
 			setNutrition: (value) => {
 				this.stateValue.nutrition = clamp(value, 0, 100);
 			},
+			setFatigue: (value) => {
+				this.stateValue.fatigue = clamp(value, 0, 100);
+			},
+			toggleSleep: () => this.requestSleepToggle(),
 			refill: () => {
 				this.stateValue.health = 100;
 				this.stateValue.oxygen = 100;
 				this.stateValue.nutrition = 100;
 				this.stateValue.hydration = 100;
 				this.stateValue.stamina = 100;
+				this.stateValue.fatigue = 0;
 				this.stateValue.bodyTemperatureCelsius = 37;
 				this.stateValue.wetness = 0;
 				this.stateValue.lifeState = 'alive';
+				this.stateValue.restState = 'rested';
+				this.stateValue.sleeping = false;
 				this.stateValue.lastDamageCause = null;
 			}
 		};
@@ -216,6 +321,7 @@ export class HumanConditionSystem {
 		this.stateValue.health -= applied;
 		this.stateValue.lastDamageCause = cause;
 		this.stateValue.lastDamageAmount += applied;
+		if (applied > 0 && this.stateValue.sleeping) this.stateValue.sleeping = false;
 		return applied;
 	}
 
@@ -232,9 +338,10 @@ export class HumanConditionSystem {
 		) {
 			return;
 		}
+		const multiplier = this.stateValue.sleeping ? SLEEP_REGENERATION_MULTIPLIER : 1;
 		this.stateValue.health = Math.min(
 			MAXIMUM_HEALTH,
-			this.stateValue.health + REGENERATION_PER_SECOND * deltaSeconds
+			this.stateValue.health + REGENERATION_PER_SECOND * multiplier * deltaSeconds
 		);
 	}
 
@@ -246,8 +353,10 @@ export class HumanConditionSystem {
 			Math.round(state.nutrition),
 			Math.round(state.hydration),
 			Math.round(state.stamina),
+			Math.round(state.fatigue),
 			Math.round(state.bodyTemperatureCelsius * 10) / 10,
 			Math.round(state.wetness * 20) / 20,
+			state.sleeping ? 1 : 0,
 			state.lifeState
 		].join('|');
 	}

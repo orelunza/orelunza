@@ -31,14 +31,36 @@ function player(overrides: Partial<PlayerState> = {}): PlayerState {
 }
 
 const movement = { forward: 0, right: 0, jump: false, sprint: false };
-const environment = { temperatureCelsius: 20, windChillCelsius: 20, rainIntensity: 0 };
+const environment = {
+	temperatureCelsius: 20,
+	windChillCelsius: 20,
+	rainIntensity: 0,
+	snowIntensity: 0,
+	windStrength: 0.2,
+	daylight: 0.7,
+	humidity: 0.4
+};
+const exposure = {
+	sheltered: false,
+	skyExposure: 1,
+	windExposure: 1,
+	precipitationExposure: 1,
+	nearbyHeatCelsius: 0
+};
 const dry = { waterSurfaceY: null, waterDepth: 0 };
 
-function step(system: HumanConditionSystem, state: PlayerState, seconds = 0.1, water = dry): void {
+function step(
+	system: HumanConditionSystem,
+	state: PlayerState,
+	seconds = 0.1,
+	water = dry,
+	exposureInput = exposure
+): void {
 	system.update(seconds, {
 		player: state,
 		movement,
 		environment,
+		exposure: exposureInput,
 		water,
 		headObstructed: false
 	});
@@ -79,15 +101,42 @@ describe('HumanConditionSystem', () => {
 		const system = new HumanConditionSystem();
 		system.createDebugApi().damage(20, 'fall');
 		system.createDebugApi().setHydration(63);
+		system.createDebugApi().setFatigue(61);
 		const save = system.serialize();
 		expect(isHumanConditionSaveState(save)).toBe(true);
 		const restored = new HumanConditionSystem();
 		restored.restore(save);
 		expect(restored.snapshot.health).toBe(80);
 		expect(restored.snapshot.hydration).toBe(63);
+		expect(restored.snapshot.fatigue).toBe(61);
+		expect(save.version).toBe(2);
 		const fresh = new HumanConditionSystem();
 		fresh.restore(undefined);
 		expect(fresh.snapshot.health).toBe(100);
+	});
+
+	it('sleeps only when grounded and sheltered and wakes on request', () => {
+		const system = new HumanConditionSystem();
+		system.createDebugApi().setFatigue(70);
+		system.requestSleepToggle();
+		step(system, player(), 0.1, dry, { ...exposure, sheltered: false });
+		expect(system.snapshot.sleeping).toBe(false);
+		expect(system.snapshot.sleepBlockedReason).toBe('needs-shelter');
+
+		system.requestSleepToggle();
+		step(system, player(), 0.1, dry, {
+			...exposure,
+			sheltered: true,
+			skyExposure: 0,
+			windExposure: 0.2,
+			precipitationExposure: 0
+		});
+		expect(system.snapshot.sleeping).toBe(true);
+		expect(system.canAct).toBe(false);
+
+		system.requestSleepToggle();
+		expect(system.snapshot.sleeping).toBe(false);
+		expect(system.canAct).toBe(true);
 	});
 
 	it('uses critical, unconscious and dead life states', () => {

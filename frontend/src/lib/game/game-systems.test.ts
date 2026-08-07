@@ -1163,6 +1163,18 @@ describe('player physics', () => {
 		input.destroy();
 	});
 
+	test('toggles human sleep with N', () => {
+		const windowTarget = new FakeWindow();
+		const input = new KeyboardInput(windowTarget as unknown as Window);
+
+		windowTarget.press('KeyN');
+
+		expect(input.consumeCommands()).toMatchObject({
+			sleep: true
+		});
+		input.destroy();
+	});
+
 	test('recenters the independent build cursor with R', () => {
 		const windowTarget = new FakeWindow();
 		const input = new KeyboardInput(windowTarget as unknown as Window);

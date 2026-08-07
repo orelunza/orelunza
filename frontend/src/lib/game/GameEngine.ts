@@ -44,7 +44,7 @@ import { VegetationRemovalState } from './vegetation/VegetationRemovalState';
 import { ChunkStreamingSystem } from './world/ChunkStreamingSystem';
 import { createStarterWorld } from './world/WorldGenerator';
 import { LocalWaterSystem, type LocalWaterDebugApi } from './world/water';
-import { HumanConditionSystem, type HumanConditionDebugApi } from './human';
+import { HumanConditionSystem, sampleHumanExposure, type HumanConditionDebugApi } from './human';
 import {
 	STARTER_WORLD_SEED,
 	WORLD_MAX_Y,
@@ -593,6 +593,11 @@ export class GameEngine {
 			}
 		}
 
+		if (commands.sleep && this.status === 'playing') {
+			this.human.requestSleepToggle();
+			this.persistence.markDirty();
+		}
+
 		if (commands.inventory && this.status === 'playing') {
 			this.openInventory();
 		}
@@ -743,14 +748,20 @@ export class GameEngine {
 			const eyeY = position.y + this.player.state.height * 0.92;
 			const water = this.localWater.sampleAt(position.x, position.z);
 			const forcing = this.sky.localWaterForcing;
+			const exposure = sampleHumanExposure(this.world, this.player.state, this.sky.windDirection);
 			const humanUpdate = this.human.update(deltaSeconds, {
 				player: this.player.state,
 				movement: humanMovement,
 				environment: {
 					temperatureCelsius: this.sky.temperatureCelsius,
 					windChillCelsius: this.sky.windChillCelsius,
-					rainIntensity: forcing.rainIntensity
+					rainIntensity: forcing.rainIntensity,
+					snowIntensity: forcing.snowIntensity,
+					windStrength: forcing.windStrength,
+					daylight: forcing.daylight,
+					humidity: forcing.humidity
 				},
+				exposure,
 				water: { waterSurfaceY: water.waterSurfaceY, waterDepth: water.waterDepth },
 				headObstructed: this.world.isSolidLoadedAt({
 					x: Math.floor(position.x),
@@ -1297,6 +1308,10 @@ export class GameEngine {
 			Math.round(human.nutrition),
 			Math.round(human.bodyTemperatureCelsius * 10) / 10,
 			Math.round(human.wetness * 20) / 20,
+			Math.round(human.fatigue),
+			human.restState,
+			human.sleeping ? 1 : 0,
+			human.sheltered ? 1 : 0,
 			human.lifeState,
 			this.introVisible ? 1 : 0,
 			this.message ?? '',

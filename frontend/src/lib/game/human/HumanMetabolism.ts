@@ -4,6 +4,9 @@ export interface HumanMetabolismInput {
 	moving: boolean;
 	sprinting: boolean;
 	jumping: boolean;
+	sleeping: boolean;
+	staminaRecoveryMultiplier: number;
+	fatigue: number;
 	ambientTemperatureCelsius: number;
 }
 
@@ -28,7 +31,7 @@ export function stepMetabolism(
 	input: Readonly<HumanMetabolismInput>
 ): HumanMetabolismResult {
 	const dt = safeDelta(deltaSeconds);
-	const activity = input.sprinting ? 2.4 : input.moving ? 1.35 : 1;
+	const activity = input.sleeping ? 0.8 : input.sprinting ? 2.4 : input.moving ? 1.35 : 1;
 	const heat = Math.max(0, finiteOr(input.ambientTemperatureCelsius, 20) - 28);
 	const hydrationMultiplier = activity * (1 + Math.min(1.4, heat * 0.045));
 	const nutrition = Math.max(
@@ -42,11 +45,20 @@ export function stepMetabolism(
 	);
 
 	let stamina = finiteOr(current.stamina, MAXIMUM_STAMINA);
-	if (input.sprinting && input.moving) stamina -= SPRINT_STAMINA_PER_SECOND * dt;
-	else if (input.moving) stamina -= WALK_STAMINA_PER_SECOND * dt;
-	else stamina += STAMINA_RECOVERY_PER_SECOND * dt;
-	if (input.jumping) stamina -= 0.8 * dt;
-	stamina = clamp(stamina, 0, MAXIMUM_STAMINA);
+	if (!input.sleeping && input.sprinting && input.moving) stamina -= SPRINT_STAMINA_PER_SECOND * dt;
+	else if (!input.sleeping && input.moving) stamina -= WALK_STAMINA_PER_SECOND * dt;
+	else {
+		stamina +=
+			STAMINA_RECOVERY_PER_SECOND *
+			Math.max(0.5, finiteOr(input.staminaRecoveryMultiplier, 1)) *
+			dt;
+	}
+	if (!input.sleeping && input.jumping) stamina -= 0.8 * dt;
+
+	// Long-term fatigue reduces the amount of stamina the body can sustain.
+	const fatigue = clamp(finiteOr(input.fatigue, 0), 0, 100);
+	const effectiveMaximumStamina = MAXIMUM_STAMINA - fatigue * 0.35;
+	stamina = clamp(stamina, 0, effectiveMaximumStamina);
 
 	return {
 		nutrition,

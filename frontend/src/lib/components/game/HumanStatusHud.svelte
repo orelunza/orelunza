@@ -15,6 +15,8 @@
 	let cold = $derived(human.bodyTemperatureCelsius < 35.5);
 	let hot = $derived(human.bodyTemperatureCelsius > 39);
 	let wet = $derived(human.wetness > 0.65);
+	let tired = $derived(human.fatigue >= 55 && human.fatigue < 85);
+	let exhausted = $derived(human.fatigue >= 85);
 </script>
 
 <div class="absolute bottom-5 left-4 flex w-48 flex-col gap-2" aria-label="Human condition">
@@ -42,7 +44,7 @@
 		</div>
 	</div>
 
-	{#if human.lifeState !== 'alive' || oxygenLow || hydrationLow || nutritionLow || cold || hot || wet}
+	{#if human.lifeState !== 'alive' || human.sleeping || tired || exhausted || oxygenLow || hydrationLow || nutritionLow || cold || hot || wet}
 		<div class="flex flex-wrap gap-1.5 text-[0.62rem] font-semibold">
 			{#if human.lifeState === 'critical'}
 				<span class="rounded-sm border border-red-400/30 bg-red-950/62 px-2 py-1 text-red-200"
@@ -56,6 +58,33 @@
 				<span class="rounded-sm border border-red-400/30 bg-black/80 px-2 py-1 text-red-100"
 					>Dead</span
 				>
+			{/if}
+			{#if human.sleeping}
+				<span
+					class="rounded-sm border border-indigo-300/25 bg-indigo-950/68 px-2 py-1 text-indigo-100"
+					>Sleeping · N to wake</span
+				>
+			{:else if exhausted}
+				<span
+					class="rounded-sm border border-violet-300/25 bg-violet-950/62 px-2 py-1 text-violet-100"
+					>Exhausted</span
+				>
+			{:else if tired}
+				<span
+					class="rounded-sm border border-violet-300/20 bg-violet-950/55 px-2 py-1 text-violet-100"
+					>Tired</span
+				>
+			{/if}
+			{#if (tired || exhausted) && !human.sleeping}
+				{#if human.canSleep}
+					<span class="rounded-sm border border-white/12 bg-black/45 px-2 py-1 text-white/70"
+						>N · Sleep</span
+					>
+				{:else if human.sleepBlockedReason === 'needs-shelter'}
+					<span class="rounded-sm border border-white/10 bg-black/40 px-2 py-1 text-white/56"
+						>Find shelter to sleep</span
+					>
+				{/if}
 			{/if}
 			{#if oxygenLow}
 				<span class="rounded-sm border border-sky-300/25 bg-sky-950/66 px-2 py-1 text-sky-100"
