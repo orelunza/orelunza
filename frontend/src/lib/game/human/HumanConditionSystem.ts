@@ -1,6 +1,7 @@
 import type { MovementInput } from '../input/KeyboardInput';
 import type { PlayerState } from '../player/PlayerState';
 import { fallDamageForImpactSpeed } from './HumanDamageSystem';
+import { RESPAWN_PROTECTION_SECONDS } from './HumanDeathSystem';
 import { deriveHumanEffects } from './HumanEffects';
 import {
 	addIllnessExposure,
@@ -67,6 +68,8 @@ export interface HumanConditionUpdateResult {
 	persistenceDirty: boolean;
 	damageApplied: number;
 	sleepChanged: boolean;
+	lifeStateChanged: boolean;
+	deathOccurred: boolean;
 }
 
 export interface HumanConditionDebugApi {
@@ -84,6 +87,7 @@ export interface HumanConditionDebugApi {
 	treatIllness(kind?: HumanIllnessKind): boolean;
 	clearConditions(): void;
 	toggleSleep(): void;
+	respawn(): boolean;
 	refill(): void;
 }
 
@@ -227,9 +231,22 @@ export class HumanConditionSystem {
 		input: Readonly<HumanConditionUpdateInput>
 	): HumanConditionUpdateResult {
 		const dt = safeDelta(deltaSeconds);
-		if (dt <= 0) return { persistenceDirty: false, damageApplied: 0, sleepChanged: false };
+		if (dt <= 0) {
+			return {
+				persistenceDirty: false,
+				damageApplied: 0,
+				sleepChanged: false,
+				lifeStateChanged: false,
+				deathOccurred: false
+			};
+		}
 
+		const lifeStateBefore = this.stateValue.lifeState;
 		this.stateValue.lastDamageAmount = 0;
+		this.stateValue.respawnProtectionSeconds = Math.max(
+			0,
+			this.stateValue.respawnProtectionSeconds - dt
+		);
 		let damageApplied = 0;
 		let sleepChanged = false;
 		const eyeY = input.player.position.y + input.player.height * 0.92;
@@ -257,9 +274,12 @@ export class HumanConditionSystem {
 		} else if (!this.wasGrounded) {
 			const fallDamage = fallDamageForImpactSpeed(this.maximumAirborneDownwardSpeed);
 			if (fallDamage > 0) {
-				damageApplied += this.applyDamage(fallDamage, 'fall');
-				const injury = injuryForFallDamage(fallDamage, this.nextConditionId('injury'));
-				if (injury) this.stateValue.injuries = mergeInjury(this.stateValue.injuries, injury);
+				const appliedFallDamage = this.applyDamage(fallDamage, 'fall');
+				damageApplied += appliedFallDamage;
+				if (appliedFallDamage > 0) {
+					const injury = injuryForFallDamage(appliedFallDamage, this.nextConditionId('injury'));
+					if (injury) this.stateValue.injuries = mergeInjury(this.stateValue.injuries, injury);
+				}
 			}
 			this.maximumAirborneDownwardSpeed = 0;
 		}
@@ -428,12 +448,10 @@ export class HumanConditionSystem {
 
 		this.dirtyElapsed += dt;
 		const fingerprint = this.persistenceFingerprint();
-		const previousLifeState = this.lastPersistenceFingerprint.split('|').at(-1);
+		const lifeStateChanged = this.stateValue.lifeState !== lifeStateBefore;
+		const deathOccurred = lifeStateBefore !== 'dead' && this.stateValue.lifeState === 'dead';
 		const significant =
-			damageApplied >= 0.5 ||
-			sleepChanged ||
-			this.conditionMutationPending ||
-			this.stateValue.lifeState !== previousLifeState;
+			damageApplied >= 0.5 || sleepChanged || lifeStateChanged || this.conditionMutationPending;
 		const persistenceDirty =
 			significant ||
 			(this.dirtyElapsed >= SAVE_DIRTY_INTERVAL_SECONDS &&
@@ -443,7 +461,30 @@ export class HumanConditionSystem {
 			this.lastPersistenceFingerprint = fingerprint;
 			this.conditionMutationPending = false;
 		}
-		return { persistenceDirty, damageApplied, sleepChanged };
+		return { persistenceDirty, damageApplied, sleepChanged, lifeStateChanged, deathOccurred };
+	}
+
+	respawn(): boolean {
+		if (this.stateValue.lifeState !== 'dead') return false;
+
+		const lastDeathCause = this.stateValue.lastDeathCause ?? this.stateValue.lastDamageCause;
+		const deathCount = Math.max(1, this.stateValue.deathCount);
+		this.stateValue = createHumanConditionSnapshot();
+		this.stateValue.lastDeathCause = lastDeathCause;
+		this.stateValue.deathCount = deathCount;
+		this.stateValue.respawnProtectionSeconds = RESPAWN_PROTECTION_SECONDS;
+		this.stateValue.nutrition = 82;
+		this.stateValue.hydration = 82;
+		this.stateValue.fatigue = 10;
+		this.stateValue.restState = 'rested';
+		this.exposureLoads = createHumanIllnessExposureLoads();
+		this.maximumAirborneDownwardSpeed = 0;
+		this.groundInitialized = false;
+		this.wasGrounded = false;
+		this.sleepToggleRequested = false;
+		this.conditionMutationPending = true;
+		this.refreshConditionAggregates();
+		return true;
 	}
 
 	serialize(): HumanConditionSaveState {
@@ -500,6 +541,7 @@ export class HumanConditionSystem {
 			treatIllness: (kind) => this.applyIllnessTreatment(kind),
 			clearConditions: () => this.clearConditions(),
 			toggleSleep: () => this.requestSleepToggle(),
+			respawn: () => this.respawn(),
 			refill: () => {
 				this.stateValue.health = 100;
 				this.stateValue.oxygen = 100;
@@ -510,6 +552,7 @@ export class HumanConditionSystem {
 				this.stateValue.bodyTemperatureCelsius = 37;
 				this.stateValue.wetness = 0;
 				this.stateValue.lifeState = 'alive';
+				this.stateValue.respawnProtectionSeconds = 0;
 				this.stateValue.restState = 'rested';
 				this.stateValue.sleeping = false;
 				this.stateValue.lastDamageCause = null;
@@ -531,12 +574,24 @@ export class HumanConditionSystem {
 
 	private applyDamage(amount: number, cause: HumanDamageCause): number {
 		const damage = Math.max(0, finiteOr(amount, 0));
-		if (damage <= 0 || this.stateValue.health <= 0) return 0;
-		const applied = Math.min(this.stateValue.health, damage);
-		this.stateValue.health -= applied;
+		if (
+			damage <= 0 ||
+			this.stateValue.health <= 0 ||
+			this.stateValue.respawnProtectionSeconds > 0
+		) {
+			return 0;
+		}
+
+		const healthBefore = this.stateValue.health;
+		const applied = Math.min(healthBefore, damage);
+		this.stateValue.health = Math.max(0, healthBefore - applied);
 		this.stateValue.lifeState = deriveLifeState(this.stateValue.health);
 		this.stateValue.lastDamageCause = cause;
 		this.stateValue.lastDamageAmount += applied;
+		if (healthBefore > 0 && this.stateValue.health <= 0) {
+			this.stateValue.lastDeathCause = cause;
+			this.stateValue.deathCount += 1;
+		}
 		if (applied > 0 && this.stateValue.sleeping) this.stateValue.sleeping = false;
 		return applied;
 	}
@@ -613,6 +668,8 @@ export class HumanConditionSystem {
 			Math.round(this.exposureLoads['food-poisoning'] * 100),
 			Math.round(this.exposureLoads['waterborne-illness'] * 100),
 			Math.round(this.exposureLoads.infection * 100),
+			state.lastDeathCause ?? '',
+			state.deathCount,
 			state.lifeState
 		].join('|');
 	}

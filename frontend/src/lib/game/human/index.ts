@@ -10,3 +10,5 @@ export * from './HumanIllnessSystem';
 export * from './HumanEffects';
 export * from './HumanRecoverySystem';
 export * from './HumanConditionSystem';
+export * from './HumanDeathSystem';
+export * from './HumanFeedback';

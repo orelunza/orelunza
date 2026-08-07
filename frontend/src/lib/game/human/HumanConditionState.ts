@@ -95,6 +95,9 @@ export interface HumanConditionSnapshot {
 	nearbyHeatCelsius: number;
 	lastDamageCause: HumanDamageCause | null;
 	lastDamageAmount: number;
+	lastDeathCause: HumanDamageCause | null;
+	deathCount: number;
+	respawnProtectionSeconds: number;
 	underwater: boolean;
 	suffocating: boolean;
 	injuries: HumanInjurySnapshot[];
@@ -152,8 +155,32 @@ export interface HumanConditionSaveStateV3 {
 	conditionSequence: number;
 }
 
+export interface HumanConditionSaveStateV4 {
+	version: 4;
+	health: number;
+	oxygen: number;
+	nutrition: number;
+	hydration: number;
+	stamina: number;
+	fatigue: number;
+	bodyTemperatureCelsius: number;
+	wetness: number;
+	lifeState: HumanLifeState;
+	sleeping: boolean;
+	lastDamageCause: HumanDamageCause | null;
+	lastDeathCause: HumanDamageCause | null;
+	deathCount: number;
+	injuries: HumanInjurySnapshot[];
+	illnesses: HumanIllnessSnapshot[];
+	exposureLoads: HumanIllnessExposureLoads;
+	conditionSequence: number;
+}
+
 export type HumanConditionSaveState =
-	HumanConditionSaveStateV1 | HumanConditionSaveStateV2 | HumanConditionSaveStateV3;
+	| HumanConditionSaveStateV1
+	| HumanConditionSaveStateV2
+	| HumanConditionSaveStateV3
+	| HumanConditionSaveStateV4;
 
 export const MAXIMUM_HEALTH = 100;
 export const MAXIMUM_OXYGEN = 100;
@@ -194,6 +221,9 @@ export function createHumanConditionSnapshot(): HumanConditionSnapshot {
 		nearbyHeatCelsius: 0,
 		lastDamageCause: null,
 		lastDamageAmount: 0,
+		lastDeathCause: null,
+		deathCount: 0,
+		respawnProtectionSeconds: 0,
 		underwater: false,
 		suffocating: false,
 		injuries: [],
@@ -209,9 +239,9 @@ export function serializeHumanCondition(
 	state: Readonly<HumanConditionSnapshot>,
 	exposureLoads: Readonly<HumanIllnessExposureLoads> = createHumanIllnessExposureLoads(),
 	conditionSequence = 0
-): HumanConditionSaveStateV3 {
+): HumanConditionSaveStateV4 {
 	return {
-		version: 3,
+		version: 4,
 		health: clamp(state.health, 0, MAXIMUM_HEALTH),
 		oxygen: clamp(state.oxygen, 0, MAXIMUM_OXYGEN),
 		nutrition: clamp(state.nutrition, 0, MAXIMUM_NUTRITION),
@@ -223,6 +253,8 @@ export function serializeHumanCondition(
 		lifeState: state.lifeState,
 		sleeping: state.sleeping,
 		lastDamageCause: state.lastDamageCause,
+		lastDeathCause: state.lastDeathCause,
+		deathCount: Math.max(0, Math.floor(finiteOr(state.deathCount, 0))),
 		injuries: state.injuries.map(sanitizeInjury),
 		illnesses: state.illnesses.map(sanitizeIllness),
 		exposureLoads: sanitizeExposureLoads(exposureLoads),
@@ -249,6 +281,8 @@ export function isHumanConditionSaveState(value: unknown): value is HumanConditi
 		illnesses?: unknown;
 		exposureLoads?: unknown;
 		conditionSequence?: unknown;
+		lastDeathCause?: unknown;
+		deathCount?: unknown;
 	};
 	const common =
 		isFiniteNumber(candidate.health) &&
@@ -270,8 +304,7 @@ export function isHumanConditionSaveState(value: unknown): value is HumanConditi
 	) {
 		return true;
 	}
-	return (
-		candidate.version === 3 &&
+	const hasConditions =
 		isFiniteNumber(candidate.fatigue) &&
 		typeof candidate.sleeping === 'boolean' &&
 		Array.isArray(candidate.injuries) &&
@@ -279,7 +312,13 @@ export function isHumanConditionSaveState(value: unknown): value is HumanConditi
 		Array.isArray(candidate.illnesses) &&
 		candidate.illnesses.every(isHumanIllnessSnapshot) &&
 		isExposureLoads(candidate.exposureLoads) &&
-		isFiniteNumber(candidate.conditionSequence)
+		isFiniteNumber(candidate.conditionSequence);
+	if (candidate.version === 3) return hasConditions;
+	return (
+		candidate.version === 4 &&
+		hasConditions &&
+		(candidate.lastDeathCause === null || isDamageCause(candidate.lastDeathCause)) &&
+		isFiniteNumber(candidate.deathCount)
 	);
 }
 
@@ -297,11 +336,11 @@ export function restoreHumanCondition(
 	state.wetness = clamp(save.wetness, 0, 1);
 	state.lifeState = deriveLifeState(state.health);
 	state.lastDamageCause = save.lastDamageCause;
-	if (save.version === 2 || save.version === 3) {
+	if (save.version === 2 || save.version === 3 || save.version === 4) {
 		state.fatigue = clamp(save.fatigue, 0, MAXIMUM_FATIGUE);
 		state.sleeping = save.sleeping && state.lifeState === 'alive';
 	}
-	if (save.version === 3) {
+	if (save.version === 3 || save.version === 4) {
 		state.injuries = save.injuries.map(sanitizeInjury);
 		state.illnesses = save.illnesses.map(sanitizeIllness);
 		state.bleedingRate = state.injuries.reduce((sum, injury) => sum + injury.bleedingRate, 0);
@@ -311,6 +350,12 @@ export function restoreHumanCondition(
 			0
 		);
 	}
+	if (save.version === 4) {
+		state.lastDeathCause = save.lastDeathCause;
+		state.deathCount = Math.max(0, Math.floor(save.deathCount));
+	} else if (state.lifeState === 'dead') {
+		state.lastDeathCause = state.lastDamageCause;
+	}
 	state.restState = deriveRestState(state.fatigue, state.sleeping, false);
 	return state;
 }
@@ -319,7 +364,7 @@ export function restoreHumanConditionMetadata(save: HumanConditionSaveState | nu
 	exposureLoads: HumanIllnessExposureLoads;
 	conditionSequence: number;
 } {
-	if (!save || !isHumanConditionSaveState(save) || save.version !== 3) {
+	if (!save || !isHumanConditionSaveState(save) || (save.version !== 3 && save.version !== 4)) {
 		return { exposureLoads: createHumanIllnessExposureLoads(), conditionSequence: 0 };
 	}
 	return {

@@ -23,6 +23,7 @@
 	let fever = $derived(human.effects.some((effect) => effect.id === 'fever'));
 	let poisoned = $derived(human.effects.some((effect) => effect.id === 'poisoned'));
 	let recovering = $derived(human.effects.some((effect) => effect.id === 'recovering'));
+	let protectedAfterRespawn = $derived(human.respawnProtectionSeconds > 0.05);
 </script>
 
 <div class="absolute bottom-5 left-4 flex w-48 flex-col gap-2" aria-label="Human condition">
@@ -50,7 +51,7 @@
 		</div>
 	</div>
 
-	{#if human.lifeState !== 'alive' || human.sleeping || tired || exhausted || oxygenLow || hydrationLow || nutritionLow || cold || hot || wet || bleeding || injured || sick || fever || poisoned || recovering}
+	{#if human.lifeState !== 'alive' || human.sleeping || tired || exhausted || oxygenLow || hydrationLow || nutritionLow || cold || hot || wet || bleeding || injured || sick || fever || poisoned || recovering || protectedAfterRespawn}
 		<div class="flex flex-wrap gap-1.5 text-[0.62rem] font-semibold">
 			{#if human.lifeState === 'critical'}
 				<span class="rounded-sm border border-red-400/30 bg-red-950/62 px-2 py-1 text-red-200"
@@ -125,6 +126,11 @@
 					class="rounded-sm border border-emerald-200/15 bg-emerald-950/45 px-2 py-1 text-emerald-100"
 				>
 					Recovering
+				</span>
+			{/if}
+			{#if protectedAfterRespawn}
+				<span class="rounded-sm border border-white/12 bg-black/45 px-2 py-1 text-white/72">
+					Protected · {Math.ceil(human.respawnProtectionSeconds)}s
 				</span>
 			{/if}
 			{#if oxygenLow}

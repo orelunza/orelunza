@@ -110,7 +110,7 @@ describe('HumanConditionSystem', () => {
 		expect(restored.snapshot.health).toBe(80);
 		expect(restored.snapshot.hydration).toBe(63);
 		expect(restored.snapshot.fatigue).toBe(61);
-		expect(save.version).toBe(3);
+		expect(save.version).toBe(4);
 		const fresh = new HumanConditionSystem();
 		fresh.restore(undefined);
 		expect(fresh.snapshot.health).toBe(100);

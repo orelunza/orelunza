@@ -4,6 +4,7 @@
 	import InteractionPrompt from './InteractionPrompt.svelte';
 	import WorldClockHud from './WorldClockHud.svelte';
 	import HumanStatusHud from './HumanStatusHud.svelte';
+	import HumanConditionOverlay from './HumanConditionOverlay.svelte';
 
 	interface Props {
 		snapshot: GameSnapshot;
@@ -11,9 +12,10 @@
 		onPause?: () => void;
 		onCalendar?: () => void;
 		onWorldMap?: () => void;
+		onRespawn?: () => void;
 	}
 
-	let { snapshot, onHotbarSelect, onPause, onCalendar, onWorldMap }: Props = $props();
+	let { snapshot, onHotbarSelect, onPause, onCalendar, onWorldMap, onRespawn }: Props = $props();
 
 	let selectedSlot = $derived(
 		snapshot.buildMode && snapshot.selectedBuildBlock
@@ -93,14 +95,16 @@
 	{/if}
 
 	<div class="pointer-events-auto absolute top-3 right-3 flex items-center gap-2">
-		<button
-			type="button"
-			class="rounded-sm border border-white/10 bg-[#1a1e22]/76 px-3 py-2 text-xs backdrop-blur-md hover:bg-white/10"
-			aria-label="Open the world globe"
-			onclick={onWorldMap}
-		>
-			Globe · M
-		</button>
+		{#if snapshot.human.lifeState !== 'unconscious' && snapshot.human.lifeState !== 'dead'}
+			<button
+				type="button"
+				class="rounded-sm border border-white/10 bg-[#1a1e22]/76 px-3 py-2 text-xs backdrop-blur-md hover:bg-white/10"
+				aria-label="Open the world globe"
+				onclick={onWorldMap}
+			>
+				Globe · M
+			</button>
+		{/if}
 
 		<button
 			type="button"
@@ -112,7 +116,7 @@
 		</button>
 	</div>
 
-	{#if !snapshot.buildMode}
+	{#if !snapshot.buildMode && snapshot.human.lifeState !== 'unconscious' && snapshot.human.lifeState !== 'dead'}
 		<div
 			class="absolute top-1/2 left-1/2 size-4 -translate-x-1/2 -translate-y-1/2"
 			aria-label="Crosshair"
@@ -131,6 +135,7 @@
 	{/if}
 
 	<HumanStatusHud human={snapshot.human} />
+	<HumanConditionOverlay human={snapshot.human} {onRespawn} />
 
 	<div class="absolute bottom-24 left-1/2 -translate-x-1/2">
 		<InteractionPrompt

@@ -28,7 +28,8 @@
 		| 'open-calendar'
 		| 'close-calendar'
 		| 'open-build-catalog'
-		| 'close-build-catalog';
+		| 'close-build-catalog'
+		| 'respawn';
 
 	type GameCommand =
 		| {
@@ -164,7 +165,11 @@
 
 			if (worldView === 'globe') {
 				void closeWorldGlobe();
-			} else if (snapshot?.status === 'playing' || snapshot?.status === 'paused') {
+			} else if (
+				(snapshot?.status === 'playing' || snapshot?.status === 'paused') &&
+				snapshot.human.lifeState !== 'unconscious' &&
+				snapshot.human.lifeState !== 'dead'
+			) {
 				void openWorldGlobe();
 			}
 		};
@@ -322,6 +327,9 @@
 				}}
 				onWorldMap={() => {
 					void openWorldGlobe();
+				}}
+				onRespawn={() => {
+					sendCommand('respawn');
 				}}
 			/>
 

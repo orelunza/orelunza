@@ -13,6 +13,7 @@ export interface KeyboardCommands {
 	calendar: boolean;
 	debugPerformance: boolean;
 	sleep: boolean;
+	respawn: boolean;
 	recenterBuildCursor: boolean;
 	hotbarIndex: number | null;
 }
@@ -26,6 +27,7 @@ export class KeyboardInput {
 	private calendarPressed = false;
 	private debugPerformancePressed = false;
 	private sleepPressed = false;
+	private respawnPressed = false;
 	private recenterBuildCursorPressed = false;
 	private hotbarPressed: number | null = null;
 	private readonly handleKeydown = (event: KeyboardEvent): void => {
@@ -57,6 +59,10 @@ export class KeyboardInput {
 
 		if (event.code === 'KeyN') {
 			this.sleepPressed = true;
+		}
+
+		if (event.code === 'Enter') {
+			this.respawnPressed = true;
 		}
 
 		if (event.code === 'KeyR') {
@@ -120,6 +126,7 @@ export class KeyboardInput {
 			calendar: this.calendarPressed,
 			debugPerformance: this.debugPerformancePressed,
 			sleep: this.sleepPressed,
+			respawn: this.respawnPressed,
 			recenterBuildCursor: this.recenterBuildCursorPressed,
 			hotbarIndex: this.hotbarPressed
 		};
@@ -131,6 +138,7 @@ export class KeyboardInput {
 		this.calendarPressed = false;
 		this.debugPerformancePressed = false;
 		this.sleepPressed = false;
+		this.respawnPressed = false;
 		this.recenterBuildCursorPressed = false;
 		this.hotbarPressed = null;
 

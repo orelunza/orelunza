@@ -529,6 +529,32 @@ export class GameEngine {
 		this.emitSnapshot();
 	}
 
+	respawn(): boolean {
+		if (this.status === 'destroyed' || !this.human.respawn()) {
+			return false;
+		}
+
+		if (this.buildMode) {
+			this.exitBuildMode();
+		}
+		const spawn = this.findSafeSpawn();
+		this.player.setTransform(spawn, this.player.state.cameraYaw, this.player.state.pitch);
+		this.avatar.reset(this.player.state.bodyYaw);
+		this.world.loadChunk(worldToChunk(spawn));
+		this.chunkStreaming.synchronizeLoaded(this.world.getLoadedChunks());
+		this.localWater.activate(spawn);
+		this.renderer.rebuildWorld(this.world);
+		this.diagnostics.worldRebuilds += 1;
+		this.lastWorldRebuildAt = performance.now();
+		this.needsWorldRebuild = false;
+		this.lastBackendSync = 0;
+		this.lastBackendPosition.set(Number.POSITIVE_INFINITY, 0, 0);
+		this.message = 'Respawned safely — click the world to continue';
+		this.persistence.markDirty();
+		this.emitSnapshot();
+		return true;
+	}
+
 	destroy(): void {
 		if (this.destroyed) {
 			return;
@@ -570,6 +596,10 @@ export class GameEngine {
 		const frameStartedAt = performance.now();
 		const commands = this.keyboard.consumeCommands();
 
+		if (commands.respawn && this.human.snapshot.lifeState === 'dead') {
+			this.respawn();
+		}
+
 		if (commands.pause) {
 			if (this.status === 'playing') {
 				this.pause();
@@ -582,7 +612,7 @@ export class GameEngine {
 			}
 		}
 
-		if (commands.calendar) {
+		if (commands.calendar && this.human.canAct) {
 			if (this.status === 'calendar') {
 				this.closeCalendar();
 			} else if (this.status === 'playing') {
@@ -590,16 +620,16 @@ export class GameEngine {
 			}
 		}
 
-		if (commands.sleep && this.status === 'playing') {
+		if (commands.sleep && this.status === 'playing' && this.human.canAct) {
 			this.human.requestSleepToggle();
 			this.persistence.markDirty();
 		}
 
-		if (commands.inventory && this.status === 'playing') {
+		if (commands.inventory && this.status === 'playing' && this.human.canAct) {
 			this.openInventory();
 		}
 
-		if (commands.build) {
+		if (commands.build && this.human.canAct) {
 			if (this.status === 'build-catalog') {
 				this.closeBuildCatalog();
 				this.exitBuildMode();
@@ -612,7 +642,7 @@ export class GameEngine {
 			}
 		}
 
-		if (commands.catalog) {
+		if (commands.catalog && this.human.canAct) {
 			if (this.status === 'build-catalog') {
 				this.closeBuildCatalog();
 			} else if (this.status === 'playing') {
@@ -624,7 +654,7 @@ export class GameEngine {
 			this.buildCursor.reset();
 		}
 
-		if (commands.hotbarIndex !== null) {
+		if (commands.hotbarIndex !== null && this.human.canAct) {
 			if (this.buildMode) {
 				this.selectBuildPaletteIndex(commands.hotbarIndex);
 			} else {
@@ -637,7 +667,7 @@ export class GameEngine {
 		if (wheel !== 0) {
 			if (this.status === 'playing' && this.buildMode) {
 				this.setBuildWorkspace(cycleBuildPaletteSlot(this.buildWorkspace, wheel));
-			} else if (this.status === 'playing') {
+			} else if (this.status === 'playing' && this.human.canAct) {
 				this.player.camera.applyZoom(wheel);
 			}
 		}
@@ -653,7 +683,9 @@ export class GameEngine {
 					).cameraDelta
 				: mouseDelta;
 
-			this.player.applyMouse(cameraDelta);
+			if (this.human.canAct) {
+				this.player.applyMouse(cameraDelta);
+			}
 			const requestedMovement = this.keyboard.getMovement();
 			humanMovement = this.human.canAct
 				? { ...requestedMovement, sprint: requestedMovement.sprint && this.human.canSprint }
@@ -693,7 +725,7 @@ export class GameEngine {
 		}
 
 		const canTargetCreation =
-			this.status === 'playing' && this.buildMode && this.pointerLock.isLocked;
+			this.status === 'playing' && this.human.canAct && this.buildMode && this.pointerLock.isLocked;
 		const raycastResult = canTargetCreation
 			? this.raycaster.raycast(
 					this.player.camera.camera,
@@ -767,6 +799,15 @@ export class GameEngine {
 				})
 			});
 			if (humanUpdate.persistenceDirty) this.persistence.markDirty();
+			if (!this.human.canAct && this.pointerLock.isLocked) {
+				this.pointerLock.exit();
+			}
+			if (this.human.snapshot.lifeState === 'dead' && this.buildMode) {
+				this.exitBuildMode();
+			}
+			if (humanUpdate.deathOccurred) {
+				this.message = null;
+			}
 		}
 		this.avatar.setColdBreath(
 			this.sky.breathVisibility,
@@ -781,7 +822,8 @@ export class GameEngine {
 		this.avatar.update(
 			this.player.state,
 			Math.hypot(this.player.state.velocity.x, this.player.state.velocity.z) > 0.1,
-			deltaSeconds
+			deltaSeconds,
+			this.human.snapshot.lifeState
 		);
 		this.renderer.updateVegetation(
 			this.player.camera.camera.position,
@@ -793,9 +835,14 @@ export class GameEngine {
 
 		const action = this.mouse.consumeAction();
 
-		if (this.status === 'playing' && this.buildMode && action === 'break') {
+		if (this.status === 'playing' && this.human.canAct && this.buildMode && action === 'break') {
 			this.breakTarget();
-		} else if (this.status === 'playing' && this.buildMode && action === 'place') {
+		} else if (
+			this.status === 'playing' &&
+			this.human.canAct &&
+			this.buildMode &&
+			action === 'place'
+		) {
 			this.placeSelectedBlock();
 		}
 
@@ -1319,6 +1366,9 @@ export class GameEngine {
 				.map((illness) => `${illness.kind}:${illness.stage}:${Math.round(illness.severity * 10)}`)
 				.join(','),
 			human.lifeState,
+			human.lastDeathCause ?? '',
+			human.deathCount,
+			Math.ceil(human.respawnProtectionSeconds),
 			this.introVisible ? 1 : 0,
 			this.message ?? '',
 			this.error ?? ''

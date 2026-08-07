@@ -14,7 +14,8 @@
 					| 'close-inventory'
 					| 'open-calendar'
 					| 'close-calendar'
-					| 'save';
+					| 'save'
+					| 'respawn';
 				token: number;
 		  }
 		| {
@@ -114,6 +115,10 @@
 
 			case 'save':
 				void engine.saveNow();
+				break;
+
+			case 'respawn':
+				engine.respawn();
 				break;
 
 			case 'hotbar':

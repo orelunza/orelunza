@@ -23,6 +23,7 @@ import {
 } from './HumanoidPose';
 import { BuildHammer } from './BuildHammer';
 import { ColdBreathEmitter } from './ColdBreathEmitter';
+import type { HumanLifeState } from '../human/HumanConditionState';
 import type { PlayerState } from './PlayerState';
 import { angleDelta } from './ThirdPersonCamera';
 
@@ -306,7 +307,12 @@ export class PlayerAvatar {
 		this.status = 'ready';
 	}
 
-	update(player: Readonly<PlayerState>, _moving: boolean, deltaSeconds: number): void {
+	update(
+		player: Readonly<PlayerState>,
+		_moving: boolean,
+		deltaSeconds: number,
+		lifeState: HumanLifeState = 'alive'
+	): void {
 		if (this.disposed) {
 			return;
 		}
@@ -343,12 +349,16 @@ export class PlayerAvatar {
 			this.coldBreath.setEnvironment(this.coldBreathIntensity, localWindX);
 			this.coldBreath.update(delta);
 			copyHumanoidPose(this.renderPose, locomotionPose);
-			this.applyLookOverlay(player, this.renderPose, delta);
-			this.applyHandOverlay(player, this.renderPose, delta);
-			this.applyHammerSwingOverlay(this.renderPose);
+			if (lifeState === 'unconscious' || lifeState === 'dead') {
+				this.applyIncapacitatedPose(this.renderPose, lifeState);
+			} else {
+				this.applyLookOverlay(player, this.renderPose, delta);
+				this.applyHandOverlay(player, this.renderPose, delta);
+				this.applyHammerSwingOverlay(this.renderPose);
 
-			if (player.onGround) {
-				this.applyFootGrounding(player, this.renderPose);
+				if (player.onGround) {
+					this.applyFootGrounding(player, this.renderPose);
+				}
 			}
 
 			this.model.applyPose(this.renderPose);
@@ -459,6 +469,29 @@ export class PlayerAvatar {
 			leftHandQuaternion: quaternionArray(joints.handLeft),
 			rightHandQuaternion: quaternionArray(joints.handRight)
 		};
+	}
+
+	private applyIncapacitatedPose(pose: HumanoidPose, lifeState: 'unconscious' | 'dead'): void {
+		const dead = lifeState === 'dead';
+		pose.state = 'idle';
+		pose.rootBob = dead ? -0.5 : -0.34;
+		pose.hipsRoll = dead ? 0.48 : 0.22;
+		pose.chestPitch = dead ? 0.72 : 0.5;
+		pose.chestYaw = 0;
+		pose.neckYaw = 0;
+		pose.headYaw = 0;
+		pose.headPitch = dead ? 0.5 : 0.34;
+		pose.leftShoulderPitch = dead ? 0.72 : 0.5;
+		pose.rightShoulderPitch = dead ? 0.58 : 0.46;
+		pose.leftElbowPitch = dead ? -0.62 : -0.48;
+		pose.rightElbowPitch = dead ? -0.48 : -0.42;
+		pose.leftHipPitch = dead ? -0.86 : -0.55;
+		pose.rightHipPitch = dead ? -0.7 : -0.48;
+		pose.leftKneePitch = dead ? 1.2 : 0.88;
+		pose.rightKneePitch = dead ? 1.05 : 0.8;
+		pose.leftFootLift = 0;
+		pose.rightFootLift = 0;
+		pose.blink = 1;
 	}
 
 	private applyLookOverlay(player: Readonly<PlayerState>, pose: HumanoidPose, delta: number): void {

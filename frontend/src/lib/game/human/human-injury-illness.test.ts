@@ -144,16 +144,16 @@ describe('Human injuries, illnesses and care', () => {
 		expect(ids).toContain('sick');
 	});
 
-	it('persists injuries and illnesses in human save V3 while accepting previous V2 saves', () => {
+	it('persists injuries and illnesses in human save V4 while accepting previous V2 saves', () => {
 		const system = new HumanConditionSystem();
 		const debug = system.createDebugApi();
 		debug.injure('wound', 0.75);
 		debug.expose('infection', 1.2);
 		step(system);
 		const save = system.serialize();
-		expect(save.version).toBe(3);
+		expect(save.version).toBe(4);
 		expect(isHumanConditionSaveState(save)).toBe(true);
-		if (save.version !== 3) throw new Error('expected human save V3');
+		if (save.version !== 4) throw new Error('expected human save V4');
 		expect(save.injuries).toHaveLength(1);
 		expect(save.illnesses).toHaveLength(1);
 
