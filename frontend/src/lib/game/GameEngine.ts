@@ -551,17 +551,14 @@ export class GameEngine {
 		this.avatar.dispose();
 		this.chunkStreaming.dispose();
 		if (import.meta.env.DEV || import.meta.env.MODE === 'test') {
-			delete (
-				globalThis as typeof globalThis & {
-					__ORELUNZA_WEATHER__?: ReturnType<Sky['createDebugApi']>;
-					__ORELUNZA_WATER__?: LocalWaterDebugApi;
-				}
-			).__ORELUNZA_WEATHER__;
-			delete (
-				globalThis as typeof globalThis & {
-					__ORELUNZA_WATER__?: LocalWaterDebugApi;
-				}
-			).__ORELUNZA_WATER__;
+			const debugGlobal = globalThis as typeof globalThis & {
+				__ORELUNZA_WEATHER__?: ReturnType<Sky['createDebugApi']>;
+				__ORELUNZA_WATER__?: LocalWaterDebugApi;
+				__ORELUNZA_HUMAN__?: HumanConditionDebugApi;
+			};
+			delete debugGlobal.__ORELUNZA_WEATHER__;
+			delete debugGlobal.__ORELUNZA_WATER__;
+			delete debugGlobal.__ORELUNZA_HUMAN__;
 		}
 		this.localWater.dispose();
 		this.sky.dispose();
@@ -1312,6 +1309,15 @@ export class GameEngine {
 			human.restState,
 			human.sleeping ? 1 : 0,
 			human.sheltered ? 1 : 0,
+			human.effects.map((effect) => `${effect.id}:${Math.round(effect.intensity * 10)}`).join(','),
+			human.injuries
+				.map(
+					(injury) => `${injury.kind}:${Math.round(injury.severity * 10)}:${injury.treated ? 1 : 0}`
+				)
+				.join(','),
+			human.illnesses
+				.map((illness) => `${illness.kind}:${illness.stage}:${Math.round(illness.severity * 10)}`)
+				.join(','),
 			human.lifeState,
 			this.introVisible ? 1 : 0,
 			this.message ?? '',

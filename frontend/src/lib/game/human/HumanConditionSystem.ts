@@ -1,18 +1,40 @@
 import type { MovementInput } from '../input/KeyboardInput';
 import type { PlayerState } from '../player/PlayerState';
 import { fallDamageForImpactSpeed } from './HumanDamageSystem';
+import { deriveHumanEffects } from './HumanEffects';
+import {
+	addIllnessExposure,
+	createHumanIllness,
+	stepHumanIllnesses,
+	treatIllnesses
+} from './HumanIllnessSystem';
+import {
+	applyFirstAid,
+	createHumanInjury,
+	injuryForFallDamage,
+	stepHumanInjuries
+} from './HumanInjurySystem';
 import { stepMetabolism } from './HumanMetabolism';
+import { computeHumanRecoveryProfile } from './HumanRecoverySystem';
 import { stepRespiration } from './HumanRespiration';
 import { stepHumanRest } from './HumanRestSystem';
 import {
 	MAXIMUM_HEALTH,
+	MAXIMUM_HYDRATION,
+	MAXIMUM_NUTRITION,
+	MAXIMUM_STAMINA,
 	createHumanConditionSnapshot,
+	createHumanIllnessExposureLoads,
 	deriveLifeState,
 	restoreHumanCondition,
+	restoreHumanConditionMetadata,
 	serializeHumanCondition,
 	type HumanConditionSaveState,
 	type HumanConditionSnapshot,
-	type HumanDamageCause
+	type HumanDamageCause,
+	type HumanIllnessExposureLoads,
+	type HumanIllnessKind,
+	type HumanInjuryKind
 } from './HumanConditionState';
 import type { HumanExposureSnapshot } from './HumanExposure';
 import { stepThermoregulation } from './HumanThermoregulation';
@@ -54,6 +76,13 @@ export interface HumanConditionDebugApi {
 	setHydration(value: number): void;
 	setNutrition(value: number): void;
 	setFatigue(value: number): void;
+	drink(amount: number, contamination?: number): void;
+	eat(amount: number, contamination?: number): void;
+	injure(kind: HumanInjuryKind, severity?: number): void;
+	expose(kind: HumanIllnessKind, dose?: number): void;
+	firstAid(): boolean;
+	treatIllness(kind?: HumanIllnessKind): boolean;
+	clearConditions(): void;
 	toggleSleep(): void;
 	refill(): void;
 }
@@ -64,15 +93,23 @@ const SLEEP_REGENERATION_MULTIPLIER = 2.25;
 
 export class HumanConditionSystem {
 	private stateValue = createHumanConditionSnapshot();
+	private exposureLoads: HumanIllnessExposureLoads = createHumanIllnessExposureLoads();
+	private conditionSequence = 0;
 	private groundInitialized = false;
 	private wasGrounded = false;
 	private maximumAirborneDownwardSpeed = 0;
 	private dirtyElapsed = 0;
 	private lastPersistenceFingerprint = '';
 	private sleepToggleRequested = false;
+	private conditionMutationPending = false;
 
 	get snapshot(): HumanConditionSnapshot {
-		return { ...this.stateValue };
+		return {
+			...this.stateValue,
+			injuries: this.stateValue.injuries.map((injury) => ({ ...injury })),
+			illnesses: this.stateValue.illnesses.map((illness) => ({ ...illness })),
+			effects: this.stateValue.effects.map((effect) => ({ ...effect }))
+		};
 	}
 
 	get canAct(): boolean {
@@ -84,7 +121,14 @@ export class HumanConditionSystem {
 	}
 
 	get canSprint(): boolean {
-		return this.canAct && this.stateValue.stamina >= 5 && this.stateValue.fatigue < 88;
+		const severeInjury = this.stateValue.injuries.some((injury) => injury.severity >= 0.8);
+		return (
+			this.canAct &&
+			!severeInjury &&
+			this.stateValue.illnessSeverity < 0.85 &&
+			this.stateValue.stamina >= 5 &&
+			this.stateValue.fatigue < 88
+		);
 	}
 
 	requestSleepToggle(): void {
@@ -92,9 +136,90 @@ export class HumanConditionSystem {
 			this.stateValue.sleeping = false;
 			this.stateValue.restState = 'active';
 			this.sleepToggleRequested = false;
+			this.conditionMutationPending = true;
 			return;
 		}
 		this.sleepToggleRequested = true;
+		this.conditionMutationPending = true;
+	}
+
+	/** Future food systems can call this without knowing the condition internals. */
+	consumeFood(nutrition: number, contamination = 0): void {
+		this.stateValue.nutrition = clamp(
+			this.stateValue.nutrition + Math.max(0, finiteOr(nutrition, 0)),
+			0,
+			MAXIMUM_NUTRITION
+		);
+		if (contamination > 0) {
+			this.exposeToIllness('food-poisoning', clamp(contamination, 0, 1) * 0.5, 'food');
+		}
+		this.conditionMutationPending = true;
+	}
+
+	/** Future water interactions can pass a contamination value when water quality exists. */
+	drinkWater(hydration: number, contamination = 0): void {
+		this.stateValue.hydration = clamp(
+			this.stateValue.hydration + Math.max(0, finiteOr(hydration, 0)),
+			0,
+			MAXIMUM_HYDRATION
+		);
+		if (contamination > 0) {
+			this.exposeToIllness('waterborne-illness', clamp(contamination, 0, 1) * 0.45, 'water');
+		}
+		this.conditionMutationPending = true;
+	}
+
+	reportInjury(kind: HumanInjuryKind, severity: number, source = 'external'): void {
+		if (this.stateValue.lifeState === 'dead') return;
+		this.stateValue.injuries = mergeInjury(
+			this.stateValue.injuries,
+			createHumanInjury(kind, severity, this.nextConditionId('injury'), source)
+		);
+		this.refreshConditionAggregates();
+		this.conditionMutationPending = true;
+	}
+
+	exposeToIllness(kind: HumanIllnessKind, dose: number, source = 'environment'): void {
+		if (this.stateValue.lifeState === 'dead') return;
+		const exposure = addIllnessExposure(this.exposureLoads, kind, dose);
+		this.exposureLoads = exposure.loads;
+		this.conditionMutationPending = true;
+		if (exposure.triggeredSeverity === null) return;
+
+		const existing = this.stateValue.illnesses.find((illness) => illness.kind === kind);
+		if (existing) {
+			existing.severity = clamp(existing.severity + exposure.triggeredSeverity * 0.2, 0.15, 1);
+			if (existing.stage === 'recovering') {
+				existing.stage = 'incubating';
+				existing.stageProgress = 0;
+			}
+		} else {
+			this.stateValue.illnesses.push(
+				createHumanIllness(
+					kind,
+					exposure.triggeredSeverity,
+					this.nextConditionId('illness'),
+					source
+				)
+			);
+		}
+		this.refreshConditionAggregates();
+	}
+
+	applyFirstAid(): boolean {
+		const result = applyFirstAid(this.stateValue.injuries);
+		this.stateValue.injuries = result.injuries;
+		this.refreshConditionAggregates();
+		if (result.treated) this.conditionMutationPending = true;
+		return result.treated;
+	}
+
+	applyIllnessTreatment(kind?: HumanIllnessKind): boolean {
+		const result = treatIllnesses(this.stateValue.illnesses, kind);
+		this.stateValue.illnesses = result.illnesses;
+		this.refreshConditionAggregates();
+		if (result.treated) this.conditionMutationPending = true;
+		return result.treated;
 	}
 
 	update(
@@ -131,7 +256,11 @@ export class HumanConditionSystem {
 			);
 		} else if (!this.wasGrounded) {
 			const fallDamage = fallDamageForImpactSpeed(this.maximumAirborneDownwardSpeed);
-			if (fallDamage > 0) damageApplied += this.applyDamage(fallDamage, 'fall');
+			if (fallDamage > 0) {
+				damageApplied += this.applyDamage(fallDamage, 'fall');
+				const injury = injuryForFallDamage(fallDamage, this.nextConditionId('injury'));
+				if (injury) this.stateValue.injuries = mergeInjury(this.stateValue.injuries, injury);
+			}
 			this.maximumAirborneDownwardSpeed = 0;
 		}
 		this.wasGrounded = input.player.onGround;
@@ -206,10 +335,46 @@ export class HumanConditionSystem {
 			this.stateValue.nutrition = metabolism.nutrition;
 			this.stateValue.hydration = metabolism.hydration;
 			this.stateValue.stamina = metabolism.stamina;
-			if (metabolism.starvationDamage > 0)
+			if (metabolism.starvationDamage > 0) {
 				damageApplied += this.applyDamage(metabolism.starvationDamage, 'starvation');
-			if (metabolism.dehydrationDamage > 0)
+			}
+			if (metabolism.dehydrationDamage > 0) {
 				damageApplied += this.applyDamage(metabolism.dehydrationDamage, 'dehydration');
+			}
+
+			this.refreshConditionAggregates();
+			const recoveryBefore = computeHumanRecoveryProfile(this.stateValue);
+			const injuries = stepHumanInjuries(this.stateValue.injuries, dt, {
+				healingMultiplier: recoveryBefore.healingMultiplier,
+				sleeping: this.stateValue.sleeping
+			});
+			this.stateValue.injuries = injuries.injuries;
+			this.stateValue.bleedingRate = injuries.bleedingRate;
+			if (injuries.healthDamage > 0) {
+				damageApplied += this.applyDamage(injuries.healthDamage, 'bleeding');
+			}
+
+			const illnesses = stepHumanIllnesses(
+				this.stateValue.illnesses,
+				dt,
+				recoveryBefore.illnessRecoveryMultiplier
+			);
+			this.stateValue.illnesses = illnesses.illnesses;
+			this.stateValue.illnessSeverity = illnesses.maximumSeverity;
+			this.stateValue.hydration = clamp(
+				this.stateValue.hydration - illnesses.hydrationDrain,
+				0,
+				MAXIMUM_HYDRATION
+			);
+			this.stateValue.nutrition = clamp(
+				this.stateValue.nutrition - illnesses.nutritionDrain,
+				0,
+				MAXIMUM_NUTRITION
+			);
+			this.stateValue.fatigue = clamp(this.stateValue.fatigue + illnesses.fatigueGain, 0, 100);
+			if (illnesses.healthDamage > 0 && illnesses.damageCause) {
+				damageApplied += this.applyDamage(illnesses.healthDamage, illnesses.damageCause);
+			}
 
 			const activityIntensity = this.stateValue.sleeping ? 0 : sprinting ? 1 : moving ? 0.45 : 0;
 			const thermoregulation = stepThermoregulation(this.stateValue, dt, {
@@ -224,16 +389,34 @@ export class HumanConditionSystem {
 				daylight: input.environment.daylight,
 				humidity: input.environment.humidity,
 				activityIntensity,
-				immersed
+				immersed,
+				internalHeatCelsius: illnesses.feverCelsius
 			});
 			this.stateValue.bodyTemperatureCelsius = thermoregulation.bodyTemperatureCelsius;
 			this.stateValue.wetness = thermoregulation.wetness;
-			if (thermoregulation.coldDamage > 0)
+			if (thermoregulation.coldDamage > 0) {
 				damageApplied += this.applyDamage(thermoregulation.coldDamage, 'hypothermia');
-			if (thermoregulation.heatDamage > 0)
+			}
+			if (thermoregulation.heatDamage > 0) {
 				damageApplied += this.applyDamage(thermoregulation.heatDamage, 'hyperthermia');
+			}
 
-			this.regenerate(dt);
+			const maximumInjurySeverity = this.stateValue.injuries.reduce(
+				(maximum, injury) => Math.max(maximum, injury.severity),
+				0
+			);
+			const conditionStaminaPenalty = maximumInjurySeverity * 18 + illnesses.staminaPenalty;
+			const fatigueMaximum = MAXIMUM_STAMINA - this.stateValue.fatigue * 0.35;
+			this.stateValue.stamina = clamp(
+				this.stateValue.stamina,
+				0,
+				Math.max(15, fatigueMaximum - conditionStaminaPenalty)
+			);
+
+			this.refreshConditionAggregates();
+			const recovery = computeHumanRecoveryProfile(this.stateValue);
+			this.stateValue.recoveryQuality = recovery.quality;
+			this.regenerate(dt, recovery.healthRegenerationMultiplier);
 		}
 
 		this.stateValue.lifeState = deriveLifeState(this.stateValue.health);
@@ -241,13 +424,16 @@ export class HumanConditionSystem {
 			this.stateValue.sleeping = false;
 			sleepChanged = true;
 		}
+		this.refreshConditionAggregates();
 
 		this.dirtyElapsed += dt;
 		const fingerprint = this.persistenceFingerprint();
+		const previousLifeState = this.lastPersistenceFingerprint.split('|').at(-1);
 		const significant =
-			damageApplied > 0 ||
+			damageApplied >= 0.5 ||
 			sleepChanged ||
-			fingerprint.split('|').at(-1) !== this.lastPersistenceFingerprint.split('|').at(-1);
+			this.conditionMutationPending ||
+			this.stateValue.lifeState !== previousLifeState;
 		const persistenceDirty =
 			significant ||
 			(this.dirtyElapsed >= SAVE_DIRTY_INTERVAL_SECONDS &&
@@ -255,21 +441,27 @@ export class HumanConditionSystem {
 		if (persistenceDirty) {
 			this.dirtyElapsed = 0;
 			this.lastPersistenceFingerprint = fingerprint;
+			this.conditionMutationPending = false;
 		}
 		return { persistenceDirty, damageApplied, sleepChanged };
 	}
 
 	serialize(): HumanConditionSaveState {
-		return serializeHumanCondition(this.stateValue);
+		return serializeHumanCondition(this.stateValue, this.exposureLoads, this.conditionSequence);
 	}
 
 	restore(save: HumanConditionSaveState | null | undefined): void {
 		this.stateValue = restoreHumanCondition(save);
+		const metadata = restoreHumanConditionMetadata(save);
+		this.exposureLoads = metadata.exposureLoads;
+		this.conditionSequence = metadata.conditionSequence;
 		this.maximumAirborneDownwardSpeed = 0;
 		this.groundInitialized = false;
 		this.wasGrounded = false;
 		this.dirtyElapsed = 0;
 		this.sleepToggleRequested = false;
+		this.conditionMutationPending = false;
+		this.refreshConditionAggregates();
 		this.lastPersistenceFingerprint = this.persistenceFingerprint();
 	}
 
@@ -277,8 +469,8 @@ export class HumanConditionSystem {
 		return {
 			getState: () => this.snapshot,
 			damage: (amount, cause = 'fall') => {
-				this.applyDamage(Math.max(0, finiteOr(amount, 0)), cause);
-				this.stateValue.lifeState = deriveLifeState(this.stateValue.health);
+				const applied = this.applyDamage(Math.max(0, finiteOr(amount, 0)), cause);
+				if (applied > 0) this.conditionMutationPending = true;
 			},
 			heal: (amount) => {
 				this.stateValue.health = Math.min(
@@ -286,16 +478,27 @@ export class HumanConditionSystem {
 					this.stateValue.health + Math.max(0, finiteOr(amount, 0))
 				);
 				this.stateValue.lifeState = deriveLifeState(this.stateValue.health);
+				this.conditionMutationPending = true;
 			},
 			setHydration: (value) => {
-				this.stateValue.hydration = clamp(value, 0, 100);
+				this.stateValue.hydration = clamp(value, 0, MAXIMUM_HYDRATION);
+				this.conditionMutationPending = true;
 			},
 			setNutrition: (value) => {
-				this.stateValue.nutrition = clamp(value, 0, 100);
+				this.stateValue.nutrition = clamp(value, 0, MAXIMUM_NUTRITION);
+				this.conditionMutationPending = true;
 			},
 			setFatigue: (value) => {
 				this.stateValue.fatigue = clamp(value, 0, 100);
+				this.conditionMutationPending = true;
 			},
+			drink: (amount, contamination = 0) => this.drinkWater(amount, contamination),
+			eat: (amount, contamination = 0) => this.consumeFood(amount, contamination),
+			injure: (kind, severity = 0.5) => this.reportInjury(kind, severity, 'debug'),
+			expose: (kind, dose = 1) => this.exposeToIllness(kind, dose, 'debug'),
+			firstAid: () => this.applyFirstAid(),
+			treatIllness: (kind) => this.applyIllnessTreatment(kind),
+			clearConditions: () => this.clearConditions(),
 			toggleSleep: () => this.requestSleepToggle(),
 			refill: () => {
 				this.stateValue.health = 100;
@@ -310,8 +513,20 @@ export class HumanConditionSystem {
 				this.stateValue.restState = 'rested';
 				this.stateValue.sleeping = false;
 				this.stateValue.lastDamageCause = null;
+				this.clearConditions();
 			}
 		};
+	}
+
+	private clearConditions(): void {
+		this.stateValue.injuries = [];
+		this.stateValue.illnesses = [];
+		this.stateValue.effects = [];
+		this.stateValue.bleedingRate = 0;
+		this.stateValue.illnessSeverity = 0;
+		this.stateValue.recoveryQuality = 1;
+		this.exposureLoads = createHumanIllnessExposureLoads();
+		this.conditionMutationPending = true;
 	}
 
 	private applyDamage(amount: number, cause: HumanDamageCause): number {
@@ -319,13 +534,14 @@ export class HumanConditionSystem {
 		if (damage <= 0 || this.stateValue.health <= 0) return 0;
 		const applied = Math.min(this.stateValue.health, damage);
 		this.stateValue.health -= applied;
+		this.stateValue.lifeState = deriveLifeState(this.stateValue.health);
 		this.stateValue.lastDamageCause = cause;
 		this.stateValue.lastDamageAmount += applied;
 		if (applied > 0 && this.stateValue.sleeping) this.stateValue.sleeping = false;
 		return applied;
 	}
 
-	private regenerate(deltaSeconds: number): void {
+	private regenerate(deltaSeconds: number, recoveryMultiplier: number): void {
 		if (
 			this.stateValue.lifeState !== 'alive' ||
 			this.stateValue.health <= 0 ||
@@ -334,19 +550,54 @@ export class HumanConditionSystem {
 			this.stateValue.nutrition < 45 ||
 			this.stateValue.hydration < 45 ||
 			this.stateValue.bodyTemperatureCelsius < 35.5 ||
-			this.stateValue.bodyTemperatureCelsius > 39
+			this.stateValue.bodyTemperatureCelsius > 39 ||
+			recoveryMultiplier <= 0
 		) {
 			return;
 		}
-		const multiplier = this.stateValue.sleeping ? SLEEP_REGENERATION_MULTIPLIER : 1;
+		const sleepMultiplier = this.stateValue.sleeping ? SLEEP_REGENERATION_MULTIPLIER : 1;
 		this.stateValue.health = Math.min(
 			MAXIMUM_HEALTH,
-			this.stateValue.health + REGENERATION_PER_SECOND * multiplier * deltaSeconds
+			this.stateValue.health +
+				REGENERATION_PER_SECOND * sleepMultiplier * clamp(recoveryMultiplier, 0, 2.5) * deltaSeconds
 		);
+	}
+
+	private refreshConditionAggregates(): void {
+		this.stateValue.bleedingRate = this.stateValue.injuries.reduce(
+			(sum, injury) => sum + Math.max(0, injury.bleedingRate),
+			0
+		);
+		this.stateValue.illnessSeverity = this.stateValue.illnesses.reduce((maximum, illness) => {
+			if (illness.stage === 'incubating') return maximum;
+			const visible =
+				illness.stage === 'recovering'
+					? illness.severity * (1 - clamp(illness.stageProgress, 0, 1) * 0.82)
+					: illness.severity;
+			return Math.max(maximum, visible);
+		}, 0);
+		this.stateValue.effects = deriveHumanEffects(this.stateValue);
+	}
+
+	private nextConditionId(prefix: 'injury' | 'illness'): string {
+		this.conditionSequence += 1;
+		return `${prefix}-${this.conditionSequence}`;
 	}
 
 	private persistenceFingerprint(): string {
 		const state = this.stateValue;
+		const injuries = state.injuries
+			.map(
+				(injury) =>
+					`${injury.id}:${Math.round(injury.healingProgress * 1000)}:${Math.round(injury.bleedingRate * 10000)}:${injury.treated ? 1 : 0}`
+			)
+			.join(',');
+		const illnesses = state.illnesses
+			.map(
+				(illness) =>
+					`${illness.id}:${illness.stage}:${Math.round(illness.stageProgress * 1000)}:${illness.treated ? 1 : 0}`
+			)
+			.join(',');
 		return [
 			Math.round(state.health * 2) / 2,
 			Math.round(state.oxygen),
@@ -357,9 +608,30 @@ export class HumanConditionSystem {
 			Math.round(state.bodyTemperatureCelsius * 10) / 10,
 			Math.round(state.wetness * 20) / 20,
 			state.sleeping ? 1 : 0,
+			injuries,
+			illnesses,
+			Math.round(this.exposureLoads['food-poisoning'] * 100),
+			Math.round(this.exposureLoads['waterborne-illness'] * 100),
+			Math.round(this.exposureLoads.infection * 100),
 			state.lifeState
 		].join('|');
 	}
+}
+
+function mergeInjury(
+	current: readonly HumanConditionSnapshot['injuries'][number][],
+	incoming: HumanConditionSnapshot['injuries'][number]
+): HumanConditionSnapshot['injuries'] {
+	const injuries = current.map((injury) => ({ ...injury }));
+	// Avoid an unbounded list from repeated small impacts. Similar injuries merge
+	// by keeping the worse severity while preserving already-earned healing.
+	const existing = injuries.find((injury) => injury.kind === incoming.kind && !injury.treated);
+	if (!existing) return [...injuries, incoming].slice(-6);
+	existing.severity = Math.max(existing.severity, incoming.severity);
+	existing.bleedingRate = Math.max(existing.bleedingRate, incoming.bleedingRate);
+	existing.healingProgress = Math.min(existing.healingProgress, 0.25);
+	existing.source = incoming.source;
+	return injuries;
 }
 
 function safeDelta(value: number): number {

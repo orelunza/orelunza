@@ -17,6 +17,12 @@
 	let wet = $derived(human.wetness > 0.65);
 	let tired = $derived(human.fatigue >= 55 && human.fatigue < 85);
 	let exhausted = $derived(human.fatigue >= 85);
+	let bleeding = $derived(human.effects.some((effect) => effect.id === 'bleeding'));
+	let injured = $derived(human.effects.some((effect) => effect.id === 'injured'));
+	let sick = $derived(human.effects.some((effect) => effect.id === 'sick'));
+	let fever = $derived(human.effects.some((effect) => effect.id === 'fever'));
+	let poisoned = $derived(human.effects.some((effect) => effect.id === 'poisoned'));
+	let recovering = $derived(human.effects.some((effect) => effect.id === 'recovering'));
 </script>
 
 <div class="absolute bottom-5 left-4 flex w-48 flex-col gap-2" aria-label="Human condition">
@@ -44,7 +50,7 @@
 		</div>
 	</div>
 
-	{#if human.lifeState !== 'alive' || human.sleeping || tired || exhausted || oxygenLow || hydrationLow || nutritionLow || cold || hot || wet}
+	{#if human.lifeState !== 'alive' || human.sleeping || tired || exhausted || oxygenLow || hydrationLow || nutritionLow || cold || hot || wet || bleeding || injured || sick || fever || poisoned || recovering}
 		<div class="flex flex-wrap gap-1.5 text-[0.62rem] font-semibold">
 			{#if human.lifeState === 'critical'}
 				<span class="rounded-sm border border-red-400/30 bg-red-950/62 px-2 py-1 text-red-200"
@@ -85,6 +91,41 @@
 						>Find shelter to sleep</span
 					>
 				{/if}
+			{/if}
+			{#if bleeding}
+				<span class="rounded-sm border border-red-300/25 bg-red-950/68 px-2 py-1 text-red-100">
+					Bleeding
+				</span>
+			{/if}
+			{#if injured}
+				<span
+					class="rounded-sm border border-orange-300/20 bg-orange-950/60 px-2 py-1 text-orange-100"
+				>
+					Injured{human.injuries.length > 1 ? ` · ${human.injuries.length}` : ''}
+				</span>
+			{/if}
+			{#if poisoned}
+				<span class="rounded-sm border border-lime-300/20 bg-lime-950/60 px-2 py-1 text-lime-100">
+					Food poisoning
+				</span>
+			{:else if sick}
+				<span
+					class="rounded-sm border border-emerald-300/20 bg-emerald-950/60 px-2 py-1 text-emerald-100"
+				>
+					Sick
+				</span>
+			{/if}
+			{#if fever}
+				<span class="rounded-sm border border-rose-300/20 bg-rose-950/60 px-2 py-1 text-rose-100">
+					Fever
+				</span>
+			{/if}
+			{#if recovering && !sick}
+				<span
+					class="rounded-sm border border-emerald-200/15 bg-emerald-950/45 px-2 py-1 text-emerald-100"
+				>
+					Recovering
+				</span>
 			{/if}
 			{#if oxygenLow}
 				<span class="rounded-sm border border-sky-300/25 bg-sky-950/66 px-2 py-1 text-sky-100"

@@ -5,4 +5,8 @@ export * from './HumanMetabolism';
 export * from './HumanThermoregulation';
 export * from './HumanExposure';
 export * from './HumanRestSystem';
+export * from './HumanInjurySystem';
+export * from './HumanIllnessSystem';
+export * from './HumanEffects';
+export * from './HumanRecoverySystem';
 export * from './HumanConditionSystem';

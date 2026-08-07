@@ -13,6 +13,8 @@ export interface HumanThermoregulationInput {
 	humidity: number;
 	activityIntensity: number;
 	immersed: boolean;
+	/** Internal heat from illness/fever. Zero for a healthy body. */
+	internalHeatCelsius?: number;
 }
 
 export interface HumanThermoregulationResult {
@@ -57,12 +59,14 @@ export function stepThermoregulation(
 	const wetColdAmplifier = 1 + wetness * 1.7;
 	const activityWarmth = clamp01(input.activityIntensity) * 0.5;
 	const nearbyHeat = Math.min(6, Math.max(0, finiteOr(input.nearbyHeatCelsius, 0)));
+	const internalHeat = Math.min(2.5, Math.max(0, finiteOr(input.internalHeatCelsius ?? 0, 0)));
 	const target =
 		NORMAL_BODY_TEMPERATURE_CELSIUS -
 		Math.min(4.2, coldExposure * 3.2 * wetColdAmplifier) +
 		Math.min(3.5, heatExposure * 2.7) +
 		activityWarmth +
-		nearbyHeat * 0.18;
+		nearbyHeat * 0.18 +
+		internalHeat;
 	const response = 1 - Math.exp(-0.012 * dt);
 	const bodyTemperatureCelsius = clamp(
 		finiteOr(current.bodyTemperatureCelsius, NORMAL_BODY_TEMPERATURE_CELSIUS) +

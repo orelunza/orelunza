@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { fallDamageForImpactSpeed } from './HumanDamageSystem';
-import { HumanConditionSystem } from './HumanConditionSystem';
+import { HumanConditionSystem, type HumanWaterInput } from './HumanConditionSystem';
 import { stepRespiration } from './HumanRespiration';
 import { isHumanConditionSaveState } from './HumanConditionState';
+import type { HumanExposureSnapshot } from './HumanExposure';
 import type { PlayerState } from '../player/PlayerState';
 
 function player(overrides: Partial<PlayerState> = {}): PlayerState {
@@ -40,21 +41,21 @@ const environment = {
 	daylight: 0.7,
 	humidity: 0.4
 };
-const exposure = {
+const exposure: HumanExposureSnapshot = {
 	sheltered: false,
 	skyExposure: 1,
 	windExposure: 1,
 	precipitationExposure: 1,
 	nearbyHeatCelsius: 0
 };
-const dry = { waterSurfaceY: null, waterDepth: 0 };
+const dry: HumanWaterInput = { waterSurfaceY: null, waterDepth: 0 };
 
 function step(
 	system: HumanConditionSystem,
 	state: PlayerState,
 	seconds = 0.1,
-	water = dry,
-	exposureInput = exposure
+	water: HumanWaterInput = dry,
+	exposureInput: HumanExposureSnapshot = exposure
 ): void {
 	system.update(seconds, {
 		player: state,
@@ -109,7 +110,7 @@ describe('HumanConditionSystem', () => {
 		expect(restored.snapshot.health).toBe(80);
 		expect(restored.snapshot.hydration).toBe(63);
 		expect(restored.snapshot.fatigue).toBe(61);
-		expect(save.version).toBe(2);
+		expect(save.version).toBe(3);
 		const fresh = new HumanConditionSystem();
 		fresh.restore(undefined);
 		expect(fresh.snapshot.health).toBe(100);
