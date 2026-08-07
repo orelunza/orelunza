@@ -133,6 +133,19 @@ describe('LocalWaterSaveState', () => {
 		).toBe(true);
 		expect(
 			isLocalWaterSaveState({
+				version: 3,
+				cells: [],
+				erosion: {
+					version: 1,
+					cells: [{ x: 1, z: 2, sediment: 0.5, wear: 0.25 }],
+					terrainEdits: [{ position: { x: 1, y: 3, z: 2 }, type: 'air' }],
+					totalErodedVoxels: 1,
+					totalDepositedVoxels: 0
+				}
+			})
+		).toBe(true);
+		expect(
+			isLocalWaterSaveState({
 				version: 1,
 				cells: [{ x: 0, z: 0, waterDepth: -1, velocityX: 0, velocityZ: 0 }]
 			})
@@ -180,7 +193,7 @@ describe('LocalWaterSystem', () => {
 		expect(thawed.runoffTransferred).toBeGreaterThanOrEqual(0);
 		expect(Number.isFinite(thawed.maximumErosionPotential)).toBe(true);
 		const save = water.serialize();
-		expect(save.version).toBe(2);
+		expect(save.version).toBe(3);
 		expect(save.cycle?.snowfallAdded).toBeGreaterThan(0);
 		water.dispose();
 	});

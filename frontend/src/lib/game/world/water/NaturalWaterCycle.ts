@@ -65,9 +65,9 @@ export function snowMeltDepthPerSecond(forcing: Readonly<LocalWaterForcing>): nu
 }
 
 /**
- * Dimensionless signal reserved for the future erosion system. It intentionally
- * does not modify terrain in Lot 8; it only exposes where flowing water has
- * enough depth, speed and slope to matter later.
+ * Dimensionless hydraulic-energy signal shared with the erosion system.
+ * Lot 8 introduced the signal; Lot 9 consumes it through a deliberately slow,
+ * voxel-budgeted sediment model rather than mutating terrain directly here.
  */
 export function erosionPotential(waterDepth: number, speed: number, groundSlope: number): number {
 	const depthFactor = clamp01(Math.max(0, finiteOr(waterDepth, 0)) / 0.75);

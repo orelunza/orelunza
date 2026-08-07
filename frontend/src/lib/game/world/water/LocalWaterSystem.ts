@@ -1,4 +1,9 @@
 import type { VoxelWorld, LoadedWaterColumnProfile } from '../VoxelWorld';
+import {
+	HydraulicErosionSystem,
+	type HydraulicErosionCell
+} from '../erosion/HydraulicErosionSystem';
+import type { HydraulicErosionSaveState } from '../erosion/ErosionState';
 import { chunkKey, worldToChunk, type ChunkCoordinate } from '../voxel-types';
 import {
 	createEmptyNaturalWaterCycleSaveState,
@@ -36,6 +41,7 @@ export interface LocalWaterSystemOptions {
 export interface LocalWaterDebugApi {
 	getDiagnostics(): LocalWaterDiagnosticsSnapshot;
 	getCycleState(): NaturalWaterCycleSaveState;
+	getErosionState(): HydraulicErosionSaveState;
 	addWater(x: number, z: number, depth?: number): boolean;
 	drainWater(x: number, z: number, depth?: number): boolean;
 	addWaterAtPlayer(depth?: number): boolean;
@@ -45,6 +51,7 @@ export interface LocalWaterDebugApi {
 	resume(): void;
 	setRainScale(scale: number): void;
 	setPrecipitationScale(scale: number): void;
+	setErosionScale(scale: number): void;
 }
 
 interface ActiveCellMetadata {
@@ -77,6 +84,7 @@ const SAVED_SNOW_EPSILON = 0.00001;
 const MAXIMUM_SAVED_CELLS = 20_000;
 const CHUNK_REFRESH_INTERVAL_SECONDS = 0.12;
 const MAXIMUM_CHUNK_REFRESHES_PER_INTERVAL = 1;
+const EROSION_STEP_SECONDS = 1;
 
 /**
  * Couples the conservative shallow-water solver to the loaded voxel surface.
@@ -97,6 +105,8 @@ export class LocalWaterSystem {
 	private renderedDepth = new Float64Array(0);
 	private snowWaterEquivalent = new Float64Array(0);
 	private cycle: NaturalWaterCycleSaveState = createEmptyNaturalWaterCycleSaveState();
+	private readonly erosion: HydraulicErosionSystem;
+	private erosionAccumulator = 0;
 	private centerX = 0;
 	private centerZ = 0;
 	private originX = 0;
@@ -136,6 +146,7 @@ export class LocalWaterSystem {
 			this.activeRadius
 		);
 		this.diagnosticsState = emptyDiagnostics(this.activeRadius);
+		this.erosion = new HydraulicErosionSystem(this.world);
 	}
 
 	activate(position: Readonly<{ x: number; z: number }>): ChunkCoordinate[] {
@@ -260,6 +271,20 @@ export class LocalWaterSystem {
 			this.cycle.boundaryOutflow += result.boundaryOutflow;
 			this.cycle.runoffTransferred += result.runoffTransferred;
 
+			this.erosionAccumulator += this.simulationStepSeconds;
+			if (this.erosionAccumulator >= EROSION_STEP_SECONDS) {
+				const erosionResult = this.erosion.step(this.erosionAccumulator, this.buildErosionCells());
+				this.erosionAccumulator = 0;
+				for (const chunk of erosionResult.changedChunks) {
+					this.pendingChunkRefreshes.set(chunkKey(chunk), chunk);
+				}
+				if (erosionResult.stateChanged) changed = true;
+				if (erosionResult.terrainChanged) {
+					this.needsRebuild = true;
+					this.structureRebuildElapsed = STRUCTURE_REBUILD_DELAY_SECONDS;
+				}
+			}
+
 			changed =
 				changed || changedIndices.size > 0 || snowResult.snowAdded > 0 || snowResult.snowMelted > 0;
 			aggregate = aggregate
@@ -296,11 +321,12 @@ export class LocalWaterSystem {
 		this.persistCurrentCells();
 
 		return {
-			version: 2,
+			version: 3,
 			cells: [...this.savedCells.values()]
 				.map((cell) => ({ ...cell }))
 				.sort((left, right) => left.x - right.x || left.z - right.z),
-			cycle: { ...this.cycle }
+			cycle: { ...this.cycle },
+			erosion: this.erosion.serialize()
 		};
 	}
 
@@ -319,7 +345,11 @@ export class LocalWaterSystem {
 				});
 			}
 			if (save.cycle) this.cycle = { ...save.cycle };
+			this.erosion.restore(save.erosion);
+		} else {
+			this.erosion.restore(undefined);
 		}
+		this.erosionAccumulator = 0;
 		this.needsRebuild = true;
 		this.structureRebuildElapsed = STRUCTURE_REBUILD_DELAY_SECONDS;
 	}
@@ -343,6 +373,7 @@ export class LocalWaterSystem {
 		return {
 			getDiagnostics: () => this.diagnostics,
 			getCycleState: () => ({ ...this.cycle }),
+			getErosionState: () => this.erosion.serialize(),
 			addWater: (x, z, depth = 1) => this.changeWaterAt(x, z, Math.abs(depth)),
 			drainWater: (x, z, depth = 1) => this.changeWaterAt(x, z, -Math.abs(depth)),
 			addWaterAtPlayer: (depth = 1) =>
@@ -361,6 +392,9 @@ export class LocalWaterSystem {
 			},
 			setPrecipitationScale: (scale) => {
 				this.rainScale = Math.max(0, Math.min(20, finiteOr(scale, 1)));
+			},
+			setErosionScale: (scale) => {
+				this.erosion.setScale(scale);
 			}
 		};
 	}
@@ -605,6 +639,28 @@ export class LocalWaterSystem {
 		return maximum;
 	}
 
+	private buildErosionCells(): HydraulicErosionCell[] {
+		const solver = this.solver;
+		if (!solver) return [];
+		const cells: HydraulicErosionCell[] = [];
+		for (let index = 0; index < solver.length; index += 1) {
+			const metadata = this.metadata[index];
+			if (!metadata) continue;
+			cells.push({
+				x: metadata.x,
+				z: metadata.z,
+				active: solver.active[index] === 1,
+				groundHeight: solver.groundHeight[index] ?? 0,
+				waterDepth: Math.max(0, solver.waterDepth[index] ?? 0),
+				velocityX: finiteOr(solver.velocityX[index], 0),
+				velocityZ: finiteOr(solver.velocityZ[index], 0),
+				groundSlope: this.groundSlopeAt(index),
+				waterBody: metadata.waterBody
+			});
+		}
+		return cells;
+	}
+
 	private drainChunkRefreshes(deltaSeconds: number): ChunkCoordinate[] {
 		this.chunkRefreshElapsed += Math.max(0, deltaSeconds);
 		if (
@@ -652,6 +708,7 @@ export class LocalWaterSystem {
 		}
 
 		const snowWaterEquivalent = this.totalSnowWaterEquivalent();
+		const erosionDiagnostics = this.erosion.diagnostics;
 		this.diagnosticsState = {
 			activeCells: solver ? countActive(solver.active) : 0,
 			wetCells,
@@ -674,6 +731,12 @@ export class LocalWaterSystem {
 			lakeExchange: cycleFrame.lakeExchange,
 			oceanExchange: cycleFrame.oceanExchange,
 			maximumErosionPotential,
+			erosionSediment: erosionDiagnostics.totalSediment,
+			erodedVoxels: erosionDiagnostics.erodedVoxels,
+			depositedVoxels: erosionDiagnostics.depositedVoxels,
+			erosionTerrainChanges: erosionDiagnostics.terrainChanges,
+			erosionProtectedColumns: erosionDiagnostics.protectedColumns,
+			sedimentMassResidual: erosionDiagnostics.sedimentMassResidual,
 			waterBudgetResidual: cycleFrame.waterBudgetResidual,
 			changedChunks,
 			lastStepMilliseconds,
@@ -733,6 +796,12 @@ function emptyDiagnostics(activeRadius: number): LocalWaterDiagnosticsSnapshot {
 		lakeExchange: 0,
 		oceanExchange: 0,
 		maximumErosionPotential: 0,
+		erosionSediment: 0,
+		erodedVoxels: 0,
+		depositedVoxels: 0,
+		erosionTerrainChanges: 0,
+		erosionProtectedColumns: 0,
+		sedimentMassResidual: 0,
 		waterBudgetResidual: 0,
 		changedChunks: 0,
 		lastStepMilliseconds: 0,

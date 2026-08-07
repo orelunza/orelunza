@@ -1,3 +1,8 @@
+import {
+	isHydraulicErosionSaveState,
+	type HydraulicErosionSaveState
+} from '../erosion/ErosionState';
+
 export interface LocalWaterCellSaveState {
 	x: number;
 	z: number;
@@ -20,10 +25,11 @@ export interface NaturalWaterCycleSaveState {
 }
 
 export interface LocalWaterSaveState {
-	/** V1 stores liquid water only; V2 adds snowpack and cycle accounting. */
-	version: 1 | 2;
+	/** V1: liquid; V2: snow/cycle; V3: persistent hydraulic erosion and sediment. */
+	version: 1 | 2 | 3;
 	cells: LocalWaterCellSaveState[];
 	cycle?: NaturalWaterCycleSaveState;
+	erosion?: HydraulicErosionSaveState;
 }
 
 export interface LocalWaterForcing {
@@ -59,6 +65,12 @@ export interface LocalWaterDiagnosticsSnapshot {
 	lakeExchange: number;
 	oceanExchange: number;
 	maximumErosionPotential: number;
+	erosionSediment: number;
+	erodedVoxels: number;
+	depositedVoxels: number;
+	erosionTerrainChanges: number;
+	erosionProtectedColumns: number;
+	sedimentMassResidual: number;
 	waterBudgetResidual: number;
 	changedChunks: number;
 	lastStepMilliseconds: number;
@@ -80,7 +92,7 @@ export function createEmptyNaturalWaterCycleSaveState(): NaturalWaterCycleSaveSt
 
 export function createEmptyLocalWaterSaveState(): LocalWaterSaveState {
 	return {
-		version: 2,
+		version: 3,
 		cells: [],
 		cycle: createEmptyNaturalWaterCycleSaveState()
 	};
@@ -92,7 +104,7 @@ export function isLocalWaterSaveState(value: unknown): value is LocalWaterSaveSt
 	}
 
 	const candidate = value as Partial<LocalWaterSaveState>;
-	if (candidate.version !== 1 && candidate.version !== 2) return false;
+	if (candidate.version !== 1 && candidate.version !== 2 && candidate.version !== 3) return false;
 
 	return (
 		Array.isArray(candidate.cells) &&
@@ -113,7 +125,8 @@ export function isLocalWaterSaveState(value: unknown): value is LocalWaterSaveSt
 					(Number.isFinite(entry.snowWaterEquivalent) && (entry.snowWaterEquivalent ?? -1) >= 0))
 			);
 		}) &&
-		(candidate.cycle === undefined || isNaturalWaterCycleSaveState(candidate.cycle))
+		(candidate.cycle === undefined || isNaturalWaterCycleSaveState(candidate.cycle)) &&
+		(candidate.erosion === undefined || isHydraulicErosionSaveState(candidate.erosion))
 	);
 }
 

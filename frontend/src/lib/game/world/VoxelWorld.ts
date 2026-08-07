@@ -1,5 +1,9 @@
 import { BlockRegistry } from './BlockRegistry';
 import { TerrainGenerator, type WorldTerrainGenerator } from './TerrainGenerator';
+import type {
+	NaturalTerrainEditSaveState,
+	NaturalTerrainOverrideType
+} from './erosion/ErosionState';
 import {
 	type BlockChange,
 	type BlockCoordinate,
@@ -28,6 +32,13 @@ export interface LoadedWaterColumnProfile {
 	generatedWaterDepth: number;
 }
 
+export interface ErosionSurfaceProfile {
+	loaded: boolean;
+	protectedByPlayer: boolean;
+	surfaceY: number;
+	type: BlockType;
+}
+
 interface GeneratedColumnProfile {
 	highestSolidY: number;
 	waterBottomY: number | null;
@@ -48,6 +59,13 @@ export class VoxelWorld {
 	private readonly placedBlocks = new Map<string, BlockType>();
 	private readonly placedColumnBlocks = new Map<string, Map<number, BlockType>>();
 	private readonly removedBlocks = new Set<string>();
+	private readonly playerModifiedColumns = new Set<string>();
+	private readonly naturalTerrainOverrides = new Map<string, NaturalTerrainOverrideType>();
+	private readonly naturalTerrainChunkBlocks = new Map<string, Set<string>>();
+	private readonly naturalTerrainColumnBlocks = new Map<
+		string,
+		Map<number, NaturalTerrainOverrideType>
+	>();
 	private readonly transientBlocks = new Map<string, TransientBlock>();
 	private readonly transientAir = new Set<string>();
 	private readonly transientChunkBlocks = new Map<string, Set<string>>();
@@ -150,6 +168,7 @@ export class VoxelWorld {
 		const keys = new Set<string>();
 
 		for (const key of this.generatedBlocks.keys()) keys.add(key);
+		for (const key of this.naturalTerrainOverrides.keys()) keys.add(key);
 		for (const key of this.transientBlocks.keys()) keys.add(key);
 		for (const key of this.placedBlocks.keys()) keys.add(key);
 
@@ -173,6 +192,7 @@ export class VoxelWorld {
 		}
 
 		const keys = new Set<string>(this.generatedChunkBlocks.get(key) ?? []);
+		for (const naturalKey of this.naturalTerrainChunkBlocks.get(key) ?? []) keys.add(naturalKey);
 		for (const transientKey of this.transientChunkBlocks.get(key) ?? []) keys.add(transientKey);
 		for (const blockPositionKey of this.placedBlocks.keys()) {
 			if (chunkKey(worldToChunk(parseKey(blockPositionKey))) === key) keys.add(blockPositionKey);
@@ -239,6 +259,9 @@ export class VoxelWorld {
 			return BlockRegistry.create('air', normalized);
 		}
 
+		const naturalOverride = this.naturalTerrainOverrides.get(key);
+		if (naturalOverride) return BlockRegistry.create(naturalOverride, normalized);
+
 		const generated = this.generatedBlocks.get(key) ?? this.generateBlock(normalized);
 
 		return BlockRegistry.create(generated, normalized);
@@ -261,6 +284,7 @@ export class VoxelWorld {
 		this.removedBlocks.delete(key);
 		this.placedBlocks.set(key, type);
 		this.indexPlacedBlock(normalized, type);
+		this.playerModifiedColumns.add(columnKey(normalized.x, normalized.z));
 		this.structureVersion += 1;
 
 		if (track) {
@@ -287,6 +311,7 @@ export class VoxelWorld {
 		this.placedBlocks.delete(key);
 		this.unindexPlacedBlock(normalized);
 		this.removedBlocks.add(key);
+		this.playerModifiedColumns.add(columnKey(normalized.x, normalized.z));
 		this.structureVersion += 1;
 
 		if (track) {
@@ -329,9 +354,17 @@ export class VoxelWorld {
 		const key = columnKey(blockX, blockZ);
 		const generated = this.generatedColumnProfiles.get(key);
 		const placed = this.placedColumnBlocks.get(key);
+		const naturalOverrides = this.naturalTerrainColumnBlocks.get(key);
+		let highestNaturalOverride = WORLD_MIN_Y - 1;
+		if (naturalOverrides) {
+			for (const [y, type] of naturalOverrides) {
+				if (type !== 'air') highestNaturalOverride = Math.max(highestNaturalOverride, y);
+			}
+		}
 		let highestCandidate = Math.max(
 			Math.floor(this.generator.heightAt(blockX, blockZ)),
-			generated?.highestSolidY ?? WORLD_MIN_Y
+			generated?.highestSolidY ?? WORLD_MIN_Y,
+			highestNaturalOverride
 		);
 
 		if (placed) {
@@ -367,6 +400,114 @@ export class VoxelWorld {
 			generatedWaterSurfaceY: waterSurfaceY,
 			generatedWaterDepth
 		};
+	}
+
+	getErosionSurfaceProfile(x: number, z: number): ErosionSurfaceProfile {
+		const blockX = Math.floor(x);
+		const blockZ = Math.floor(z);
+		const chunk = worldToChunk({ x: blockX, z: blockZ });
+		if (!this.hasChunk(chunk)) {
+			return {
+				loaded: false,
+				protectedByPlayer: false,
+				surfaceY: WORLD_MIN_Y - 1,
+				type: 'air'
+			};
+		}
+
+		const column = columnKey(blockX, blockZ);
+		const profile = this.getLoadedWaterColumnProfile(blockX, blockZ);
+		const surfaceY = Math.max(WORLD_MIN_Y - 1, profile.groundSurfaceY - 1);
+		const type =
+			surfaceY < WORLD_MIN_Y
+				? 'air'
+				: this.peekLoadedBlockWithoutTransient({ x: blockX, y: surfaceY, z: blockZ }).type;
+		return {
+			loaded: true,
+			protectedByPlayer: this.playerModifiedColumns.has(column),
+			surfaceY,
+			type
+		};
+	}
+
+	erodeNaturalSurface(x: number, z: number): { position: BlockCoordinate; type: BlockType } | null {
+		const profile = this.getErosionSurfaceProfile(x, z);
+		if (!profile.loaded || profile.protectedByPlayer || profile.surfaceY < WORLD_MIN_Y) return null;
+		if (!isNaturallyErodible(profile.type)) return null;
+		const position = { x: Math.floor(x), y: profile.surfaceY, z: Math.floor(z) };
+		if (!this.setNaturalTerrainOverride(position, 'air')) return null;
+		return { position, type: profile.type };
+	}
+
+	depositNaturalSurface(
+		x: number,
+		z: number,
+		type: Extract<BlockType, 'dirt' | 'sand'>
+	): { position: BlockCoordinate; type: BlockType } | null {
+		const profile = this.getErosionSurfaceProfile(x, z);
+		if (!profile.loaded || profile.protectedByPlayer) return null;
+		const y = Math.max(WORLD_MIN_Y, profile.surfaceY + 1);
+		if (y > WORLD_MAX_Y) return null;
+		const position = { x: Math.floor(x), y, z: Math.floor(z) };
+		const key = blockKey(position);
+		if (this.placedBlocks.has(key) || this.removedBlocks.has(key)) return null;
+		const current = this.peekLoadedBlockWithoutTransient(position);
+		if (current.type !== 'air') return null;
+		if (!this.setNaturalTerrainOverride(position, type)) return null;
+		return { position, type };
+	}
+
+	exportNaturalTerrainEdits(): NaturalTerrainEditSaveState[] {
+		return [...this.naturalTerrainOverrides.entries()]
+			.map(([key, type]) => ({ position: parseKey(key), type }))
+			.sort(
+				(left, right) =>
+					left.position.x - right.position.x ||
+					left.position.z - right.position.z ||
+					left.position.y - right.position.y
+			);
+	}
+
+	loadNaturalTerrainEdits(edits: readonly NaturalTerrainEditSaveState[]): void {
+		this.naturalTerrainOverrides.clear();
+		this.naturalTerrainChunkBlocks.clear();
+		this.naturalTerrainColumnBlocks.clear();
+		for (const edit of edits) {
+			const position = normalizeBlock(edit.position);
+			if (position.y < WORLD_MIN_Y || position.y > WORLD_MAX_Y) continue;
+			this.setNaturalTerrainOverrideInternal(position, edit.type);
+		}
+		this.structureVersion += 1;
+	}
+
+	private setNaturalTerrainOverride(
+		position: BlockCoordinate,
+		type: NaturalTerrainOverrideType
+	): boolean {
+		const normalized = normalizeBlock(position);
+		if (normalized.y < WORLD_MIN_Y || normalized.y > WORLD_MAX_Y) return false;
+		const key = blockKey(normalized);
+		if (this.naturalTerrainOverrides.get(key) === type) return false;
+		this.setNaturalTerrainOverrideInternal(normalized, type);
+		this.structureVersion += 1;
+		return true;
+	}
+
+	private setNaturalTerrainOverrideInternal(
+		position: BlockCoordinate,
+		type: NaturalTerrainOverrideType
+	): void {
+		const key = blockKey(position);
+		this.naturalTerrainOverrides.set(key, type);
+		const chunk = chunkKey(worldToChunk(position));
+		const chunkBlocks = this.naturalTerrainChunkBlocks.get(chunk) ?? new Set<string>();
+		chunkBlocks.add(key);
+		this.naturalTerrainChunkBlocks.set(chunk, chunkBlocks);
+		const column = columnKey(position.x, position.z);
+		const columnBlocks =
+			this.naturalTerrainColumnBlocks.get(column) ?? new Map<number, NaturalTerrainOverrideType>();
+		columnBlocks.set(position.y, type);
+		this.naturalTerrainColumnBlocks.set(column, columnBlocks);
 	}
 
 	setTransientWaterColumn(
@@ -577,16 +718,20 @@ export class VoxelWorld {
 		this.placedBlocks.clear();
 		this.placedColumnBlocks.clear();
 		this.removedBlocks.clear();
+		this.playerModifiedColumns.clear();
 		this.changes.length = 0;
 
 		for (const block of snapshot.placedBlocks) {
 			const position = normalizeBlock(block.position);
 			this.placedBlocks.set(blockKey(position), block.type);
 			this.indexPlacedBlock(position, block.type);
+			this.playerModifiedColumns.add(columnKey(position.x, position.z));
 		}
 
 		for (const block of snapshot.removedBlocks) {
-			this.removedBlocks.add(blockKey(normalizeBlock(block)));
+			const position = normalizeBlock(block);
+			this.removedBlocks.add(blockKey(position));
+			this.playerModifiedColumns.add(columnKey(position.x, position.z));
 		}
 
 		this.changes.push(...snapshot.changes);
@@ -762,6 +907,9 @@ export class VoxelWorld {
 			return BlockRegistry.create('air', normalized);
 		}
 
+		const naturalOverride = this.naturalTerrainOverrides.get(key);
+		if (naturalOverride) return BlockRegistry.create(naturalOverride, normalized);
+
 		const generated = this.generatedBlocks.get(key);
 
 		return BlockRegistry.create(generated ?? 'air', normalized);
@@ -773,8 +921,14 @@ export class VoxelWorld {
 		const placed = this.placedBlocks.get(key);
 		if (placed) return BlockRegistry.create(placed, normalized);
 		if (this.removedBlocks.has(key)) return BlockRegistry.create('air', normalized);
+		const naturalOverride = this.naturalTerrainOverrides.get(key);
+		if (naturalOverride) return BlockRegistry.create(naturalOverride, normalized);
 		return BlockRegistry.create(this.generatedBlocks.get(key) ?? 'air', normalized);
 	}
+}
+
+function isNaturallyErodible(type: BlockType): boolean {
+	return type === 'grass' || type === 'dirt' || type === 'sand' || type === 'stone';
 }
 
 function columnKey(x: number, z: number): string {
