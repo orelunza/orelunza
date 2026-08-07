@@ -179,6 +179,101 @@
 				class="top"
 				d="M24 9c8 8 9 14 4 20-2 3-7 3-10 0-4-5-1-11 6-20Z"
 			/><path class="detail-light-stroke" d="M13 34h22" />
+		{:else if shape === 'chair'}
+			<path class="top" d="M13 24h22v8H13Z" /><path
+				class="detail-dark"
+				d="M15 32v11m18-11v11M14 24V10h20v14"
+			/>
+		{:else if shape === 'sofa'}
+			<path class="top" d="M8 23h32v15H8Z" /><path
+				class="detail-dark"
+				d="M10 23V12h28v11M15 38v4m18-4v4"
+			/>
+		{:else if shape === 'kitchen-counter'}
+			<rect class="top" x="7" y="17" width="34" height="22" /><path
+				class="detail-dark"
+				d="M7 17h34M24 19v18"
+			/>
+		{:else if shape === 'kitchen-cabinet'}
+			<rect class="top" x="10" y="10" width="28" height="32" /><path
+				class="detail-dark"
+				d="M24 11v30"
+			/><circle class="detail-light" cx="21" cy="27" r="1.2" />
+		{:else if shape === 'refrigerator'}
+			<rect class="top" x="13" y="5" width="22" height="39" rx="2" /><path
+				class="detail-dark"
+				d="M14 25h20M30 10v11"
+			/>
+		{:else if shape === 'sink'}
+			<path class="top" d="M8 20h32v19H8Z" /><ellipse
+				class="left"
+				cx="24"
+				cy="24"
+				rx="9"
+				ry="4"
+			/><path class="detail-dark" d="M29 19v-7h-7" />
+		{:else if shape === 'toilet'}
+			<rect class="top" x="15" y="7" width="18" height="14" rx="2" /><ellipse
+				class="right"
+				cx="24"
+				cy="31"
+				rx="12"
+				ry="9"
+			/>
+		{:else if shape === 'shower'}
+			<path class="detail-dark" d="M12 42V8h24v34M17 14h14" /><path
+				class="water-wave"
+				d="M18 18v17m6-17v19m6-19v17"
+			/>
+		{:else if shape === 'mirror'}
+			<rect class="glass-fill" x="12" y="7" width="24" height="35" rx="2" /><path
+				class="glass-shine"
+				d="m17 27 12-12m-8 19 10-10"
+			/>
+		{:else if shape === 'radio'}
+			<rect class="top" x="9" y="18" width="30" height="20" rx="2" /><circle
+				class="detail-dark-fill"
+				cx="18"
+				cy="28"
+				r="6"
+			/><path class="detail-dark" d="M31 8v10m-1 6h6m-6 5h6" />
+		{:else if shape === 'bookshelf'}
+			<rect class="top" x="9" y="6" width="30" height="38" /><path
+				class="detail-dark"
+				d="M10 18h28M10 30h28M15 8v9m6-9v9m5 13v12m6-12v12"
+			/>
+		{:else if shape === 'rug'}
+			<path class="top" d="M7 24 24 14l17 10-17 10Z" /><path
+				class="detail-light-stroke"
+				d="m12 24 12-7 12 7-12 7Z"
+			/>
+		{:else if shape === 'cooking-pot'}
+			<ellipse class="top" cx="24" cy="20" rx="11" ry="5" /><path
+				class="right"
+				d="M13 20v15c3 5 19 5 22 0V20"
+			/><path class="detail-dark" d="M8 25h5m22 0h5" />
+		{:else if shape === 'frying-pan'}
+			<ellipse class="top" cx="19" cy="27" rx="12" ry="8" /><path
+				class="detail-dark"
+				d="m29 23 12-9"
+			/>
+		{:else if shape === 'plate-stack'}
+			<ellipse class="top" cx="24" cy="29" rx="14" ry="5" /><path
+				class="detail-dark"
+				d="M11 25c7 4 19 4 26 0m-24-4c6 3 16 3 22 0"
+			/>
+		{:else if shape === 'glass-cup'}
+			<path class="glass-fill" d="M17 13h14l-2 26H19Z" /><path
+				class="glass-shine"
+				d="m21 17 5-2m-5 6 4-2"
+			/>
+		{:else if shape === 'fruit-bowl'}
+			<path class="right" d="M10 27h28c-2 11-8 15-14 15S12 38 10 27Z" /><circle
+				class="top"
+				cx="18"
+				cy="24"
+				r="6"
+			/><circle class="top" cx="28" cy="22" r="6" />
 		{/if}
 	</svg>
 </span>

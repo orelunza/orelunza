@@ -267,7 +267,7 @@ export class TerrainGenerator implements WorldTerrainGenerator {
 		const center = Math.sin((z + 18) / 18) * 2.2 + Math.sin(z / 41) * 1.4;
 		const width = 2.2 + smoothNoise(this.seedValue + 151, 0, z / 18) * 1.4;
 
-		return Math.abs(x - center) <= width && z <= 4 && z >= CENTRAL_CITY_CENTER.z - 8;
+		return Math.abs(x - center) <= width && z <= 4 && z >= CENTRAL_CITY_CENTER.z - 12;
 	}
 
 	isRiver(x: number, z: number): boolean {

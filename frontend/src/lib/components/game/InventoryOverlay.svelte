@@ -5,10 +5,11 @@
 
 	interface Props {
 		inventory: InventorySnapshot;
+		onUse?: (index: number) => void;
 		onClose?: () => void;
 	}
 
-	let { inventory, onClose }: Props = $props();
+	let { inventory, onUse, onClose }: Props = $props();
 </script>
 
 <div
@@ -34,6 +35,7 @@
 		<div class="grid grid-cols-9 gap-2" aria-label="Inventory slots">
 			{#each inventory.slots as slot, index (index)}
 				{@const block = slot.stack ? BlockRegistry.get(slot.stack.type) : null}
+				{@const item = slot.stack ? ItemRegistry.get(slot.stack.type) : null}
 				<div
 					class="relative grid aspect-square place-items-center rounded-sm border border-white/10 bg-black/18"
 				>
@@ -44,9 +46,18 @@
 							title={ItemRegistry.get(slot.stack.type).label}
 							style={`background-color:#${block.color.toString(16).padStart(6, '0')}`}
 						></span>
-						<span class="absolute right-1 bottom-0.5 text-[0.65rem] font-semibold">
+						<span class="absolute top-1 right-1 text-[0.65rem] font-semibold">
 							{slot.stack.quantity}
 						</span>
+						{#if item?.consumable}
+							<button
+								type="button"
+								class="absolute right-1 bottom-1 left-1 rounded-sm bg-[#f97316]/90 px-1 py-0.5 text-[0.58rem] font-semibold text-white hover:bg-[#f97316]"
+								onclick={() => onUse?.(index)}
+							>
+								Use
+							</button>
+						{/if}
 					{/if}
 				</div>
 			{/each}

@@ -496,6 +496,365 @@ const BLOCKS: Record<BlockType, BlockDefinition> = {
 		collision: { minX: 0.08, maxX: 0.92, minY: 0, maxY: 0.24, minZ: 0.08, maxZ: 0.92 },
 		light: { color: 0xff8c3a, intensity: 2.8, distance: 9 },
 		heatCelsius: 8
+	},
+	chair: {
+		type: 'chair',
+		label: 'Chair',
+		description: 'A dining or desk chair for homes, cafés and offices.',
+		category: 'decoration',
+		color: 0x8b684b,
+		solid: true,
+		passable: false,
+		collectable: true,
+		transparent: true,
+		placeable: true,
+		hardness: 0.35,
+		shape: 'chair',
+		placement: 'floor',
+		orientable: true,
+		defaultState: { facing: 'north' },
+		collision: { minX: 0.12, maxX: 0.88, minY: 0, maxY: 0.72, minZ: 0.12, maxZ: 0.88 }
+	},
+	sofa: {
+		type: 'sofa',
+		label: 'Sofa',
+		description: 'A cushioned city sofa for living rooms, lounges and hotel interiors.',
+		category: 'decoration',
+		color: 0x66727b,
+		solid: true,
+		passable: false,
+		collectable: true,
+		transparent: true,
+		placeable: true,
+		hardness: 0.35,
+		shape: 'sofa',
+		placement: 'floor',
+		orientable: true,
+		defaultState: { facing: 'north' },
+		collision: { minX: 0.04, maxX: 0.96, minY: 0, maxY: 0.7, minZ: 0.08, maxZ: 0.92 }
+	},
+	kitchen_counter: {
+		type: 'kitchen_counter',
+		label: 'Kitchen Counter',
+		description: 'A fitted counter for complete kitchens and service areas.',
+		category: 'decoration',
+		color: 0xb8aa92,
+		solid: true,
+		passable: false,
+		collectable: true,
+		transparent: false,
+		placeable: true,
+		hardness: 0.55,
+		shape: 'kitchen-counter',
+		placement: 'floor',
+		orientable: true,
+		defaultState: { facing: 'north' },
+		collision: { minX: 0.02, maxX: 0.98, minY: 0, maxY: 0.92, minZ: 0.05, maxZ: 0.95 }
+	},
+	kitchen_cabinet: {
+		type: 'kitchen_cabinet',
+		label: 'Kitchen Cabinet',
+		description: 'An opening kitchen cabinet stocked with basic dry food.',
+		category: 'utility',
+		color: 0x8c6e53,
+		solid: true,
+		passable: false,
+		collectable: true,
+		transparent: false,
+		placeable: true,
+		hardness: 0.5,
+		shape: 'kitchen-cabinet',
+		placement: 'floor',
+		interaction: 'container',
+		orientable: true,
+		defaultState: { facing: 'north', open: false, stock: 5 },
+		providesItem: 'bread_loaf',
+		collision: { minX: 0.04, maxX: 0.96, minY: 0, maxY: 0.96, minZ: 0.1, maxZ: 0.9 }
+	},
+	refrigerator: {
+		type: 'refrigerator',
+		label: 'Refrigerator',
+		description: 'A powered refrigerator that stores fresh food. Open it with E.',
+		category: 'utility',
+		color: 0xd9dedf,
+		solid: true,
+		passable: false,
+		collectable: true,
+		transparent: false,
+		placeable: true,
+		hardness: 0.65,
+		shape: 'refrigerator',
+		placement: 'floor',
+		interaction: 'container',
+		orientable: true,
+		defaultState: { facing: 'north', open: false, powered: true, stock: 6 },
+		providesItem: 'fresh_fruit',
+		collision: { minX: 0.04, maxX: 0.96, minY: 0, maxY: 1, minZ: 0.08, maxZ: 0.92 }
+	},
+	sink: {
+		type: 'sink',
+		label: 'Kitchen Sink',
+		description: 'A working sink with drinkable tap water.',
+		category: 'utility',
+		color: 0x9da8a9,
+		solid: true,
+		passable: false,
+		collectable: true,
+		transparent: true,
+		placeable: true,
+		hardness: 0.55,
+		shape: 'sink',
+		placement: 'floor',
+		interaction: 'water',
+		orientable: true,
+		defaultState: { facing: 'north', running: false },
+		hydration: 18,
+		collision: { minX: 0.05, maxX: 0.95, minY: 0, maxY: 0.88, minZ: 0.08, maxZ: 0.92 }
+	},
+	toilet: {
+		type: 'toilet',
+		label: 'Toilet',
+		description: 'A ceramic toilet fixture for bathrooms and public facilities.',
+		category: 'utility',
+		color: 0xe4e4df,
+		solid: true,
+		passable: false,
+		collectable: true,
+		transparent: true,
+		placeable: true,
+		hardness: 0.5,
+		shape: 'toilet',
+		placement: 'floor',
+		interaction: 'toilet',
+		orientable: true,
+		defaultState: { facing: 'north' },
+		collision: { minX: 0.12, maxX: 0.88, minY: 0, maxY: 0.75, minZ: 0.1, maxZ: 0.9 }
+	},
+	shower: {
+		type: 'shower',
+		label: 'Shower',
+		description: 'A working shower fixture that can be switched on and off.',
+		category: 'utility',
+		color: 0xb8ced2,
+		solid: false,
+		passable: true,
+		collectable: true,
+		transparent: true,
+		placeable: true,
+		hardness: 0.4,
+		shape: 'shower',
+		placement: 'floor',
+		interaction: 'shower',
+		orientable: true,
+		defaultState: { facing: 'north', running: false }
+	},
+	mirror: {
+		type: 'mirror',
+		label: 'Mirror',
+		description: 'A thin wall mirror for bathrooms, bedrooms and shops.',
+		category: 'decoration',
+		color: 0xaec6ca,
+		solid: false,
+		passable: true,
+		collectable: true,
+		transparent: true,
+		placeable: true,
+		hardness: 0.25,
+		shape: 'mirror',
+		placement: 'wall',
+		orientable: true,
+		defaultState: { facing: 'north' }
+	},
+	radio: {
+		type: 'radio',
+		label: 'Radio',
+		description: 'A powered tabletop radio with a local procedural broadcast tone.',
+		category: 'utility',
+		color: 0x4e443c,
+		solid: false,
+		passable: true,
+		collectable: true,
+		transparent: true,
+		placeable: true,
+		hardness: 0.3,
+		shape: 'radio',
+		placement: 'floor',
+		interaction: 'radio',
+		orientable: true,
+		defaultState: { facing: 'north', powered: true, running: false },
+		light: { color: 0xf08a4b, intensity: 0.35, distance: 2.4 }
+	},
+	bookshelf: {
+		type: 'bookshelf',
+		label: 'Bookshelf',
+		description: 'A tall shelf of books for homes, libraries, offices and shops.',
+		category: 'decoration',
+		color: 0x765640,
+		solid: true,
+		passable: false,
+		collectable: true,
+		transparent: false,
+		placeable: true,
+		hardness: 0.45,
+		shape: 'bookshelf',
+		placement: 'floor',
+		orientable: true,
+		defaultState: { facing: 'north' },
+		collision: { minX: 0.04, maxX: 0.96, minY: 0, maxY: 1, minZ: 0.18, maxZ: 0.82 }
+	},
+	rug: {
+		type: 'rug',
+		label: 'Rug',
+		description: 'A thin interior rug for living rooms, bedrooms and lobbies.',
+		category: 'decoration',
+		color: 0x8c5145,
+		solid: false,
+		passable: true,
+		collectable: true,
+		transparent: true,
+		placeable: true,
+		hardness: 0.1,
+		shape: 'rug',
+		placement: 'floor',
+		orientable: true,
+		defaultState: { facing: 'north' }
+	},
+	cooking_pot: {
+		type: 'cooking_pot',
+		label: 'Cooking Pot',
+		description: 'A small cooking pot for kitchens and restaurants.',
+		category: 'decoration',
+		color: 0x565b5c,
+		solid: false,
+		passable: true,
+		collectable: true,
+		transparent: true,
+		placeable: true,
+		hardness: 0.2,
+		shape: 'cooking-pot',
+		placement: 'floor'
+	},
+	frying_pan: {
+		type: 'frying_pan',
+		label: 'Frying Pan',
+		description: 'A frying pan prop for kitchens and food shops.',
+		category: 'decoration',
+		color: 0x45494a,
+		solid: false,
+		passable: true,
+		collectable: true,
+		transparent: true,
+		placeable: true,
+		hardness: 0.2,
+		shape: 'frying-pan',
+		placement: 'floor',
+		orientable: true,
+		defaultState: { facing: 'north' }
+	},
+	plate_stack: {
+		type: 'plate_stack',
+		label: 'Plate Stack',
+		description: 'A compact stack of plates for kitchens, restaurants and cafés.',
+		category: 'decoration',
+		color: 0xe1ded4,
+		solid: false,
+		passable: true,
+		collectable: true,
+		transparent: true,
+		placeable: true,
+		hardness: 0.15,
+		shape: 'plate-stack',
+		placement: 'floor'
+	},
+	glass_cup: {
+		type: 'glass_cup',
+		label: 'Glass Cup',
+		description: 'A small drinking glass for tables, kitchens and cafés.',
+		category: 'decoration',
+		color: 0xb6d9dc,
+		solid: false,
+		passable: true,
+		collectable: true,
+		transparent: true,
+		placeable: true,
+		hardness: 0.1,
+		shape: 'glass-cup',
+		placement: 'floor'
+	},
+	fruit_bowl: {
+		type: 'fruit_bowl',
+		label: 'Fruit Bowl',
+		description: 'A bowl of fresh fruit that can be eaten with E.',
+		category: 'decoration',
+		color: 0xb56c3e,
+		solid: false,
+		passable: true,
+		collectable: true,
+		transparent: true,
+		placeable: true,
+		hardness: 0.15,
+		shape: 'fruit-bowl',
+		placement: 'floor',
+		interaction: 'food',
+		defaultState: { stock: 5 },
+		nutrition: 10
+	},
+	bread_loaf: {
+		type: 'bread_loaf',
+		label: 'Bread',
+		description: 'A simple edible bread item.',
+		category: 'utility',
+		color: 0xb9824f,
+		solid: false,
+		passable: true,
+		collectable: false,
+		transparent: true,
+		placeable: false,
+		hardness: 0,
+		nutrition: 14
+	},
+	fresh_fruit: {
+		type: 'fresh_fruit',
+		label: 'Fresh Fruit',
+		description: 'Fresh fruit from a refrigerator or market.',
+		category: 'utility',
+		color: 0xc95e45,
+		solid: false,
+		passable: true,
+		collectable: false,
+		transparent: true,
+		placeable: false,
+		hardness: 0,
+		nutrition: 11,
+		hydration: 3
+	},
+	rice_meal: {
+		type: 'rice_meal',
+		label: 'Rice Meal',
+		description: 'A prepared bowl of rice for a substantial meal.',
+		category: 'utility',
+		color: 0xe1d8b4,
+		solid: false,
+		passable: true,
+		collectable: false,
+		transparent: true,
+		placeable: false,
+		hardness: 0,
+		nutrition: 22
+	},
+	bottled_water: {
+		type: 'bottled_water',
+		label: 'Bottled Water',
+		description: 'Clean drinking water carried in the inventory.',
+		category: 'utility',
+		color: 0x6aaec8,
+		solid: false,
+		passable: true,
+		collectable: false,
+		transparent: true,
+		placeable: false,
+		hardness: 0,
+		hydration: 24
 	}
 };
 
@@ -541,14 +900,36 @@ export class BlockRegistry {
 		if (definition.orientable || definition.defaultState?.facing) {
 			result.facing = isFacing(source.facing) ? source.facing : 'north';
 		}
-		if (definition.interaction === 'door' || definition.interaction === 'curtain') {
+		if (
+			definition.interaction === 'door' ||
+			definition.interaction === 'curtain' ||
+			definition.interaction === 'container'
+		) {
 			result.open = source.open === true;
 		}
 		if (definition.interaction === 'lamp' || definition.interaction === 'fire') {
 			result.lit = source.lit === true;
 		}
-		if (definition.interaction === 'lamp') {
+		if (
+			definition.interaction === 'lamp' ||
+			definition.interaction === 'radio' ||
+			type === 'refrigerator'
+		) {
 			result.powered = source.powered !== false;
+		}
+		if (
+			definition.interaction === 'water' ||
+			definition.interaction === 'shower' ||
+			definition.interaction === 'radio'
+		) {
+			result.running = source.running === true;
+		}
+		if (definition.interaction === 'container' || definition.interaction === 'food') {
+			const fallback = definition.defaultState?.stock ?? 0;
+			result.stock = Math.max(
+				0,
+				Math.floor(Number.isFinite(source.stock) ? (source.stock as number) : fallback)
+			);
 		}
 
 		return Object.keys(result).length > 0 ? result : undefined;
@@ -567,6 +948,9 @@ export class BlockRegistry {
 		if (!definition.light) return false;
 		if (definition.interaction === 'lamp') {
 			return block.state?.powered !== false && block.state?.lit === true;
+		}
+		if (definition.interaction === 'radio') {
+			return block.state?.powered !== false && block.state?.running === true;
 		}
 		return block.state?.lit === true;
 	}

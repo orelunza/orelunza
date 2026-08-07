@@ -31,6 +31,11 @@
 				type: 'select-build-block';
 				blockType: BlockType;
 				token: number;
+		  }
+		| {
+				type: 'use-inventory';
+				index: number;
+				token: number;
 		  };
 
 	interface Props extends Omit<GameEngineOptions, 'canvas' | 'buildCursorElement' | 'onSnapshot'> {
@@ -123,6 +128,10 @@
 
 			case 'hotbar':
 				engine.selectHotbar(command.index);
+				break;
+
+			case 'use-inventory':
+				engine.useInventorySlot(command.index);
 				break;
 
 			case 'open-build-catalog':

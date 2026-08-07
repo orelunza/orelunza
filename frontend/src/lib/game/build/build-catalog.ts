@@ -281,6 +281,40 @@ function buildSynonyms(definition: BlockDefinition): readonly string[] {
 			return ['lamp', 'electric light', 'interior light'];
 		case 'fire_pit':
 			return ['fire', 'heat', 'warmth', 'campfire'];
+		case 'chair':
+			return ['seat', 'dining chair', 'office chair', 'furniture'];
+		case 'sofa':
+			return ['couch', 'seat', 'living room', 'lounge'];
+		case 'kitchen_counter':
+			return ['countertop', 'kitchen', 'worktop'];
+		case 'kitchen_cabinet':
+			return ['cabinet', 'cupboard', 'pantry', 'kitchen storage'];
+		case 'refrigerator':
+			return ['fridge', 'food storage', 'kitchen appliance'];
+		case 'sink':
+			return ['tap', 'faucet', 'water', 'kitchen'];
+		case 'toilet':
+			return ['bathroom', 'wc', 'restroom'];
+		case 'shower':
+			return ['bathroom', 'wash', 'water'];
+		case 'mirror':
+			return ['bathroom mirror', 'wall mirror', 'reflection'];
+		case 'radio':
+			return ['music', 'audio', 'speaker', 'broadcast'];
+		case 'bookshelf':
+			return ['books', 'library', 'shelf', 'bookcase'];
+		case 'rug':
+			return ['carpet', 'mat', 'floor decor'];
+		case 'cooking_pot':
+			return ['pot', 'cookware', 'kitchen'];
+		case 'frying_pan':
+			return ['pan', 'cookware', 'kitchen'];
+		case 'plate_stack':
+			return ['plates', 'dishes', 'kitchen'];
+		case 'glass_cup':
+			return ['glass', 'cup', 'drinkware'];
+		case 'fruit_bowl':
+			return ['fruit', 'food', 'bowl', 'kitchen'];
 		default:
 			return [];
 	}

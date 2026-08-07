@@ -1003,7 +1003,9 @@ function sameBlockState(left?: BlockState, right?: BlockState): boolean {
 		(left?.facing ?? null) === (right?.facing ?? null) &&
 		(left?.open ?? null) === (right?.open ?? null) &&
 		(left?.lit ?? null) === (right?.lit ?? null) &&
-		(left?.powered ?? null) === (right?.powered ?? null)
+		(left?.powered ?? null) === (right?.powered ?? null) &&
+		(left?.stock ?? null) === (right?.stock ?? null) &&
+		(left?.running ?? null) === (right?.running ?? null)
 	);
 }
 

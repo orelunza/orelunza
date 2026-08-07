@@ -28,6 +28,18 @@
 				return 'Rest in bed';
 			case 'wardrobe':
 				return 'Change outfit';
+			case 'container':
+				return 'Open / close storage';
+			case 'water':
+				return 'Use tap';
+			case 'shower':
+				return 'Switch shower';
+			case 'toilet':
+				return 'Flush toilet';
+			case 'radio':
+				return 'Switch radio';
+			case 'food':
+				return 'Eat';
 			default:
 				return 'Use';
 		}

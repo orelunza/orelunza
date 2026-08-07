@@ -28,6 +28,7 @@ import { CreationRemovalSystem } from './interaction/CreationRemovalSystem';
 import type { BuildTarget } from './interaction/BuildTarget';
 import { Hotbar } from './inventory/Hotbar';
 import { Inventory } from './inventory/Inventory';
+import { ItemRegistry } from './inventory/ItemRegistry';
 import { BuildCursor } from './input/BuildCursor';
 import { KeyboardInput, type MovementInput } from './input/KeyboardInput';
 import { MouseInput } from './input/MouseInput';
@@ -46,6 +47,7 @@ import { createStarterWorld } from './world/WorldGenerator';
 import { LocalWaterSystem, type LocalWaterDebugApi } from './world/water';
 import { CivilizationInteractionSystem } from './world/civilization/CivilizationInteractionSystem';
 import { nextWardrobeOutfit } from './world/civilization/OutfitWardrobe';
+import { CivilizationRadioAudio } from './world/civilization/CivilizationRadioAudio';
 import { HumanConditionSystem, sampleHumanExposure, type HumanConditionDebugApi } from './human';
 import {
 	STARTER_WORLD_SEED,
@@ -80,6 +82,7 @@ export class GameEngine {
 	private readonly raycaster: CreationRaycaster;
 	private readonly placementSystem: BlockPlacementSystem;
 	private readonly civilizationInteractions: CivilizationInteractionSystem;
+	private readonly civilizationRadioAudio = new CivilizationRadioAudio();
 	private readonly breakingSystem: BlockBreakingSystem;
 	private readonly removalSystem: CreationRemovalSystem;
 	private readonly loop: GameLoop;
@@ -245,7 +248,7 @@ export class GameEngine {
 		);
 		this.localWater = new LocalWaterSystem(this.world);
 		this.human = new HumanConditionSystem();
-		this.civilizationInteractions = new CivilizationInteractionSystem(this.world);
+		this.civilizationInteractions = new CivilizationInteractionSystem(this.world, this.inventory);
 		this.placementSystem = new BlockPlacementSystem(
 			this.world,
 			this.inventory,
@@ -530,6 +533,29 @@ export class GameEngine {
 		this.emitSnapshot();
 	}
 
+	useInventorySlot(index: number): boolean {
+		if (this.status !== 'inventory' || !this.human.canAct) return false;
+		const stack = this.inventory.getSelectedStack(index);
+		if (!stack) return false;
+		const item = ItemRegistry.get(stack.type);
+		if (!item.consumable) {
+			this.message = `${item.label} cannot be consumed`;
+			this.emitSnapshot();
+			return false;
+		}
+		if (item.consumable.nutrition > 0) {
+			this.human.consumeFood(item.consumable.nutrition, item.consumable.contamination);
+		}
+		if (item.consumable.hydration > 0) {
+			this.human.drinkWater(item.consumable.hydration, item.consumable.contamination);
+		}
+		this.inventory.removeItem(stack.type, 1);
+		this.persistence.markDirty();
+		this.message = `Used ${item.label}`;
+		this.emitSnapshot();
+		return true;
+	}
+
 	async saveNow(): Promise<void> {
 		await this.persistence.save(true);
 		this.emitSnapshot();
@@ -593,6 +619,7 @@ export class GameEngine {
 			delete debugGlobal.__ORELUNZA_HUMAN__;
 		}
 		this.localWater.dispose();
+		this.civilizationRadioAudio.dispose();
 		this.sky.dispose();
 		this.renderer.dispose();
 		this.emitSnapshot();
@@ -846,6 +873,7 @@ export class GameEngine {
 			this.human.snapshot.lifeState
 		);
 		this.renderer.updateCivilization(this.player.camera.camera.position);
+		this.civilizationRadioAudio.update(this.player.state.position);
 		this.renderer.updateVegetation(
 			this.player.camera.camera.position,
 			deltaSeconds,
@@ -1033,6 +1061,22 @@ export class GameEngine {
 			this.persistence.markDirty();
 			this.message = `Changed outfit · ${next.preset.label}`;
 			return;
+		}
+		if (result.action === 'eat') {
+			if ((result.nutrition ?? 0) > 0) this.human.consumeFood(result.nutrition ?? 0);
+			if ((result.hydration ?? 0) > 0) this.human.drinkWater(result.hydration ?? 0);
+			this.persistence.markDirty();
+		}
+		if (result.action === 'drink') {
+			this.human.drinkWater(result.hydration ?? 0);
+			this.persistence.markDirty();
+		}
+		if (result.action === 'wash') {
+			this.human.applyExternalWetness(32);
+			this.persistence.markDirty();
+		}
+		if (result.action === 'radio' && result.position) {
+			this.civilizationRadioAudio.setRadio(result.position, result.active === true);
 		}
 		this.message = result.message ?? 'Used';
 	}

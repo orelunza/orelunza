@@ -45,6 +45,11 @@
 				type: 'select-build-block';
 				blockType: BlockType;
 				token: number;
+		  }
+		| {
+				type: 'use-inventory';
+				index: number;
+				token: number;
 		  };
 
 	let loading = $state(true);
@@ -88,6 +93,14 @@
 		command = {
 			type: 'select-build-block',
 			blockType,
+			token: ++commandToken
+		};
+	}
+
+	function sendUseInventoryCommand(index: number): void {
+		command = {
+			type: 'use-inventory',
+			index,
 			token: ++commandToken
 		};
 	}
@@ -371,6 +384,9 @@
 			{#if snapshot.status === 'inventory'}
 				<InventoryOverlay
 					inventory={snapshot.inventory}
+					onUse={(index) => {
+						sendUseInventoryCommand(index);
+					}}
 					onClose={() => {
 						sendCommand('close-inventory');
 					}}

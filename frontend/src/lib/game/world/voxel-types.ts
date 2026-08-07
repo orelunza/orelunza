@@ -30,7 +30,28 @@ export type BlockType =
 	| 'clothes_rack'
 	| 'shoe_rack'
 	| 'floor_lamp'
-	| 'fire_pit';
+	| 'fire_pit'
+	| 'chair'
+	| 'sofa'
+	| 'kitchen_counter'
+	| 'kitchen_cabinet'
+	| 'refrigerator'
+	| 'sink'
+	| 'toilet'
+	| 'shower'
+	| 'mirror'
+	| 'radio'
+	| 'bookshelf'
+	| 'rug'
+	| 'cooking_pot'
+	| 'frying_pan'
+	| 'plate_stack'
+	| 'glass_cup'
+	| 'fruit_bowl'
+	| 'bread_loaf'
+	| 'fresh_fruit'
+	| 'rice_meal'
+	| 'bottled_water';
 
 export type BlockFacing = 'north' | 'east' | 'south' | 'west';
 
@@ -40,9 +61,25 @@ export interface BlockState {
 	open?: boolean;
 	lit?: boolean;
 	powered?: boolean;
+	/** Doors/containers with finite supplies preserve their remaining contents. */
+	stock?: number;
+	/** Running state for taps, showers and radios. */
+	running?: boolean;
 }
 
-export type BlockInteractionKind = 'door' | 'curtain' | 'lamp' | 'fire' | 'bed' | 'wardrobe';
+export type BlockInteractionKind =
+	| 'door'
+	| 'curtain'
+	| 'lamp'
+	| 'fire'
+	| 'bed'
+	| 'wardrobe'
+	| 'container'
+	| 'water'
+	| 'shower'
+	| 'toilet'
+	| 'radio'
+	| 'food';
 export type BlockPlacementRule = 'any' | 'floor' | 'wall';
 export type BlockRenderShape =
 	| 'cube'
@@ -65,7 +102,24 @@ export type BlockRenderShape =
 	| 'clothes-rack'
 	| 'shoe-rack'
 	| 'floor-lamp'
-	| 'fire-pit';
+	| 'fire-pit'
+	| 'chair'
+	| 'sofa'
+	| 'kitchen-counter'
+	| 'kitchen-cabinet'
+	| 'refrigerator'
+	| 'sink'
+	| 'toilet'
+	| 'shower'
+	| 'mirror'
+	| 'radio'
+	| 'bookshelf'
+	| 'rug'
+	| 'cooking-pot'
+	| 'frying-pan'
+	| 'plate-stack'
+	| 'glass-cup'
+	| 'fruit-bowl';
 
 /** Local AABB in a voxel cell. Values stay in [0, 1]. */
 export interface BlockCollisionBox {
@@ -141,6 +195,11 @@ export interface BlockDefinition {
 	light?: BlockLightDefinition;
 	/** Local heat contribution used by the human thermoregulation system. */
 	heatCelsius?: number;
+	/** Optional item dispensed when an interactive container is opened. */
+	providesItem?: BlockType;
+	/** Direct nutrition/hydration supplied by edible or water fixtures. */
+	nutrition?: number;
+	hydration?: number;
 }
 
 export interface BlockChange {
@@ -160,7 +219,11 @@ export const WORLD_MAX_Y = 512;
 export const WATER_LEVEL = 7;
 export const STARTER_WORLD_SEED = 'orelunza-world-v2';
 export const WORLD_SPAWN = { x: 0.5, y: 0, z: 0.5 };
-export const CENTRAL_CITY_CENTER = { x: 0, z: -82 };
+// The native city is intentionally close enough for its first buildings to be
+// loaded from the landing meadow. Larger city LODs can extend this visibility
+// farther later without moving the canonical city anchor.
+export const NATIVE_CITY_PREFERRED_DISTANCE = 31;
+export const CENTRAL_CITY_CENTER = { x: 0, z: -NATIVE_CITY_PREFERRED_DISTANCE };
 
 export function blockKey(block: BlockCoordinate): string {
 	return `${block.x},${block.y},${block.z}`;

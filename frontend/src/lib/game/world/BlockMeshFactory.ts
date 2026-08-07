@@ -260,17 +260,23 @@ export class BlockMeshFactory {
 		const definition = BlockRegistry.get(type);
 		const usesInstanceColor = INSTANCE_COLOR_TYPES.has(type);
 		const renderTransparent =
-			type === 'water' || type === 'glass' || type === 'glass_panel' || type === 'curtain';
+			type === 'water' ||
+			type === 'glass' ||
+			type === 'glass_panel' ||
+			type === 'curtain' ||
+			type === 'mirror' ||
+			type === 'shower' ||
+			type === 'glass_cup';
 		let material: MeshLambertMaterial | MeshStandardMaterial;
 
-		if ((type === 'floor_lamp' || type === 'fire_pit') && stateVariant === 'lit') {
-			const emissiveColor = type === 'fire_pit' ? 0xff6a24 : 0xffcf78;
+		if (definition.light && stateVariant === 'lit') {
+			const emissiveColor = type === 'fire_pit' ? 0xff6a24 : type === 'radio' ? 0xf08a4b : 0xffcf78;
 			material = new MeshStandardMaterial({
 				color: definition.color,
 				emissive: emissiveColor,
-				emissiveIntensity: type === 'fire_pit' ? 1.7 : 1.2,
+				emissiveIntensity: type === 'fire_pit' ? 1.7 : type === 'radio' ? 0.45 : 1.2,
 				roughness: 0.72,
-				metalness: 0
+				metalness: type === 'radio' ? 0.08 : 0
 			});
 		} else {
 			material = new MeshLambertMaterial({
@@ -286,8 +292,20 @@ export class BlockMeshFactory {
 								? 0.38
 								: type === 'curtain'
 									? 0.9
-									: 1,
-				depthWrite: type !== 'water' && type !== 'glass' && type !== 'glass_panel'
+									: type === 'mirror'
+										? 0.82
+										: type === 'shower'
+											? 0.55
+											: type === 'glass_cup'
+												? 0.5
+												: 1,
+				depthWrite:
+					type !== 'water' &&
+					type !== 'glass' &&
+					type !== 'glass_panel' &&
+					type !== 'mirror' &&
+					type !== 'shower' &&
+					type !== 'glass_cup'
 			});
 		}
 
@@ -345,7 +363,10 @@ export class BlockMeshFactory {
 			type !== 'leaves' &&
 			type !== 'flower' &&
 			type !== 'floor_lamp' &&
-			type !== 'fire_pit';
+			type !== 'fire_pit' &&
+			type !== 'mirror' &&
+			type !== 'shower' &&
+			type !== 'glass_cup';
 		if (wettable && this.surfaceWetness > 0)
 			material.color.multiplyScalar(1 - this.surfaceWetness * 0.2);
 		if (type === 'water') {
@@ -386,14 +407,13 @@ function geometryFor(
 	if (type === 'leaves')
 		return LEAF_GEOMETRIES.get(variant as CanopyShape) ?? LEAF_GEOMETRIES.get('round')!;
 	const shape = BlockRegistry.get(type).shape ?? 'cube';
-	return civilizationGeometry(shape, stateVariant === 'lit') ?? BLOCK_GEOMETRY;
+	return civilizationGeometry(shape, stateVariant !== 'default') ?? BLOCK_GEOMETRY;
 }
 
 function stateVariantFor(block: VoxelBlock): string {
-	if ((block.type === 'floor_lamp' || block.type === 'fire_pit') && BlockRegistry.isLit(block))
-		return 'lit';
-	if ((block.type === 'wooden_door' || block.type === 'curtain') && block.state?.open)
-		return 'open';
+	if (BlockRegistry.isLit(block)) return 'lit';
+	if (block.state?.open) return 'open';
+	if (block.state?.running) return 'running';
 	return 'default';
 }
 
@@ -403,7 +423,10 @@ function shouldCastShadow(type: BlockType): boolean {
 		type !== 'flower' &&
 		type !== 'glass' &&
 		type !== 'glass_panel' &&
-		type !== 'curtain'
+		type !== 'curtain' &&
+		type !== 'mirror' &&
+		type !== 'shower' &&
+		type !== 'glass_cup'
 	);
 }
 

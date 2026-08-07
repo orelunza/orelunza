@@ -31,7 +31,24 @@ export type BlockIconShape =
 	| 'clothes-rack'
 	| 'shoe-rack'
 	| 'floor-lamp'
-	| 'fire-pit';
+	| 'fire-pit'
+	| 'chair'
+	| 'sofa'
+	| 'kitchen-counter'
+	| 'kitchen-cabinet'
+	| 'refrigerator'
+	| 'sink'
+	| 'toilet'
+	| 'shower'
+	| 'mirror'
+	| 'radio'
+	| 'bookshelf'
+	| 'rug'
+	| 'cooking-pot'
+	| 'frying-pan'
+	| 'plate-stack'
+	| 'glass-cup'
+	| 'fruit-bowl';
 
 const BLOCK_ICON_SHAPES: Record<BlockType, BlockIconShape> = {
 	air: 'empty',
@@ -63,7 +80,28 @@ const BLOCK_ICON_SHAPES: Record<BlockType, BlockIconShape> = {
 	clothes_rack: 'clothes-rack',
 	shoe_rack: 'shoe-rack',
 	floor_lamp: 'floor-lamp',
-	fire_pit: 'fire-pit'
+	fire_pit: 'fire-pit',
+	chair: 'chair',
+	sofa: 'sofa',
+	kitchen_counter: 'kitchen-counter',
+	kitchen_cabinet: 'kitchen-cabinet',
+	refrigerator: 'refrigerator',
+	sink: 'sink',
+	toilet: 'toilet',
+	shower: 'shower',
+	mirror: 'mirror',
+	radio: 'radio',
+	bookshelf: 'bookshelf',
+	rug: 'rug',
+	cooking_pot: 'cooking-pot',
+	frying_pan: 'frying-pan',
+	plate_stack: 'plate-stack',
+	glass_cup: 'glass-cup',
+	fruit_bowl: 'fruit-bowl',
+	bread_loaf: 'wooden-boards',
+	fresh_fruit: 'flower-stem',
+	rice_meal: 'stone-slab',
+	bottled_water: 'water-tile'
 };
 
 export function blockIconShape(type: BlockType): BlockIconShape {

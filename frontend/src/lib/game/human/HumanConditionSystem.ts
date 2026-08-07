@@ -160,6 +160,16 @@ export class HumanConditionSystem {
 		this.conditionMutationPending = true;
 	}
 
+	/** Indoor plumbing can wet the body without pretending the player is submerged. */
+	applyExternalWetness(amount: number): void {
+		this.stateValue.wetness = clamp(
+			this.stateValue.wetness + Math.max(0, finiteOr(amount, 0)),
+			0,
+			100
+		);
+		this.conditionMutationPending = true;
+	}
+
 	/** Future water interactions can pass a contamination value when water quality exists. */
 	drinkWater(hydration: number, contamination = 0): void {
 		this.stateValue.hydration = clamp(
