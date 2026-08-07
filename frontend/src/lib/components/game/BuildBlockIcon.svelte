@@ -12,7 +12,9 @@
 
 	let definition = $derived(BlockRegistry.get(type));
 	let color = $derived(toHexColor(definition.color));
-	let opacity = $derived(type === 'glass' ? 0.48 : type === 'water' ? 0.68 : 1);
+	let opacity = $derived(
+		type === 'glass' || type === 'glass_panel' ? 0.48 : type === 'water' ? 0.68 : 1
+	);
 
 	function toHexColor(value: number): string {
 		return `#${value.toString(16).padStart(6, '0')}`;

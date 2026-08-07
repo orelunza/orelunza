@@ -106,6 +106,9 @@ export class GamePersistence {
 			changes: save.changes
 		});
 		this.inventory.load(save.inventory);
+		if (save.version === 2 || save.version === 3) {
+			Object.assign(this.character, save.character);
+		}
 		const position = this.world.safeRestorePosition(save.player.position);
 		this.player.setTransform(position, save.player.yaw, save.player.pitch);
 

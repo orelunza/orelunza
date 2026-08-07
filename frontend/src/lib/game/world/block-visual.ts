@@ -72,7 +72,7 @@ export function blockVisual(type: BlockType): BlockVisual {
 		top: scale(definition.color, 1),
 		right: scale(definition.color, 0.82),
 		left: scale(definition.color, 0.62),
-		opacity: definition.transparent ? 0.78 : 1
+		opacity: type === 'water' ? 0.72 : type === 'glass' || type === 'glass_panel' ? 0.78 : 1
 	};
 
 	cache.set(type, visual);

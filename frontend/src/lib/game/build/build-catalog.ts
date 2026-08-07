@@ -78,8 +78,20 @@ export function buildCatalogEntries(): CatalogEntry[] {
 			label: definition.label,
 			description: definition.description,
 			category: definition.category,
-			kind: definition.category === 'nature' ? 'vegetation' : 'material',
-			placementMode: 'voxel',
+			kind:
+				definition.category === 'nature'
+					? 'vegetation'
+					: definition.category === 'decoration' || definition.category === 'utility'
+						? 'object'
+						: definition.category === 'light'
+							? 'effect'
+							: 'material',
+			placementMode:
+				definition.placement === 'wall'
+					? 'wall'
+					: definition.placement === 'floor'
+						? 'surface'
+						: 'voxel',
 			tags: CATEGORY_SEARCH_METADATA[definition.category],
 			synonyms: buildSynonyms(definition)
 		}))
@@ -212,7 +224,9 @@ function matchesQuery(entry: CatalogEntry, normalizedQuery: string): boolean {
 		.join(' ')
 		.toLowerCase();
 
-	return haystack.includes(normalizedQuery);
+	if (normalizedQuery.includes(' ')) return haystack.includes(normalizedQuery);
+	const escaped = normalizedQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+	return new RegExp(`(?:^|[^a-z0-9])${escaped}`, 'i').test(haystack);
 }
 
 function buildSynonyms(definition: BlockDefinition): readonly string[] {
@@ -233,6 +247,40 @@ function buildSynonyms(definition: BlockDefinition): readonly string[] {
 			return ['window', 'transparent wall'];
 		case 'water':
 			return ['river', 'pond', 'lake'];
+		case 'concrete':
+			return ['cement', 'modern wall', 'tower'];
+		case 'marble':
+			return ['polished stone', 'luxury', 'hotel', 'civic'];
+		case 'glass_panel':
+			return ['window', 'pane', 'facade', 'glass wall'];
+		case 'wooden_door':
+			return ['door', 'entrance', 'gate', 'interactive'];
+		case 'stone_slab':
+			return ['slab', 'half block', 'terrace'];
+		case 'stone_stairs':
+			return ['stairs', 'steps', 'staircase', 'floor'];
+		case 'wood_fence':
+		case 'metal_fence':
+		case 'brick_fence':
+			return ['fence', 'boundary', 'railing', 'garden'];
+		case 'table':
+			return ['desk', 'dining', 'furniture'];
+		case 'bed':
+			return ['sleep', 'bedroom', 'furniture'];
+		case 'mattress':
+			return ['sleep', 'bedroom', 'cushion'];
+		case 'curtain':
+			return ['curtain', 'drape', 'window covering', 'rideau'];
+		case 'wardrobe':
+			return ['closet', 'clothes', 'outfit', 'shoes', 'penderie'];
+		case 'clothes_rack':
+			return ['clothes', 'fashion', 'hanger', 'shop'];
+		case 'shoe_rack':
+			return ['shoes', 'sneakers', 'boots', 'shop'];
+		case 'floor_lamp':
+			return ['lamp', 'electric light', 'interior light'];
+		case 'fire_pit':
+			return ['fire', 'heat', 'warmth', 'campfire'];
 		default:
 			return [];
 	}

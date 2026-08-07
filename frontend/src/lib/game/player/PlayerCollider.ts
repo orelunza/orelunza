@@ -1,13 +1,20 @@
+import { BlockRegistry } from '../world/BlockRegistry';
 import type { VoxelWorld } from '../world/VoxelWorld';
-import type { BlockCoordinate, WorldCoordinate } from '../world/voxel-types';
+import type {
+	BlockCoordinate,
+	BlockState,
+	BlockType,
+	VoxelBlock,
+	WorldCoordinate
+} from '../world/voxel-types';
 import type { PlayerState } from './PlayerState';
 
 /**
- * Axis-aligned voxel collision queries — rewritten.
+ * Axis-aligned voxel collision queries.
  *
- * The collider only ever reads already-loaded blocks (`isSolidLoadedAt`) so a
- * movement or camera query can never trigger chunk generation. It counts the
- * cells it tests per frame for the performance HUD.
+ * City-kit blocks can occupy only part of a voxel (slabs, beds, tables,
+ * windows). Collision therefore uses the block registry's local AABB instead
+ * of assuming every solid voxel is a full metre cube.
  */
 
 interface Aabb {
@@ -34,15 +41,18 @@ export class PlayerCollider {
 		this.cellsTested = 0;
 	}
 
-	intersectsPlayerBlock(player: PlayerState, block: BlockCoordinate): boolean {
-		return overlaps(this.playerAabb(player.position, player.radius, player.height), {
-			minX: block.x,
-			maxX: block.x + 1,
-			minY: block.y,
-			maxY: block.y + 1,
-			minZ: block.z,
-			maxZ: block.z + 1
-		});
+	intersectsPlayerBlock(
+		player: PlayerState,
+		block: BlockCoordinate,
+		type: BlockType = 'stone',
+		state?: BlockState
+	): boolean {
+		const voxel = BlockRegistry.create(type, block, undefined, state);
+		const blockBox = collisionAabb(voxel);
+		return (
+			blockBox !== null &&
+			overlaps(this.playerAabb(player.position, player.radius, player.height), blockBox)
+		);
 	}
 
 	wouldCollide(player: PlayerState, position: WorldCoordinate): boolean {
@@ -62,10 +72,10 @@ export class PlayerCollider {
 			for (let y = minY; y <= maxY; y += 1) {
 				for (let z = minZ; z <= maxZ; z += 1) {
 					this.cellsTested += 1;
-
-					if (this.world.isSolidLoadedAt({ x, y, z })) {
-						return true;
-					}
+					const block = this.world.getLoadedBlock({ x, y, z });
+					if (!block) continue;
+					const blockBox = collisionAabb(block);
+					if (blockBox && overlaps(box, blockBox)) return true;
 				}
 			}
 		}
@@ -91,6 +101,19 @@ export class PlayerCollider {
 			maxZ: position.z + radius
 		};
 	}
+}
+
+function collisionAabb(block: VoxelBlock): Aabb | null {
+	const local = BlockRegistry.collisionBox(block);
+	if (!local) return null;
+	return {
+		minX: block.position.x + local.minX,
+		maxX: block.position.x + local.maxX,
+		minY: block.position.y + local.minY,
+		maxY: block.position.y + local.maxY,
+		minZ: block.position.z + local.minZ,
+		maxZ: block.position.z + local.maxZ
+	};
 }
 
 function overlaps(a: Aabb, b: Aabb): boolean {

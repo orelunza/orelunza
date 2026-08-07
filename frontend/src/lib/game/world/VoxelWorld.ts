@@ -7,7 +7,9 @@ import type {
 import {
 	type BlockChange,
 	type BlockCoordinate,
+	type BlockState,
 	type BlockType,
+	type PlacedBlockSaveState,
 	type ChunkCoordinate,
 	type VoxelBlock,
 	WORLD_MAX_Y,
@@ -19,7 +21,7 @@ import {
 } from './voxel-types';
 
 export interface WorldModificationSnapshot {
-	placedBlocks: Array<{ position: BlockCoordinate; type: BlockType }>;
+	placedBlocks: PlacedBlockSaveState[];
 	removedBlocks: BlockCoordinate[];
 	changes: BlockChange[];
 }
@@ -56,7 +58,7 @@ export class VoxelWorld {
 	private readonly generatedChunkBlocks = new Map<string, Set<string>>();
 	private readonly generatedColumnProfiles = new Map<string, GeneratedColumnProfile>();
 	private readonly loadedChunks = new Set<string>();
-	private readonly placedBlocks = new Map<string, BlockType>();
+	private readonly placedBlocks = new Map<string, { type: BlockType; state?: BlockState }>();
 	private readonly placedColumnBlocks = new Map<string, Map<number, BlockType>>();
 	private readonly removedBlocks = new Set<string>();
 	private readonly playerModifiedColumns = new Set<string>();
@@ -216,7 +218,7 @@ export class VoxelWorld {
 				return true;
 			}
 
-			return block.type === 'brick' || block.type === 'wooden_plank' || block.type === 'glass';
+			return BlockRegistry.get(block.type).category === 'construction';
 		});
 	}
 
@@ -251,7 +253,7 @@ export class VoxelWorld {
 		if (!this.isLoadedBlock(normalized)) this.loadChunk(worldToChunk(normalized));
 
 		const placed = this.placedBlocks.get(key);
-		if (placed) return BlockRegistry.create(placed, normalized);
+		if (placed) return BlockRegistry.create(placed.type, normalized, undefined, placed.state);
 
 		const transient = this.transientBlocks.get(key);
 		if (transient) return BlockRegistry.create(transient.type, normalized, transient.fillLevel);
@@ -267,7 +269,7 @@ export class VoxelWorld {
 		return BlockRegistry.create(generated, normalized);
 	}
 
-	setBlock(position: BlockCoordinate, type: BlockType, track = true): boolean {
+	setBlock(position: BlockCoordinate, type: BlockType, track = true, state?: BlockState): boolean {
 		const normalized = normalizeBlock(position);
 
 		if (type === 'air' || normalized.y < WORLD_MIN_Y || normalized.y > WORLD_MAX_Y) {
@@ -282,7 +284,8 @@ export class VoxelWorld {
 		}
 
 		this.removedBlocks.delete(key);
-		this.placedBlocks.set(key, type);
+		const normalizedState = BlockRegistry.normalizeState(type, state);
+		this.placedBlocks.set(key, { type, state: normalizedState });
 		this.indexPlacedBlock(normalized, type);
 		this.playerModifiedColumns.add(columnKey(normalized.x, normalized.z));
 		this.structureVersion += 1;
@@ -292,10 +295,40 @@ export class VoxelWorld {
 				type: 'placed',
 				block: normalized,
 				blockType: type,
+				state: normalizedState ? { ...normalizedState } : undefined,
 				updatedAt: Date.now()
 			});
 		}
 
+		return true;
+	}
+
+	updateBlockState(position: BlockCoordinate, patch: BlockState, track = true): boolean {
+		const normalized = normalizeBlock(position);
+		if (normalized.y < WORLD_MIN_Y || normalized.y > WORLD_MAX_Y) return false;
+		const current = this.getBlock(normalized);
+		const definition = BlockRegistry.get(current.type);
+		if (!definition.interaction && !definition.orientable) return false;
+		const nextState = BlockRegistry.normalizeState(current.type, {
+			...(current.state ?? {}),
+			...patch
+		});
+		if (sameBlockState(current.state, nextState)) return false;
+		const key = blockKey(normalized);
+		this.removedBlocks.delete(key);
+		this.placedBlocks.set(key, { type: current.type, state: nextState });
+		this.indexPlacedBlock(normalized, current.type);
+		this.playerModifiedColumns.add(columnKey(normalized.x, normalized.z));
+		this.structureVersion += 1;
+		if (track) {
+			this.changes.push({
+				type: 'placed',
+				block: normalized,
+				blockType: current.type,
+				state: nextState ? { ...nextState } : undefined,
+				updatedAt: Date.now()
+			});
+		}
 		return true;
 	}
 
@@ -742,7 +775,8 @@ export class VoxelWorld {
 
 		for (const block of snapshot.placedBlocks) {
 			const position = normalizeBlock(block.position);
-			this.placedBlocks.set(blockKey(position), block.type);
+			const state = BlockRegistry.normalizeState(block.type, block.state);
+			this.placedBlocks.set(blockKey(position), { type: block.type, state });
 			this.indexPlacedBlock(position, block.type);
 			this.playerModifiedColumns.add(columnKey(position.x, position.z));
 		}
@@ -759,9 +793,10 @@ export class VoxelWorld {
 
 	exportModifications(): WorldModificationSnapshot {
 		return {
-			placedBlocks: Array.from(this.placedBlocks, ([key, type]) => ({
+			placedBlocks: Array.from(this.placedBlocks, ([key, placed]) => ({
 				position: parseKey(key),
-				type
+				type: placed.type,
+				state: placed.state ? { ...placed.state } : undefined
 			})),
 			removedBlocks: Array.from(this.removedBlocks, parseKey),
 			changes: [...this.changes]
@@ -867,19 +902,36 @@ export class VoxelWorld {
 		radius: number,
 		height: number
 	): boolean {
-		const minX = Math.floor(position.x - radius);
-		const maxX = Math.floor(position.x + radius);
-		const minY = Math.floor(position.y);
-		const maxY = Math.floor(position.y + height);
-		const minZ = Math.floor(position.z - radius);
-		const maxZ = Math.floor(position.z + radius);
+		const playerBox = {
+			minX: position.x - radius,
+			maxX: position.x + radius,
+			minY: position.y,
+			maxY: position.y + height,
+			minZ: position.z - radius,
+			maxZ: position.z + radius
+		};
+		const minX = Math.floor(playerBox.minX);
+		const maxX = Math.floor(playerBox.maxX);
+		const minY = Math.floor(playerBox.minY);
+		const maxY = Math.floor(playerBox.maxY);
+		const minZ = Math.floor(playerBox.minZ);
+		const maxZ = Math.floor(playerBox.maxZ);
 
 		for (let x = minX; x <= maxX; x += 1) {
 			for (let y = minY; y <= maxY; y += 1) {
 				for (let z = minZ; z <= maxZ; z += 1) {
-					if (this.isSolidAt({ x, y, z })) {
+					const block = this.getBlock({ x, y, z });
+					const local = BlockRegistry.collisionBox(block);
+					if (!local) continue;
+					if (
+						playerBox.minX < x + local.maxX &&
+						playerBox.maxX > x + local.minX &&
+						playerBox.minY < y + local.maxY &&
+						playerBox.maxY > y + local.minY &&
+						playerBox.minZ < z + local.maxZ &&
+						playerBox.maxZ > z + local.minZ
+					)
 						return true;
-					}
 				}
 			}
 		}
@@ -914,7 +966,7 @@ export class VoxelWorld {
 		const placed = this.placedBlocks.get(key);
 
 		if (placed) {
-			return BlockRegistry.create(placed, normalized);
+			return BlockRegistry.create(placed.type, normalized, undefined, placed.state);
 		}
 
 		const transient = this.transientBlocks.get(key);
@@ -938,12 +990,21 @@ export class VoxelWorld {
 		const normalized = normalizeBlock(position);
 		const key = blockKey(normalized);
 		const placed = this.placedBlocks.get(key);
-		if (placed) return BlockRegistry.create(placed, normalized);
+		if (placed) return BlockRegistry.create(placed.type, normalized, undefined, placed.state);
 		if (this.removedBlocks.has(key)) return BlockRegistry.create('air', normalized);
 		const naturalOverride = this.naturalTerrainOverrides.get(key);
 		if (naturalOverride) return BlockRegistry.create(naturalOverride, normalized);
 		return BlockRegistry.create(this.generatedBlocks.get(key) ?? 'air', normalized);
 	}
+}
+
+function sameBlockState(left?: BlockState, right?: BlockState): boolean {
+	return (
+		(left?.facing ?? null) === (right?.facing ?? null) &&
+		(left?.open ?? null) === (right?.open ?? null) &&
+		(left?.lit ?? null) === (right?.lit ?? null) &&
+		(left?.powered ?? null) === (right?.powered ?? null)
+	);
 }
 
 function isNaturallyErodible(type: BlockType): boolean {

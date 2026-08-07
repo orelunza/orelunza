@@ -16,7 +16,9 @@ describe('BuildCatalog', () => {
 
 		catalog.setSearchQuery('brick');
 
-		expect(catalog.filteredItems.map((block) => block.type)).toEqual(['brick']);
+		expect(catalog.filteredItems.map((block) => block.type)).toEqual(
+			expect.arrayContaining(['brick', 'brick_fence'])
+		);
 
 		catalog.setSearchQuery('window');
 

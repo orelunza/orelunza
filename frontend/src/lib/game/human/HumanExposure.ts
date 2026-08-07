@@ -1,9 +1,11 @@
 import type { PlayerState } from '../player/PlayerState';
+import { BlockRegistry } from '../world/BlockRegistry';
 import type { BlockCoordinate, VoxelBlock } from '../world/voxel-types';
 import { WORLD_MAX_Y } from '../world/voxel-types';
 
 export interface HumanExposureWorldQuery {
 	getLoadedBlock(position: BlockCoordinate): VoxelBlock | null;
+	readonly modificationVersion?: number;
 }
 
 export interface HumanExposureSnapshot {
@@ -16,6 +18,17 @@ export interface HumanExposureSnapshot {
 
 const ROOF_SCAN_HEIGHT = 28;
 const WIND_SCAN_DISTANCE = 5;
+const HEAT_SCAN_RADIUS = 4;
+
+interface HeatSampleCache {
+	x: number;
+	y: number;
+	z: number;
+	version: number;
+	heat: number;
+}
+
+const heatSamples = new WeakMap<object, HeatSampleCache>();
 
 export function sampleHumanExposure(
 	world: HumanExposureWorldQuery,
@@ -39,17 +52,53 @@ export function sampleHumanExposure(
 	);
 	const precipitationExposure = skyExposure;
 	const sheltered = skyExposure <= 0.18 && windExposure <= 0.72;
+	const nearbyHeatCelsius = sampleNearbyHeat(world, player);
 
 	return {
 		sheltered,
 		skyExposure,
 		windExposure,
 		precipitationExposure,
-		// Human Lot 2 exposes the hook now. A real heat-source block is not part
-		// of the current registry yet, so no arbitrary wood/stone block is treated
-		// as fire.
-		nearbyHeatCelsius: 0
+		nearbyHeatCelsius
 	};
+}
+
+function sampleNearbyHeat(world: HumanExposureWorldQuery, player: Readonly<PlayerState>): number {
+	const centerX = Math.floor(player.position.x);
+	const centerY = Math.floor(player.position.y + player.height * 0.45);
+	const centerZ = Math.floor(player.position.z);
+	const version = Number.isFinite(world.modificationVersion)
+		? (world.modificationVersion as number)
+		: -1;
+	const cached = heatSamples.get(world as object);
+	if (
+		cached &&
+		cached.x === centerX &&
+		cached.y === centerY &&
+		cached.z === centerZ &&
+		cached.version === version
+	) {
+		return cached.heat;
+	}
+	let heat = 0;
+	for (let x = centerX - HEAT_SCAN_RADIUS; x <= centerX + HEAT_SCAN_RADIUS; x += 1) {
+		for (let y = centerY - 2; y <= centerY + 2; y += 1) {
+			for (let z = centerZ - HEAT_SCAN_RADIUS; z <= centerZ + HEAT_SCAN_RADIUS; z += 1) {
+				const block = world.getLoadedBlock({ x, y, z });
+				if (!block) continue;
+				const definition = BlockRegistry.get(block.type);
+				if (!definition.heatCelsius || !BlockRegistry.isLit(block)) continue;
+				const dx = x + 0.5 - player.position.x;
+				const dy = y + 0.5 - (player.position.y + player.height * 0.45);
+				const dz = z + 0.5 - player.position.z;
+				const distance = Math.max(0.75, Math.hypot(dx, dy, dz));
+				heat += definition.heatCelsius / Math.pow(distance, 1.35);
+			}
+		}
+	}
+	const result = Math.min(10, Math.max(0, heat));
+	heatSamples.set(world as object, { x: centerX, y: centerY, z: centerZ, version, heat: result });
+	return result;
 }
 
 function scanRoofOcclusion(

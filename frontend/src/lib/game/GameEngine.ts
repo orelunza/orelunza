@@ -44,6 +44,8 @@ import { VegetationRemovalState } from './vegetation/VegetationRemovalState';
 import { ChunkStreamingSystem } from './world/ChunkStreamingSystem';
 import { createStarterWorld } from './world/WorldGenerator';
 import { LocalWaterSystem, type LocalWaterDebugApi } from './world/water';
+import { CivilizationInteractionSystem } from './world/civilization/CivilizationInteractionSystem';
+import { nextWardrobeOutfit } from './world/civilization/OutfitWardrobe';
 import { HumanConditionSystem, sampleHumanExposure, type HumanConditionDebugApi } from './human';
 import {
 	STARTER_WORLD_SEED,
@@ -77,6 +79,7 @@ export class GameEngine {
 	private readonly vegetationRemovals = new VegetationRemovalState();
 	private readonly raycaster: CreationRaycaster;
 	private readonly placementSystem: BlockPlacementSystem;
+	private readonly civilizationInteractions: CivilizationInteractionSystem;
 	private readonly breakingSystem: BlockBreakingSystem;
 	private readonly removalSystem: CreationRemovalSystem;
 	private readonly loop: GameLoop;
@@ -242,6 +245,7 @@ export class GameEngine {
 		);
 		this.localWater = new LocalWaterSystem(this.world);
 		this.human = new HumanConditionSystem();
+		this.civilizationInteractions = new CivilizationInteractionSystem(this.world);
 		this.placementSystem = new BlockPlacementSystem(
 			this.world,
 			this.inventory,
@@ -322,6 +326,7 @@ export class GameEngine {
 
 		try {
 			await this.persistence.load();
+			await this.avatar.updateAppearance(this.options.appearance);
 			this.lastObservedWorldDayNumber = this.sky.worldTime.dayNumber;
 			this.dayAnnouncement = null;
 			this.restoreBuildWorkspace();
@@ -727,18 +732,28 @@ export class GameEngine {
 
 		const canTargetCreation =
 			this.status === 'playing' && this.human.canAct && this.buildMode && this.pointerLock.isLocked;
-		const raycastResult = canTargetCreation
-			? this.raycaster.raycast(
-					this.player.camera.camera,
-					this.world,
-					this.player.camera.currentDistance,
-					this.buildCursor.position
-				)
-			: { target: null, blockTarget: null };
+		const canTargetInteraction =
+			this.status === 'playing' &&
+			this.human.canAct &&
+			!this.buildMode &&
+			this.pointerLock.isLocked;
+		const raycastResult =
+			canTargetCreation || canTargetInteraction
+				? this.raycaster.raycast(
+						this.player.camera.camera,
+						this.world,
+						this.player.camera.currentDistance,
+						canTargetCreation ? this.buildCursor.position : { x: 0, y: 0 }
+					)
+				: { target: null, blockTarget: null };
 		this.target = raycastResult.target;
 		this.blockTarget = raycastResult.blockTarget;
-		this.renderer.setSelection(this.target?.kind === 'block' ? this.target.block.block : null);
-		this.renderer.setVegetationSelection(this.target?.kind === 'vegetation' ? this.target : null);
+		this.renderer.setSelection(
+			canTargetCreation && this.target?.kind === 'block' ? this.target.block.block : null
+		);
+		this.renderer.setVegetationSelection(
+			canTargetCreation && this.target?.kind === 'vegetation' ? this.target : null
+		);
 
 		const selected = this.currentSelectedBlock();
 		const placementPreview = canTargetCreation
@@ -757,6 +772,10 @@ export class GameEngine {
 			canTargetCreation,
 			this.resolveInteractionPoint(placementPreview?.position ?? null)
 		);
+
+		if (commands.interact && canTargetInteraction) {
+			this.interactWithCivilization();
+		}
 
 		this.sky.update(this.player.camera.camera.position, deltaSeconds);
 		this.updateWorldDayAnnouncement(frameStartedAt);
@@ -826,6 +845,7 @@ export class GameEngine {
 			deltaSeconds,
 			this.human.snapshot.lifeState
 		);
+		this.renderer.updateCivilization(this.player.camera.camera.position);
 		this.renderer.updateVegetation(
 			this.player.camera.camera.position,
 			deltaSeconds,
@@ -990,6 +1010,31 @@ export class GameEngine {
 				leadingFoot: debug.leadingFoot
 			};
 		}
+	}
+
+	private interactWithCivilization(): void {
+		if (this.target?.kind !== 'block') return;
+		const position = this.target.block.block;
+		const result = this.civilizationInteractions.interact(position);
+		if (!result.handled) return;
+		if (result.worldChanged) this.markBlockChanged(position);
+		if (result.action === 'sleep') {
+			this.human.requestSleepToggle();
+			this.persistence.markDirty();
+			this.message = this.human.snapshot.canSleep
+				? 'Resting in bed'
+				: 'You cannot sleep safely here';
+			return;
+		}
+		if (result.action === 'wardrobe') {
+			const next = nextWardrobeOutfit(this.options.appearance);
+			Object.assign(this.options.appearance, next.appearance);
+			void this.avatar.updateAppearance(this.options.appearance);
+			this.persistence.markDirty();
+			this.message = `Changed outfit · ${next.preset.label}`;
+			return;
+		}
+		this.message = result.message ?? 'Used';
 	}
 
 	private breakTarget(): void {

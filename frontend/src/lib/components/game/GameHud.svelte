@@ -142,6 +142,7 @@
 			target={snapshot.targetedBlock}
 			{selectedSlot}
 			pointerLocked={snapshot.pointerLocked}
+			buildMode={snapshot.buildMode}
 		/>
 	</div>
 

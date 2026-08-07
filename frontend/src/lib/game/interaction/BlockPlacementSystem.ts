@@ -1,15 +1,20 @@
 import type { Inventory } from '../inventory/Inventory';
 import { BlockRegistry } from '../world/BlockRegistry';
 import type { VoxelWorld } from '../world/VoxelWorld';
-import type { BlockCoordinate, BlockType } from '../world/voxel-types';
+import type { BlockCoordinate, BlockState, BlockType } from '../world/voxel-types';
 import type { TargetedBlock } from '../game-types';
 import type { PlayerCollider } from '../player/PlayerCollider';
 import type { PlayerState } from '../player/PlayerState';
+import {
+	blockStateForPlacement,
+	placementRuleAllows
+} from '../world/civilization/CivilizationBlocks';
 
 export interface BlockPlacementPreview {
 	position: BlockCoordinate;
 	allowed: boolean;
 	liftsPlayer: boolean;
+	state?: BlockState;
 }
 
 export class BlockPlacementSystem {
@@ -28,7 +33,11 @@ export class BlockPlacementSystem {
 
 		const definition = BlockRegistry.get(selected);
 
-		if (!definition.placeable || !isCardinalNormal(target.normal)) {
+		if (
+			!definition.placeable ||
+			!isCardinalNormal(target.normal) ||
+			!placementRuleAllows(selected, target)
+		) {
 			return null;
 		}
 
@@ -39,6 +48,7 @@ export class BlockPlacementSystem {
 		}
 
 		const position = placementPosition(target);
+		const state = blockStateForPlacement(selected, target, this.player.bodyYaw);
 		const destination = this.world.getLoadedBlock(position);
 
 		if (!destination) {
@@ -48,8 +58,12 @@ export class BlockPlacementSystem {
 		let allowed = destination.type === 'air' || destination.type === 'water';
 		let pillarLiftPosition: { x: number; y: number; z: number } | null = null;
 
-		if (allowed && definition.solid && this.collider.intersectsPlayerBlock(this.player, position)) {
-			pillarLiftPosition = this.resolvePillarLiftPosition(target, position);
+		if (
+			allowed &&
+			definition.solid &&
+			this.collider.intersectsPlayerBlock(this.player, position, selected, state)
+		) {
+			pillarLiftPosition = this.resolvePillarLiftPosition(target, position, selected, state);
 			allowed =
 				pillarLiftPosition !== null && !this.collider.wouldCollide(this.player, pillarLiftPosition);
 		}
@@ -57,7 +71,8 @@ export class BlockPlacementSystem {
 		return {
 			position,
 			allowed,
-			liftsPlayer: pillarLiftPosition !== null && allowed
+			liftsPlayer: pillarLiftPosition !== null && allowed,
+			state
 		};
 	}
 
@@ -79,10 +94,10 @@ export class BlockPlacementSystem {
 		}
 
 		const pillarLiftPosition = preview.liftsPlayer
-			? this.resolvePillarLiftPosition(target, preview.position)
+			? this.resolvePillarLiftPosition(target, preview.position, selected, preview.state)
 			: null;
 
-		if (!this.world.setBlock(preview.position, selected)) {
+		if (!this.world.setBlock(preview.position, selected, true, preview.state)) {
 			this.refund(selected, consumed);
 			return false;
 		}
@@ -104,13 +119,17 @@ export class BlockPlacementSystem {
 
 	private resolvePillarLiftPosition(
 		target: TargetedBlock,
-		position: BlockCoordinate
+		position: BlockCoordinate,
+		type: BlockType,
+		state?: BlockState
 	): { x: number; y: number; z: number } | null {
 		if (target.normal.x !== 0 || target.normal.y !== 1 || target.normal.z !== 0) {
 			return null;
 		}
 
-		const blockTop = position.y + 1;
+		const previewBlock = BlockRegistry.create(type, position, undefined, state);
+		const collision = BlockRegistry.collisionBox(previewBlock);
+		const blockTop = position.y + (collision?.maxY ?? 1);
 		const liftHeight = blockTop - this.player.position.y;
 		const horizontalOverlap =
 			this.player.position.x + this.player.radius > position.x &&

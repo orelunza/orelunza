@@ -1,6 +1,6 @@
 import type { InventorySnapshot } from '../inventory/Inventory';
 import type { PlayerTransform } from '../game-types';
-import type { BlockChange, BlockCoordinate, BlockType } from './voxel-types';
+import type { BlockChange, BlockCoordinate, PlacedBlockSaveState } from './voxel-types';
 import type { CharacterAppearanceV1 } from '../character/CharacterAppearance';
 import type { EnvironmentSaveState } from '../environment/EnvironmentSystem';
 import type { PlanetSurfaceSaveState } from '../planet/surface/PlanetSurfaceState';
@@ -15,7 +15,7 @@ export interface WorldSaveV1 {
 	seed: string;
 	player: PlayerTransform;
 	inventory: InventorySnapshot;
-	placedBlocks: Array<{ position: BlockCoordinate; type: BlockType }>;
+	placedBlocks: PlacedBlockSaveState[];
 	removedBlocks: BlockCoordinate[];
 	changes: BlockChange[];
 	updatedAt: number;
@@ -28,7 +28,7 @@ export interface WorldSaveV2 {
 	player: PlayerTransform;
 	character: CharacterAppearanceV1;
 	inventory: InventorySnapshot;
-	placedBlocks: Array<{ position: BlockCoordinate; type: BlockType }>;
+	placedBlocks: PlacedBlockSaveState[];
 	removedBlocks: BlockCoordinate[];
 	changes: BlockChange[];
 	updatedAt: number;
@@ -41,7 +41,7 @@ export interface WorldSaveV3 {
 	player: PlayerTransform;
 	character: CharacterAppearanceV1;
 	inventory: InventorySnapshot;
-	placedBlocks: Array<{ position: BlockCoordinate; type: BlockType }>;
+	placedBlocks: PlacedBlockSaveState[];
 	removedBlocks: BlockCoordinate[];
 	changes: BlockChange[];
 	environment: EnvironmentSaveState;

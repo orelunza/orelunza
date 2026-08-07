@@ -27,6 +27,7 @@ import {
 } from '../vegetation/VegetationInteractionIndex';
 import { VegetationRemovalState } from '../vegetation/VegetationRemovalState';
 import type { SurfaceWeatherFrameState } from '../environment/surface/SurfaceWeatherState';
+import { WorldFixtureRenderer } from './WorldFixtureRenderer';
 
 export class GameRenderer {
 	readonly scene = new Scene();
@@ -41,6 +42,7 @@ export class GameRenderer {
 	private readonly tallGrass: TallGrassRenderer;
 	private readonly groundFoliage: GroundFoliageRenderer;
 	private readonly meshFactory = new BlockMeshFactory();
+	private readonly fixtures = new WorldFixtureRenderer(this.scene);
 	private readonly meshesByChunk = new Map<string, BlockInstanceLookup[]>();
 	private blockMeshes: BlockInstanceLookup[] = [];
 
@@ -106,6 +108,7 @@ export class GameRenderer {
 		this.clearChunkMeshes();
 		this.tallGrass.clear();
 		this.groundFoliage.clear();
+		this.fixtures.clear();
 
 		for (const chunk of world.getLoadedChunks()) {
 			this.replaceChunk(world, chunk);
@@ -208,6 +211,10 @@ export class GameRenderer {
 		this.groundFoliage.updateSurfaceWeather(state);
 	}
 
+	updateCivilization(cameraPosition: Readonly<Vector3>): void {
+		this.fixtures.update(cameraPosition);
+	}
+
 	updateVegetation(
 		cameraPosition: Readonly<Vector3>,
 		deltaSeconds: number,
@@ -231,6 +238,7 @@ export class GameRenderer {
 		this.vegetationSelection.dispose();
 		this.tallGrass.dispose();
 		this.groundFoliage.dispose();
+		this.fixtures.dispose();
 		this.meshFactory.dispose();
 		this.renderer.dispose();
 	}
@@ -241,6 +249,7 @@ export class GameRenderer {
 		const lookups = this.meshFactory.createMeshes(world.getVisibleBlocksInChunk(chunk), world);
 		this.tallGrass.replaceChunk(world, chunk);
 		this.groundFoliage.replaceChunk(world, chunk);
+		this.fixtures.replaceChunk(world, chunk);
 		this.meshesByChunk.set(chunkKey(chunk), lookups);
 
 		for (const lookup of lookups) {
@@ -254,6 +263,7 @@ export class GameRenderer {
 
 		this.tallGrass.removeChunk(chunk);
 		this.groundFoliage.removeChunk(chunk);
+		this.fixtures.removeChunk(chunk);
 
 		if (!lookups) {
 			return;

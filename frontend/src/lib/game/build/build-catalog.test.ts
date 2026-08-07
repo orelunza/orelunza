@@ -101,6 +101,9 @@ describe('build catalog helper', () => {
 		expect(filterCatalogEntries(entries, 'all', 'lawn').map((entry) => entry.type)).toContain(
 			'grass'
 		);
+		expect(filterCatalogEntries(entries, 'all', 'door').map((entry) => entry.type)).toEqual([
+			'wooden_door'
+		]);
 	});
 
 	test('filters owned, favorite and recent collections', () => {

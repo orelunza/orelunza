@@ -96,6 +96,89 @@
 				class="brick"
 				d="M7 12h10v7H7Zm12 0h14v7H19Zm16 0h6v7h-6ZM7 21h6v7H7Zm8 0h14v7H15Zm16 0h10v7H31ZM7 30h12v8H7Zm14 0h13v8H21Zm15 0h5v8h-5Z"
 			/>
+		{:else if shape === 'concrete-block'}
+			<rect class="top" x="8" y="9" width="32" height="30" rx="2" />
+			<path class="detail-dark" d="M10 22h28M24 10v28" />
+		{:else if shape === 'marble-block'}
+			<rect class="top" x="8" y="9" width="32" height="30" rx="2" />
+			<path class="detail-dark" d="m11 31 8-7 5 2 7-10 7-3M14 15l6 3 5-5" />
+		{:else if shape === 'glass-panel'}
+			<rect class="glass-fill" x="9" y="8" width="30" height="32" rx="1" />
+			<path class="glass-frame" d="M8 7h32v34H8Zm4 4v26h24V11Z" fill-rule="evenodd" />
+			<path class="glass-shine" d="m15 28 15-14m-10 20 13-12" />
+		{:else if shape === 'wooden-door'}
+			<rect class="top" x="12" y="5" width="24" height="38" rx="1" />
+			<path class="detail-dark" d="M16 10h16v12H16Zm0 16h16v12H16Z" />
+			<circle class="detail-light" cx="31" cy="25" r="1.8" />
+		{:else if shape === 'stone-slab'}
+			<path class="top" d="M7 24 24 15l17 9-17 9Z" />
+			<path class="left" d="m7 24 17 9v7L7 31Z" /><path class="right" d="m24 33 17-9v7l-17 9Z" />
+		{:else if shape === 'stone-stairs'}
+			<path class="top" d="M9 35h10v-8h10v-8h10v16Z" />
+			<path class="detail-dark" d="M9 35h30M19 27h20M29 19h10" />
+		{:else if shape === 'wood-fence'}
+			<path class="top" d="M12 8h5v34h-5Zm19 0h5v34h-5ZM13 16h22v5H13Zm0 28h22v5H13Z" />
+		{:else if shape === 'metal-fence'}
+			<path
+				class="right"
+				d="M8 13h32v4H8Zm0 25h32v4H8ZM12 8h3v35h-3Zm7 0h3v35h-3Zm7 0h3v35h-3Zm7 0h3v35h-3Z"
+			/>
+		{:else if shape === 'brick-fence'}
+			<path class="mortar" d="M5 21h38v19H5Z" /><path
+				class="brick"
+				d="M6 22h10v8H6Zm12 0h13v8H18Zm15 0h9v8h-9ZM6 32h7v7H6Zm9 0h13v7H15Zm15 0h12v7H30Z"
+			/>
+		{:else if shape === 'table'}
+			<path class="top" d="M7 17 24 9l17 8-17 8Z" />
+			<path class="right" d="M11 22h4v19h-4Zm22 0h4v19h-4Z" /><path
+				class="left"
+				d="M19 24h4v17h-4Zm11 0h4v17h-4Z"
+			/>
+		{:else if shape === 'bed'}
+			<path class="right" d="M7 23 27 13l14 8-20 11Z" /><path
+				class="top"
+				d="m10 22 17-8 6 4-17 9Z"
+			/><path class="detail-light-stroke" d="m11 23 5 3" />
+		{:else if shape === 'mattress'}
+			<path class="top" d="M7 22 26 12l15 9-19 11Z" /><path
+				class="right"
+				d="m7 22 15 10v7L7 29Z"
+			/><path class="left" d="m22 32 19-11v7L22 39Z" />
+		{:else if shape === 'curtain'}
+			<path class="top" d="M10 10h28v31H10Z" /><path
+				class="detail-dark"
+				d="M16 11v29m8-29v29m8-29v29M8 9h32"
+			/>
+		{:else if shape === 'wardrobe'}
+			<rect class="top" x="10" y="6" width="28" height="37" rx="1" /><path
+				class="detail-dark"
+				d="M24 7v35"
+			/><circle class="detail-light" cx="21" cy="25" r="1.2" /><circle
+				class="detail-light"
+				cx="27"
+				cy="25"
+				r="1.2"
+			/>
+		{:else if shape === 'clothes-rack'}
+			<path class="detail-dark" d="M10 40V10m28 30V10M10 12h28" /><path
+				class="top"
+				d="m18 18-5 8h10Zm12 0-5 8h10Z"
+			/>
+		{:else if shape === 'shoe-rack'}
+			<path class="detail-dark" d="M8 13h32v27H8Zm0 13h32" /><path
+				class="top"
+				d="M12 20c4-4 7-4 10 0v3H12Zm15 13c4-4 7-4 10 0v3H27Z"
+			/>
+		{:else if shape === 'floor-lamp'}
+			<path class="detail-dark" d="M24 22v18M16 41h16" /><path
+				class="top"
+				d="m15 8 18 0 5 14H10Z"
+			/><circle class="detail-light" cx="24" cy="16" r="4" />
+		{:else if shape === 'fire-pit'}
+			<ellipse class="right" cx="24" cy="35" rx="16" ry="6" /><path
+				class="top"
+				d="M24 9c8 8 9 14 4 20-2 3-7 3-10 0-4-5-1-11 6-20Z"
+			/><path class="detail-light-stroke" d="M13 34h22" />
 		{/if}
 	</svg>
 </span>

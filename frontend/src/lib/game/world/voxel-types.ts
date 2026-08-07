@@ -12,7 +12,76 @@ export type BlockType =
 	| 'flower'
 	| 'wooden_plank'
 	| 'glass'
-	| 'brick';
+	| 'brick'
+	| 'concrete'
+	| 'marble'
+	| 'glass_panel'
+	| 'wooden_door'
+	| 'stone_slab'
+	| 'stone_stairs'
+	| 'wood_fence'
+	| 'metal_fence'
+	| 'brick_fence'
+	| 'table'
+	| 'bed'
+	| 'mattress'
+	| 'curtain'
+	| 'wardrobe'
+	| 'clothes_rack'
+	| 'shoe_rack'
+	| 'floor_lamp'
+	| 'fire_pit';
+
+export type BlockFacing = 'north' | 'east' | 'south' | 'west';
+
+/** Persistent state carried by player-placed civilization blocks. */
+export interface BlockState {
+	facing?: BlockFacing;
+	open?: boolean;
+	lit?: boolean;
+	powered?: boolean;
+}
+
+export type BlockInteractionKind = 'door' | 'curtain' | 'lamp' | 'fire' | 'bed' | 'wardrobe';
+export type BlockPlacementRule = 'any' | 'floor' | 'wall';
+export type BlockRenderShape =
+	| 'cube'
+	| 'grass'
+	| 'trunk'
+	| 'leaves'
+	| 'flower'
+	| 'glass-panel'
+	| 'door'
+	| 'slab'
+	| 'stairs'
+	| 'wood-fence'
+	| 'metal-fence'
+	| 'brick-fence'
+	| 'table'
+	| 'bed'
+	| 'mattress'
+	| 'curtain'
+	| 'wardrobe'
+	| 'clothes-rack'
+	| 'shoe-rack'
+	| 'floor-lamp'
+	| 'fire-pit';
+
+/** Local AABB in a voxel cell. Values stay in [0, 1]. */
+export interface BlockCollisionBox {
+	minX: number;
+	maxX: number;
+	minY: number;
+	maxY: number;
+	minZ: number;
+	maxZ: number;
+}
+
+export interface BlockLightDefinition {
+	color: number;
+	intensity: number;
+	distance: number;
+}
 
 export interface BlockCoordinate {
 	x: number;
@@ -40,6 +109,15 @@ export interface VoxelBlock {
 	transparent: boolean;
 	/** Fractional vertical fill used by the local shallow-water renderer. */
 	fillLevel?: number;
+	/** Optional persistent state for doors, lamps, fire, curtains and orientation. */
+	state?: BlockState;
+}
+
+export interface PlacedBlockSaveState {
+	position: BlockCoordinate;
+	type: BlockType;
+	/** Optional so every pre-city save remains valid. */
+	state?: BlockState;
 }
 
 export interface BlockDefinition {
@@ -54,12 +132,23 @@ export interface BlockDefinition {
 	transparent: boolean;
 	placeable: boolean;
 	hardness: number;
+	shape?: BlockRenderShape;
+	placement?: BlockPlacementRule;
+	interaction?: BlockInteractionKind;
+	orientable?: boolean;
+	defaultState?: BlockState;
+	collision?: BlockCollisionBox;
+	light?: BlockLightDefinition;
+	/** Local heat contribution used by the human thermoregulation system. */
+	heatCelsius?: number;
 }
 
 export interface BlockChange {
 	type: 'placed' | 'removed';
 	block: BlockCoordinate;
 	blockType: BlockType;
+	/** State is optional for backward compatibility with every old change log. */
+	state?: BlockState;
 	updatedAt: number;
 }
 
