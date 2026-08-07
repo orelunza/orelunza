@@ -71,6 +71,28 @@ describe('deterministic weather scheduling', () => {
 		expect(captureTimeline(11)).not.toEqual(captureTimeline(987654321));
 	});
 
+	test('seasonal climate context biases wet regimes without scheduling daily rain', () => {
+		const countWet = (precipitationScale: number): number => {
+			const scheduler = new WeatherScheduler({ seed: 0x51ea50, durationScale: 0.001 });
+			scheduler.setClimateContext({ season: 'summer', precipitationScale });
+			let wetTransitions = 0;
+			let previousIndex = scheduler.currentState.scheduleIndex;
+			for (let second = 0; second < 12_000; second += 1) {
+				scheduler.update(1);
+				if (scheduler.currentState.scheduleIndex === previousIndex) continue;
+				previousIndex = scheduler.currentState.scheduleIndex;
+				if (
+					['light_rain', 'heavy_rain', 'storm', 'snow'].includes(scheduler.currentState.current)
+				) {
+					wetTransitions += 1;
+				}
+			}
+			return wetTransitions;
+		};
+
+		expect(countWet(1.5)).toBeGreaterThan(countWet(0.35));
+	});
+
 	test('progression is frame-rate independent at 30, 60 and 120 FPS', () => {
 		const make = (fps: number): WeatherScheduler => {
 			const scheduler = new WeatherScheduler({ seed: 42, durationScale: 0.02 });

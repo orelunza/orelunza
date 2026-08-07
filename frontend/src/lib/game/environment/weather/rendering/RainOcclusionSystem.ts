@@ -3,7 +3,7 @@ import { clamp01, lerp } from '../../EnvironmentMath';
 import type { WeatherWorldQuery } from '../WeatherWorldQuery';
 
 const SAMPLE_INTERVAL_SECONDS = 0.22;
-const GRID_RADIUS = 2;
+const GRID_RADIUS = 4;
 const GRID_SIZE = GRID_RADIUS * 2 + 1;
 const GRID_SPACING = 5;
 
@@ -15,6 +15,7 @@ export class RainOcclusionSystem {
 	private centerZ = Number.NaN;
 	private cameraY = 0;
 	private shelter = 0;
+	private openness = 1;
 
 	constructor(private readonly worldQuery?: WeatherWorldQuery) {}
 
@@ -26,6 +27,7 @@ export class RainOcclusionSystem {
 
 		if (!this.worldQuery) {
 			this.shelter = 0;
+			this.openness = 1;
 			this.occlusion.fill(0);
 			return;
 		}
@@ -55,10 +57,18 @@ export class RainOcclusionSystem {
 		const center = this.occlusion[GRID_RADIUS * GRID_SIZE + GRID_RADIUS] ?? 0;
 		const average = sum / this.occlusion.length;
 		this.shelter = clamp01(center * 0.82 + average * 0.18);
+		this.openness = clamp01(
+			this.worldQuery.opennessAt?.(cameraPosition.x, cameraPosition.y, cameraPosition.z) ??
+				1 - this.shelter * 0.85
+		);
 	}
 
 	get shelterFactor(): number {
 		return this.shelter;
+	}
+
+	get opennessFactor(): number {
+		return this.openness;
 	}
 
 	exposureAt(x: number, z: number): number {

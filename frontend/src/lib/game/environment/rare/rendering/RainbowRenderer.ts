@@ -45,7 +45,7 @@ export class RainbowRenderer {
 			fragmentShader: RAINBOW_FRAGMENT_SHADER,
 			transparent: true,
 			depthWrite: false,
-			depthTest: false,
+			depthTest: true,
 			fog: false,
 			toneMapped: false,
 			side: DoubleSide,

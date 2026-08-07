@@ -63,7 +63,7 @@ const PROFILE_LIST: readonly ClimateRegionProfile[] = [
 			storm: 0.08,
 			snow: 0.04
 		},
-		[105, 220],
+		[630, 1320],
 		[95, 165]
 	),
 	profile(
@@ -92,7 +92,7 @@ const PROFILE_LIST: readonly ClimateRegionProfile[] = [
 			storm: 0.08,
 			snow: 0.04
 		},
-		[125, 250],
+		[750, 1500],
 		[90, 155]
 	),
 	profile(
@@ -121,7 +121,7 @@ const PROFILE_LIST: readonly ClimateRegionProfile[] = [
 			storm: 0.06,
 			snow: 0.02
 		},
-		[85, 190],
+		[510, 1140],
 		[100, 175]
 	),
 	profile(
@@ -150,7 +150,7 @@ const PROFILE_LIST: readonly ClimateRegionProfile[] = [
 			storm: 0.17,
 			snow: 0
 		},
-		[55, 135],
+		[330, 810],
 		[115, 205]
 	),
 	profile(
@@ -179,7 +179,7 @@ const PROFILE_LIST: readonly ClimateRegionProfile[] = [
 			storm: 0.05,
 			snow: 0.38
 		},
-		[75, 170],
+		[450, 1020],
 		[105, 190]
 	),
 	profile(
@@ -208,7 +208,7 @@ const PROFILE_LIST: readonly ClimateRegionProfile[] = [
 			storm: 0.04,
 			snow: 0.02
 		},
-		[70, 165],
+		[420, 990],
 		[90, 165]
 	),
 	profile(
@@ -237,7 +237,7 @@ const PROFILE_LIST: readonly ClimateRegionProfile[] = [
 			storm: 0.07,
 			snow: 0.03
 		},
-		[120, 240],
+		[720, 1440],
 		[95, 160]
 	)
 ];

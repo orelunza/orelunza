@@ -8,7 +8,8 @@ describe('procedural weather audio Lot 5', () => {
 		const state = new EnvironmentState();
 		state.windStrength = 0.8;
 		state.windGust = 0.5;
-		state.rainVisibleIntensity = 0.75;
+		state.rainIntensity = 0.75;
+		state.environmentOpenness = 1;
 		state.rainShelter = 0;
 		const mixer = new WeatherAudioMixer();
 		mixer.update(0, state, false);
@@ -23,20 +24,24 @@ describe('procedural weather audio Lot 5', () => {
 	test('shelter attenuates rain without muting the whole environment', () => {
 		const state = new EnvironmentState();
 		state.windStrength = 0.6;
-		state.rainVisibleIntensity = 1;
+		state.rainIntensity = 1;
+		state.environmentOpenness = 1;
 		const outside = new WeatherAudioMixer();
 		outside.update(0, state, false);
 		state.rainShelter = 1;
+		state.environmentOpenness = 0;
 		const sheltered = new WeatherAudioMixer();
 		sheltered.update(0, state, false);
-		expect(sheltered.currentLevels.rain).toBeLessThan(outside.currentLevels.rain * 0.2);
+		expect(sheltered.currentLevels.rain).toBeLessThan(outside.currentLevels.rain * 0.3);
 		expect(sheltered.currentLevels.wind).toBeGreaterThan(0);
+		expect(sheltered.currentLevels.wind).toBeLessThan(outside.currentLevels.wind * 0.2);
+		expect(sheltered.currentLevels.occlusion).toBe(1);
 	});
 
 	test('pause fades the master target while keeping finite source levels', () => {
 		const state = new EnvironmentState();
 		state.windStrength = 1;
-		state.rainVisibleIntensity = 1;
+		state.rainIntensity = 1;
 		const mixer = new WeatherAudioMixer();
 		mixer.update(2, state, false);
 		mixer.update(2, state, true);

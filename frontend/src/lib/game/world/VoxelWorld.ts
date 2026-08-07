@@ -402,6 +402,25 @@ export class VoxelWorld {
 		};
 	}
 
+	rainOcclusionAt(x: number, y: number, z: number, maxDistance = 64): number {
+		const blockX = Math.floor(x);
+		const blockZ = Math.floor(z);
+		const startY = Math.max(WORLD_MIN_Y, Math.floor(y) + 1);
+		const endY = Math.min(WORLD_MAX_Y, startY + Math.max(1, Math.floor(maxDistance)));
+
+		for (let sampleY = startY; sampleY <= endY; sampleY += 1) {
+			const block = this.getLoadedBlock({ x: blockX, y: sampleY, z: blockZ });
+			if (!block || !block.solid || block.passable) continue;
+			return block.type === 'leaves' ? 0.42 : 1;
+		}
+
+		return 0;
+	}
+
+	rainExposureAt(x: number, y: number, z: number, maxDistance = 64): number {
+		return 1 - this.rainOcclusionAt(x, y, z, maxDistance);
+	}
+
 	getErosionSurfaceProfile(x: number, z: number): ErosionSurfaceProfile {
 		const blockX = Math.floor(x);
 		const blockZ = Math.floor(z);
@@ -522,7 +541,7 @@ export class VoxelWorld {
 		const blockZ = Math.floor(z);
 		const ground = Math.max(WORLD_MIN_Y, Math.min(WORLD_MAX_Y, Math.floor(groundSurfaceY)));
 		const depth = Math.max(0, Math.min(32, Number.isFinite(waterDepth) ? waterDepth : 0));
-		const signature = `${ground}:${Math.round(depth * 50)}:${naturalWaterBottomY ?? ''}:${naturalWaterSurfaceY ?? ''}`;
+		const signature = `${ground}:${Math.round(depth * 200)}:${naturalWaterBottomY ?? ''}:${naturalWaterSurfaceY ?? ''}`;
 		const column = columnKey(blockX, blockZ);
 		if (this.transientWaterSignatures.get(column) === signature) return false;
 
@@ -541,7 +560,7 @@ export class VoxelWorld {
 			const key = blockKey(position);
 			const relative = y - ground;
 			if (relative >= 0 && relative < depth) {
-				const fillLevel = Math.min(1, Math.max(0.02, depth - relative));
+				const fillLevel = Math.min(1, Math.max(0.005, depth - relative));
 				this.transientBlocks.set(key, { type: 'water', fillLevel });
 				this.transientAir.delete(key);
 			} else if (y >= naturalBottom && y < naturalTop) {

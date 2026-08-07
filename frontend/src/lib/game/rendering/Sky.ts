@@ -54,6 +54,10 @@ export class Sky {
 		return this.environment.currentState.windStrength;
 	}
 
+	get windGust(): number {
+		return this.environment.currentState.windGust;
+	}
+
 	get temperatureCelsius(): number {
 		return this.environment.currentState.temperatureCelsius;
 	}

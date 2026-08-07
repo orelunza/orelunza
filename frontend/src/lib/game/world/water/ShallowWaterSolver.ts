@@ -19,6 +19,8 @@ export interface ShallowWaterStepOptions {
 	worldOriginX?: number;
 	worldOriginZ?: number;
 	rainScale?: number;
+	/** Per-cell sky exposure in [0, 1], used to keep rain out of roofs/caves. */
+	rainExposureAt?: (index: number, worldX: number, worldZ: number) => number;
 	evaporationScale?: number;
 	onBoundaryOutflow?: (worldX: number, worldZ: number, amount: number) => void;
 	onSourceInflow?: (index: number, amount: number) => void;
@@ -201,7 +203,12 @@ export class ShallowWaterSolver {
 			let nextDepth = Math.max(0, oldDepth + this.depthDelta[index]);
 
 			if (rainRate > 0) {
-				const added = rainRate * dt;
+				const localX = index % this.width;
+				const localZ = Math.floor(index / this.width);
+				const worldX = (options.worldOriginX ?? 0) + localX;
+				const worldZ = (options.worldOriginZ ?? 0) + localZ;
+				const exposure = clamp01(options.rainExposureAt?.(index, worldX, worldZ) ?? 1);
+				const added = rainRate * dt * exposure;
 				nextDepth += added;
 				rainAdded += added;
 			}

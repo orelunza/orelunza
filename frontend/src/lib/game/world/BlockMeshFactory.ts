@@ -8,6 +8,7 @@ import {
 	Matrix4,
 	MeshLambertMaterial,
 	Object3D,
+	Vector2,
 	type BufferGeometry,
 	type Material
 } from 'three';
@@ -56,6 +57,9 @@ export class BlockMeshFactory {
 	private surfaceWetness = 0;
 	private surfaceSnowCoverage = 0;
 	private surfaceFrost = 0;
+	private readonly leafTimeUniform = { value: 0 };
+	private readonly leafWindDirectionUniform = { value: new Vector2(1, 0) };
+	private readonly leafWindStrengthUniform = { value: 0 };
 
 	createMeshes(blocks: VoxelBlock[], world?: VoxelWorld): BlockInstanceLookup[] {
 		const groups = new Map<string, RenderGroup>();
@@ -96,7 +100,7 @@ export class BlockMeshFactory {
 				helper.scale.set(1, 1, 1);
 
 				if (type === 'water') {
-					const fillLevel = Math.max(0.02, Math.min(1, block.fillLevel ?? 1));
+					const fillLevel = Math.max(0.005, Math.min(1, block.fillLevel ?? 1));
 					helper.position.y = block.position.y + fillLevel * 0.5;
 					helper.scale.y = fillLevel;
 				} else if (type === 'flower') {
@@ -139,6 +143,15 @@ export class BlockMeshFactory {
 		}
 
 		return lookups;
+	}
+
+	updateVegetationWind(deltaSeconds: number, windDirection: number, windStrength: number): void {
+		const delta = Math.max(0, Math.min(0.05, Number.isFinite(deltaSeconds) ? deltaSeconds : 0));
+		const direction = Number.isFinite(windDirection) ? windDirection : 0;
+		const strength = clamp01(windStrength);
+		this.leafTimeUniform.value = (this.leafTimeUniform.value + delta) % 4096;
+		this.leafWindDirectionUniform.value.set(Math.cos(direction), Math.sin(direction));
+		this.leafWindStrengthUniform.value = strength <= 0.04 ? 0 : (strength - 0.04) * 0.2;
 	}
 
 	updateSurfaceWeather(
@@ -232,11 +245,45 @@ export class BlockMeshFactory {
 			depthWrite: type !== 'water' && type !== 'glass'
 		});
 
+		if (type === 'leaves') {
+			this.configureLeafWindShader(material);
+		}
+
 		this.materials.set(type, material);
 		this.baseMaterialColors.set(type, material.color.clone());
 		this.applySurfaceWeatherToMaterial(type, material);
 
 		return material;
+	}
+
+	private configureLeafWindShader(material: MeshLambertMaterial): void {
+		material.onBeforeCompile = (shader) => {
+			shader.uniforms.uLeafWindTime = this.leafTimeUniform;
+			shader.uniforms.uLeafWindDirection = this.leafWindDirectionUniform;
+			shader.uniforms.uLeafWindStrength = this.leafWindStrengthUniform;
+			shader.vertexShader = shader.vertexShader
+				.replace(
+					'#include <common>',
+					`#include <common>
+					uniform float uLeafWindTime;
+					uniform vec2 uLeafWindDirection;
+					uniform float uLeafWindStrength;`
+				)
+				.replace(
+					'#include <begin_vertex>',
+					`vec3 transformed = vec3(position);
+					vec3 leafOrigin = vec3(0.0);
+					#ifdef USE_INSTANCING
+						leafOrigin = instanceMatrix[3].xyz;
+					#endif
+					float leafPhase = dot(leafOrigin.xz, vec2(0.117, 0.263));
+					float leafGust = sin(uLeafWindTime * 1.15 + leafPhase)
+						+ sin(uLeafWindTime * 2.35 + leafPhase * 1.71) * 0.28;
+					float leafFlex = 0.35 + clamp(position.y + 0.5, 0.0, 1.5) * 0.28;
+					transformed.xz += uLeafWindDirection * leafGust * uLeafWindStrength * leafFlex;`
+				);
+		};
+		material.customProgramCacheKey = () => 'orelunza-leaf-wind-v1';
 	}
 
 	private applySurfaceWeatherToMaterial(type: BlockType, material: MeshLambertMaterial): void {

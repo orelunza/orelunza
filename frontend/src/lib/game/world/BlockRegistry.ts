@@ -180,7 +180,7 @@ export class BlockRegistry {
 			transparent: definition.transparent,
 			fillLevel:
 				type === 'water' && Number.isFinite(fillLevel)
-					? Math.max(0.02, Math.min(1, fillLevel as number))
+					? Math.max(0.005, Math.min(1, fillLevel as number))
 					: undefined
 		};
 	}

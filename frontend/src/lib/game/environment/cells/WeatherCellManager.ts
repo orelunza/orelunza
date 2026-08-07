@@ -1,6 +1,7 @@
 import type { Vector3 } from 'three';
 import { clamp, clamp01, hashUint32, lerp } from '../EnvironmentMath';
 import type { ClimateRegionProfile } from '../regions/ClimateRegionProfile';
+import type { WorldSeason } from '../time/WorldDate';
 import { getWeatherPreset } from '../weather/WeatherPreset';
 import {
 	copyWeatherParameters,
@@ -53,7 +54,7 @@ export class WeatherCellManager {
 		this.seed = options.seed >>> 0;
 		this.durationScale = sanitizeDurationScale(options.durationScale);
 		this.maxCells = clamp(Math.floor(options.maxCells ?? 7), 1, 24);
-		this.nextSpawnAtSeconds = 18 * this.durationScale;
+		this.nextSpawnAtSeconds = 300 * this.durationScale;
 	}
 
 	get currentState(): Readonly<WeatherCellInfluenceFrame> {
@@ -68,7 +69,9 @@ export class WeatherCellManager {
 		deltaSeconds: number,
 		cameraPosition: Readonly<Vector3>,
 		wind: Readonly<WindFrameState>,
-		region: ClimateRegionProfile
+		region: ClimateRegionProfile,
+		seasonalPrecipitationScale = 1,
+		season: WorldSeason = 'spring'
 	): void {
 		let remaining =
 			!this.paused && Number.isFinite(deltaSeconds) && deltaSeconds > 0 ? deltaSeconds : 0;
@@ -85,8 +88,8 @@ export class WeatherCellManager {
 				break;
 			}
 
-			this.spawnScheduledCell(cameraPosition, wind, region);
-			this.scheduleNextSpawn(region);
+			this.spawnScheduledCell(cameraPosition, wind, region, seasonalPrecipitationScale, season);
+			this.scheduleNextSpawn(region, seasonalPrecipitationScale);
 			boundaries += 1;
 		}
 
@@ -195,13 +198,20 @@ export class WeatherCellManager {
 	private spawnScheduledCell(
 		cameraPosition: Readonly<Vector3>,
 		wind: Readonly<WindFrameState>,
-		region: ClimateRegionProfile
+		region: ClimateRegionProfile,
+		seasonalPrecipitationScale: number,
+		season: WorldSeason
 	): void {
 		if (this.cells.length >= this.maxCells) {
 			return;
 		}
 		const index = this.spawnIndex;
-		const kind = chooseCellKind(region, unitHash(this.seed, index, KIND_SALT));
+		const kind = chooseCellKind(
+			region,
+			unitHash(this.seed, index, KIND_SALT),
+			seasonalPrecipitationScale,
+			season
+		);
 		const radius = randomRange(
 			region.cellRadius[0],
 			region.cellRadius[1],
@@ -238,7 +248,8 @@ export class WeatherCellManager {
 		});
 	}
 
-	private scheduleNextSpawn(region: ClimateRegionProfile): void {
+	private scheduleNextSpawn(region: ClimateRegionProfile, seasonalScale = 1): void {
+		const climateCadence = 1 / Math.max(0.35, Math.min(1.5, finiteOr(seasonalScale, 1)));
 		const interval =
 			randomRange(
 				region.cellSpawnSeconds[0],
@@ -246,7 +257,9 @@ export class WeatherCellManager {
 				this.seed,
 				this.spawnIndex,
 				SPAWN_INTERVAL_SALT
-			) * this.durationScale;
+			) *
+			this.durationScale *
+			climateCadence;
 		this.nextSpawnAtSeconds = this.elapsedSeconds + Math.max(0.01, interval);
 	}
 
@@ -311,22 +324,39 @@ export class WeatherCellManager {
 
 const ZERO_PARAMETERS = Object.freeze(createWeatherParameters());
 
-function chooseCellKind(region: ClimateRegionProfile, random: number): WeatherCellKind {
-	let total = 0;
-	for (const kind of WEATHER_CELL_KINDS) {
-		total += Math.max(0, region.cellWeatherWeights[kind] ?? 0);
-	}
+function chooseCellKind(
+	region: ClimateRegionProfile,
+	random: number,
+	seasonalPrecipitationScale = 1,
+	season: WorldSeason = 'spring'
+): WeatherCellKind {
+	const weights = WEATHER_CELL_KINDS.map((kind) => {
+		const base = Math.max(0, region.cellWeatherWeights[kind] ?? 0);
+		let scale = 1;
+		if (isPrecipitatingCell(kind)) {
+			scale *= Math.max(0.2, Math.min(1.8, finiteOr(seasonalPrecipitationScale, 1)));
+		}
+		if (kind === 'snow') {
+			scale *= season === 'winter' ? 1.9 : season === 'summer' ? 0.03 : 0.42;
+		}
+		return base * scale;
+	});
+	const total = weights.reduce((sum, weight) => sum + weight, 0);
 	if (total <= 0) {
 		return 'overcast';
 	}
 	let cursor = clamp01(random) * total;
-	for (const kind of WEATHER_CELL_KINDS) {
-		cursor -= Math.max(0, region.cellWeatherWeights[kind] ?? 0);
+	for (let index = 0; index < WEATHER_CELL_KINDS.length; index += 1) {
+		cursor -= weights[index] ?? 0;
 		if (cursor <= 0) {
-			return kind;
+			return WEATHER_CELL_KINDS[index] ?? 'overcast';
 		}
 	}
 	return WEATHER_CELL_KINDS[WEATHER_CELL_KINDS.length - 1] ?? 'overcast';
+}
+
+function isPrecipitatingCell(kind: WeatherCellKind): boolean {
+	return kind === 'light_rain' || kind === 'heavy_rain' || kind === 'storm' || kind === 'snow';
 }
 
 function accumulate(

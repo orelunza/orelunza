@@ -49,7 +49,7 @@ export class AuroraRenderer {
 			side: BackSide,
 			transparent: true,
 			depthWrite: false,
-			depthTest: false,
+			depthTest: true,
 			fog: false,
 			toneMapped: false,
 			blending: AdditiveBlending

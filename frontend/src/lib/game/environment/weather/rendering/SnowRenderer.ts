@@ -11,6 +11,7 @@ import { clamp01, lerp } from '../../EnvironmentMath';
 import type { EnvironmentQuality } from '../../EnvironmentQuality';
 import type { PrecipitationFrameState } from '../PrecipitationState';
 import { WeatherParticlePool } from './WeatherParticlePool';
+import { RainOcclusionSystem } from './RainOcclusionSystem';
 
 const SNOW_RADIUS = 22;
 const SNOW_HEIGHT = 25;
@@ -35,7 +36,8 @@ export class SnowRenderer {
 	constructor(
 		private readonly scene: Scene,
 		quality: EnvironmentQuality,
-		private readonly seed: number
+		private readonly seed: number,
+		private readonly occlusion: RainOcclusionSystem
 	) {
 		this.pool = new WeatherParticlePool(quality.snowFlakeCount, seed ^ 0x736e6f77);
 		this.positions = new Float32Array(this.pool.count * 3);
@@ -68,7 +70,7 @@ export class SnowRenderer {
 			return;
 		}
 
-		const intensity = clamp01(precipitation.visibleSnowIntensity);
+		const intensity = clamp01(precipitation.snowIntensity);
 		const active = Math.min(this.pool.count, Math.ceil(this.pool.count * intensity));
 		this.geometry.setDrawRange(0, active);
 		this.material.opacity = lerp(0.38, 0.92, intensity) * Math.min(1, intensity * 2.2);
@@ -81,25 +83,30 @@ export class SnowRenderer {
 
 		const time = precipitation.elapsedSeconds;
 		const fall = precipitation.snowFallSpeed;
+		let visible = 0;
 		for (let index = 0; index < active; index += 1) {
 			const scale = this.pool.scale[index] ?? 1;
 			const phase = fract((this.pool.phase[index] ?? 0) + (time * fall * scale) / SNOW_HEIGHT);
 			const flutter = Math.sin(time * 0.9 + index * 1.713) * (0.32 + scale * 0.18);
 			const windAge = 1 - phase;
-			const offset = index * 3;
-
-			this.positions[offset] =
+			const x =
 				cameraPosition.x +
 				(this.pool.x[index] ?? 0) * SNOW_RADIUS +
 				precipitation.windX * windAge * 0.42 +
 				flutter;
-			this.positions[offset + 1] = cameraPosition.y + SNOW_HEIGHT * (1 - phase) - 4;
-			this.positions[offset + 2] =
+			const z =
 				cameraPosition.z +
 				(this.pool.z[index] ?? 0) * SNOW_RADIUS +
 				precipitation.windZ * windAge * 0.42 +
 				Math.cos(time * 0.73 + index * 1.117) * 0.28;
+			if (this.occlusion.exposureAt(x, z) < 0.16) continue;
+			const offset = visible * 3;
+			this.positions[offset] = x;
+			this.positions[offset + 1] = cameraPosition.y + SNOW_HEIGHT * (1 - phase) - 4;
+			this.positions[offset + 2] = z;
+			visible += 1;
 		}
+		this.geometry.setDrawRange(0, visible);
 
 		const attribute = this.geometry.getAttribute('position') as BufferAttribute;
 		attribute.needsUpdate = true;

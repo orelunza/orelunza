@@ -1,6 +1,6 @@
 import { Scene, Vector3, type WebGLRenderer } from 'three';
 import { hashStringToUint32 } from './EnvironmentMath';
-import { worldMinuteOfDay, worldTimeFromClock } from './time/WorldCalendar';
+import { worldDateFromDayNumber, worldMinuteOfDay, worldTimeFromClock } from './time/WorldCalendar';
 import type { WorldTimeSnapshot } from './time/WorldDate';
 import {
 	CelestialClock,
@@ -12,6 +12,7 @@ import {
 import { EnvironmentState } from './EnvironmentState';
 import { WeatherScheduler } from './weather/WeatherScheduler';
 import type { WeatherKind, WeatherSaveState } from './weather/WeatherState';
+import { seasonalPrecipitationScale } from './weather/SeasonalWeather';
 import { WindSystem } from './wind/WindSystem';
 import type { WindSaveState } from './wind/WindState';
 import { CloudSystem } from './clouds/CloudSystem';
@@ -161,6 +162,7 @@ export interface EnvironmentInspect {
 	rainIntensity: number;
 	rainVisibleIntensity: number;
 	rainShelter: number;
+	environmentOpenness: number;
 	fogDensity: number;
 	visibility: number;
 	windDirection: number;
@@ -282,8 +284,8 @@ export class EnvironmentSystem {
 		this.stars = new StarFieldRenderer(this.scene, this.quality, this.seedValue);
 		this.clouds = new CloudRenderer(this.scene, this.quality);
 		this.lighting = new EnvironmentLighting(this.scene, this.quality);
-		this.rain = new RainRenderer(this.scene, this.quality, this.seedValue);
-		this.snow = new SnowRenderer(this.scene, this.quality, this.seedValue);
+		this.rain = new RainRenderer(this.scene, this.quality, this.seedValue, this.rainOcclusion);
+		this.snow = new SnowRenderer(this.scene, this.quality, this.seedValue, this.rainOcclusion);
 		this.splashes = new RainSplashRenderer(
 			this.scene,
 			this.quality,
@@ -311,6 +313,15 @@ export class EnvironmentSystem {
 		const updateStartedAt = nowMilliseconds();
 		this.lastCameraPosition.copy(cameraPosition);
 		this.clock.advance(deltaSeconds);
+		const date = worldDateFromDayNumber(this.clock.currentDayNumber);
+		const seasonalScale = seasonalPrecipitationScale(
+			this.climateRegion.currentProfile.id,
+			date.season
+		);
+		this.weatherScheduler.setClimateContext({
+			season: date.season,
+			precipitationScale: seasonalScale
+		});
 		this.weatherScheduler.update(deltaSeconds);
 		this.rainOcclusion.update(cameraPosition, deltaSeconds);
 		this.refreshState(deltaSeconds, cameraPosition);
@@ -572,6 +583,7 @@ export class EnvironmentSystem {
 				rainIntensity: this.state.rainIntensity,
 				rainVisibleIntensity: this.state.rainVisibleIntensity,
 				rainShelter: this.state.rainShelter,
+				environmentOpenness: this.state.environmentOpenness,
 				fogDensity: this.state.fogDensity,
 				visibility: this.state.visibility,
 				windDirection: this.state.windDirection,
@@ -648,11 +660,17 @@ export class EnvironmentSystem {
 	private refreshState(deltaSeconds: number, cameraPosition: Readonly<Vector3>): void {
 		const baseWeather = this.weatherScheduler.currentState;
 		this.climateRegion.update(deltaSeconds, cameraPosition, this.worldQuery);
+		const seasonalScale = seasonalPrecipitationScale(
+			this.climateRegion.currentProfile.id,
+			worldDateFromDayNumber(this.clock.currentDayNumber).season
+		);
 		this.weatherCells.update(
 			deltaSeconds,
 			cameraPosition,
 			this.windSystem.currentState,
-			this.climateRegion.currentProfile
+			this.climateRegion.currentProfile,
+			seasonalScale,
+			worldDateFromDayNumber(this.clock.currentDayNumber).season
 		);
 		this.regionalWeather.update(
 			baseWeather,
@@ -709,6 +727,7 @@ export class EnvironmentSystem {
 			this.regionalWeather.currentInspect,
 			this.specialWeatherSystem.currentState
 		);
+		this.state.environmentOpenness = this.rainOcclusion.opennessFactor;
 		this.refreshWorldTime();
 		this.rainbowSystem.update(deltaSeconds, this.state);
 		this.shootingStarSystem.update(deltaSeconds, this.state);

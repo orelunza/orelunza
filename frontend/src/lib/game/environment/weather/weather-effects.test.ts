@@ -144,7 +144,7 @@ describe('weather Lot 2 effects', () => {
 		const firstQueries = queries;
 		occlusion.update(camera, 0.01);
 
-		expect(firstQueries).toBe(25);
+		expect(firstQueries).toBe(81);
 		expect(queries).toBe(firstQueries);
 		expect(occlusion.shelterFactor).toBeGreaterThan(0.8);
 		expect(occlusion.surfaceHeightAt(2, 2)).toBe(3);

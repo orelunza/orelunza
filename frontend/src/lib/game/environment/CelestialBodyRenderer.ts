@@ -158,7 +158,7 @@ export class CelestialBodyRenderer {
 				color: new Color(color),
 				blending: AdditiveBlending,
 				depthWrite: false,
-				depthTest: false,
+				depthTest: true,
 				fog: false,
 				toneMapped: false,
 				transparent: true

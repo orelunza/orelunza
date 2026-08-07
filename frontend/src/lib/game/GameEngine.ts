@@ -217,6 +217,7 @@ export class GameEngine {
 			worldQuery: {
 				surfaceHeightAt: (x, z, maxY) => this.weatherSurfaceHeightAt(x, z, maxY),
 				rainOcclusionAt: (x, y, z) => this.weatherRainOcclusionAt(x, y, z),
+				opennessAt: (x, y, z) => this.weatherOpennessAt(x, y, z),
 				climateZoneAt: (x, z) => this.world.terrainGenerator.zoneAt(x, z)
 			}
 		});
@@ -829,7 +830,7 @@ export class GameEngine {
 			this.player.camera.camera.position,
 			deltaSeconds,
 			this.sky.windDirection,
-			this.sky.windStrength
+			Math.min(1, this.sky.windStrength + this.sky.windGust * 0.35)
 		);
 		this.recordAvatarMetricsThrottled(frameStartedAt);
 
@@ -1190,22 +1191,39 @@ export class GameEngine {
 	}
 
 	private weatherRainOcclusionAt(x: number, y: number, z: number): number {
-		const blockX = Math.floor(x);
-		const blockZ = Math.floor(z);
-		const startY = Math.max(WORLD_MIN_Y, Math.floor(y) + 1);
-		const endY = Math.min(WORLD_MAX_Y, startY + 52);
+		return this.world.rainOcclusionAt(x, y, z);
+	}
 
-		for (let sampleY = startY; sampleY <= endY; sampleY += 1) {
-			const block = this.world.getLoadedBlock({ x: blockX, y: sampleY, z: blockZ });
-			if (!block || !block.solid || block.passable) {
-				continue;
+	private weatherOpennessAt(x: number, y: number, z: number): number {
+		const directions = [
+			[1, 0],
+			[-1, 0],
+			[0, 1],
+			[0, -1],
+			[0.7071, 0.7071],
+			[-0.7071, 0.7071],
+			[0.7071, -0.7071],
+			[-0.7071, -0.7071]
+		] as const;
+		let openRays = 0;
+		for (const [dx, dz] of directions) {
+			let blocked = false;
+			for (let step = 1; step <= 12; step += 1) {
+				const block = this.world.getLoadedBlock({
+					x: Math.floor(x + dx * step),
+					y: Math.floor(y),
+					z: Math.floor(z + dz * step)
+				});
+				if (block?.solid && !block.passable) {
+					blocked = true;
+					break;
+				}
 			}
-
-			// Foliage filters rain but does not behave like a sealed roof.
-			return block.type === 'leaves' ? 0.42 : 1;
+			if (!blocked) openRays += 1;
 		}
-
-		return 0;
+		const horizontal = openRays / directions.length;
+		const sky = 1 - this.world.rainOcclusionAt(x, y, z);
+		return Math.max(0, Math.min(1, horizontal * 0.45 + sky * 0.55));
 	}
 
 	private resize(): void {

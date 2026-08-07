@@ -58,7 +58,7 @@ export class CloudRenderer {
 			side: BackSide,
 			transparent: true,
 			depthWrite: false,
-			depthTest: false,
+			depthTest: true,
 			fog: false,
 			toneMapped: true,
 			uniforms: this.uniforms,

@@ -212,8 +212,9 @@ export class GameRenderer {
 		cameraPosition: Readonly<Vector3>,
 		deltaSeconds: number,
 		windDirection = 0,
-		windStrength = 0.15
+		windStrength = 0
 	): void {
+		this.meshFactory.updateVegetationWind(deltaSeconds, windDirection, windStrength);
 		this.tallGrass.update(cameraPosition, deltaSeconds, windDirection, windStrength);
 		this.groundFoliage.update(cameraPosition, deltaSeconds, windDirection, windStrength);
 	}

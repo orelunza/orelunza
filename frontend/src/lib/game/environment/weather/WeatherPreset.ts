@@ -8,7 +8,7 @@ export interface WeatherPreset {
 }
 
 const PRESETS: Record<WeatherKind, WeatherPreset> = {
-	clear: preset('clear', [150, 330], [55, 110], {
+	clear: preset('clear', [1200, 3600], [180, 420], {
 		cloudCoverage: 0.06,
 		cloudDensity: 0.1,
 		cloudDarkness: 0,
@@ -20,7 +20,7 @@ const PRESETS: Record<WeatherKind, WeatherPreset> = {
 		lightningProbability: 0,
 		overcast: 0
 	}),
-	partly_cloudy: preset('partly_cloudy', [130, 300], [55, 120], {
+	partly_cloudy: preset('partly_cloudy', [900, 2700], [180, 420], {
 		cloudCoverage: 0.38,
 		cloudDensity: 0.42,
 		cloudDarkness: 0.12,
@@ -32,7 +32,7 @@ const PRESETS: Record<WeatherKind, WeatherPreset> = {
 		lightningProbability: 0,
 		overcast: 0.14
 	}),
-	overcast: preset('overcast', [110, 260], [50, 105], {
+	overcast: preset('overcast', [600, 1800], [150, 360], {
 		cloudCoverage: 0.88,
 		cloudDensity: 0.83,
 		cloudDarkness: 0.48,
@@ -44,7 +44,7 @@ const PRESETS: Record<WeatherKind, WeatherPreset> = {
 		lightningProbability: 0.01,
 		overcast: 0.82
 	}),
-	mist: preset('mist', [80, 190], [35, 85], {
+	mist: preset('mist', [420, 1200], [120, 300], {
 		cloudCoverage: 0.42,
 		cloudDensity: 0.36,
 		cloudDarkness: 0.1,
@@ -56,7 +56,7 @@ const PRESETS: Record<WeatherKind, WeatherPreset> = {
 		lightningProbability: 0,
 		overcast: 0.22
 	}),
-	fog: preset('fog', [75, 175], [35, 80], {
+	fog: preset('fog', [360, 1080], [120, 300], {
 		cloudCoverage: 0.62,
 		cloudDensity: 0.54,
 		cloudDarkness: 0.22,
@@ -68,7 +68,7 @@ const PRESETS: Record<WeatherKind, WeatherPreset> = {
 		lightningProbability: 0,
 		overcast: 0.48
 	}),
-	light_rain: preset('light_rain', [80, 210], [40, 90], {
+	light_rain: preset('light_rain', [420, 1320], [120, 300], {
 		cloudCoverage: 0.9,
 		cloudDensity: 0.86,
 		cloudDarkness: 0.5,
@@ -80,7 +80,7 @@ const PRESETS: Record<WeatherKind, WeatherPreset> = {
 		lightningProbability: 0.01,
 		overcast: 0.86
 	}),
-	heavy_rain: preset('heavy_rain', [65, 170], [35, 75], {
+	heavy_rain: preset('heavy_rain', [300, 960], [100, 260], {
 		cloudCoverage: 0.98,
 		cloudDensity: 0.96,
 		cloudDarkness: 0.72,
@@ -92,7 +92,7 @@ const PRESETS: Record<WeatherKind, WeatherPreset> = {
 		lightningProbability: 0.05,
 		overcast: 0.96
 	}),
-	storm: preset('storm', [45, 130], [25, 60], {
+	storm: preset('storm', [180, 600], [80, 220], {
 		cloudCoverage: 1,
 		cloudDensity: 1,
 		cloudDarkness: 1,
@@ -104,7 +104,7 @@ const PRESETS: Record<WeatherKind, WeatherPreset> = {
 		lightningProbability: 0.72,
 		overcast: 1
 	}),
-	snow: preset('snow', [80, 210], [40, 95], {
+	snow: preset('snow', [420, 1440], [120, 320], {
 		cloudCoverage: 0.94,
 		cloudDensity: 0.88,
 		cloudDarkness: 0.38,

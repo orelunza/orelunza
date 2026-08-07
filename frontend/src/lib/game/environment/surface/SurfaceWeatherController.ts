@@ -31,8 +31,8 @@ export class SurfaceWeatherController {
 		const daylightDrying = smoothstep(-0.05, 0.7, finiteOr(sunAltitude, 0));
 		const warmth = smoothstep(1, 24, climate.temperatureCelsius);
 		const windDrying = clamp01(wind.strength + wind.gust * 0.25);
-		const rain = clamp01(precipitation.visibleRainIntensity);
-		const snow = clamp01(precipitation.visibleSnowIntensity);
+		const rain = clamp01(precipitation.rainIntensity);
+		const snow = clamp01(precipitation.snowIntensity);
 		const wetTarget = clamp01(rain + snow * 0.32);
 		const wetResponse =
 			wetTarget > this.frame.wetness

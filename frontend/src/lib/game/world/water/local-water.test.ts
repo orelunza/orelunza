@@ -77,6 +77,26 @@ describe('ShallowWaterSolver', () => {
 		expect(hot.waterDepth[0]).toBe(0);
 	});
 
+	it('adds rain only to sky-exposed cells', () => {
+		const solver = new ShallowWaterSolver(2, 1, [
+			{ groundHeight: 0, waterDepth: 0 },
+			{ groundHeight: 0, waterDepth: 0 }
+		]);
+		const result = solver.step(
+			0.1,
+			{ ...DRY, rainIntensity: 1, precipitationType: 'rain' },
+			{
+				sourceRechargeRate: 0,
+				evaporationScale: 0,
+				rainExposureAt: (index) => (index === 0 ? 0 : 1)
+			}
+		);
+
+		expect(solver.waterDepth[0]).toBe(0);
+		expect(solver.waterDepth[1]).toBeCloseTo(0.000008, 10);
+		expect(result.rainAdded).toBeCloseTo(0.000008, 10);
+	});
+
 	it('is deterministic and remains finite during a long simulation', () => {
 		const initialization = Array.from({ length: 81 }, (_, index) => ({
 			groundHeight: Math.sin(index * 0.37) * 2,

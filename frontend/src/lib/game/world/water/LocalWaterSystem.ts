@@ -66,6 +66,8 @@ interface ActiveCellMetadata {
 	z: number;
 	profile: LoadedWaterColumnProfile;
 	waterBody: NaturalWaterBodyKind;
+	/** Cached until the local window rebuilds after a voxel modification. */
+	rainExposure: number;
 }
 
 interface NaturalCycleFrameAggregate {
@@ -84,7 +86,7 @@ const DEFAULT_RECENTER_DISTANCE = 8;
 const MAXIMUM_FRAME_ACCUMULATION = 0.35;
 const STRUCTURE_REBUILD_DELAY_SECONDS = 0.15;
 const SAVE_DIRTY_INTERVAL_SECONDS = 2;
-const RENDER_DEPTH_QUANTUM = 0.02;
+const RENDER_DEPTH_QUANTUM = 0.005;
 const SAVED_DEPTH_EPSILON = 0.015;
 const SAVED_SPEED_EPSILON = 0.02;
 const SAVED_SNOW_EPSILON = 0.00001;
@@ -235,6 +237,7 @@ export class LocalWaterSystem {
 				worldOriginZ: this.originZ,
 				boundaryGroundAt: (x, z) => this.boundaryProfile(x, z).groundSurfaceY,
 				boundaryWaterDepthAt: (x, z) => this.boundaryProfile(x, z).generatedWaterDepth,
+				rainExposureAt: (index) => this.metadata[index]?.rainExposure ?? 0,
 				onSourceInflow: (index, amount) => {
 					this.recordWaterBodyExchange(exchanges, this.metadata[index]?.waterBody, amount);
 				},
@@ -468,7 +471,13 @@ export class LocalWaterSystem {
 					active: profile.loaded
 				});
 				snowWaterEquivalent.push(Math.max(0, finiteOr(saved?.snowWaterEquivalent, 0)));
-				metadata.push({ x, z, profile, waterBody: this.waterBodyAt(x, z, profile) });
+				metadata.push({
+					x,
+					z,
+					profile,
+					waterBody: this.waterBodyAt(x, z, profile),
+					rainExposure: this.rainExposureAt(x, profile.groundSurfaceY, z)
+				});
 			}
 		}
 
@@ -482,6 +491,14 @@ export class LocalWaterSystem {
 		this.structureRebuildElapsed = 0;
 		this.accumulator = 0;
 		return [...clearedChunks.values()];
+	}
+
+	private rainExposureAt(x: number, y: number, z: number): number {
+		const world = this.world as VoxelWorld & {
+			rainExposureAt?: (x: number, y: number, z: number, maxDistance?: number) => number;
+		};
+		const exposure = world.rainExposureAt?.(x, y, z);
+		return exposure === undefined ? 1 : clamp01(exposure);
 	}
 
 	private persistCurrentCells(): void {

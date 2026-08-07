@@ -11,6 +11,7 @@ import { clamp01, lerp } from '../../EnvironmentMath';
 import type { EnvironmentQuality } from '../../EnvironmentQuality';
 import type { PrecipitationFrameState } from '../PrecipitationState';
 import { WeatherParticlePool } from './WeatherParticlePool';
+import { RainOcclusionSystem } from './RainOcclusionSystem';
 
 const RAIN_RADIUS = 24;
 const RAIN_HEIGHT = 30;
@@ -33,7 +34,8 @@ export class RainRenderer {
 	constructor(
 		private readonly scene: Scene,
 		quality: EnvironmentQuality,
-		private readonly seed: number
+		private readonly seed: number,
+		private readonly occlusion: RainOcclusionSystem
 	) {
 		this.pool = new WeatherParticlePool(quality.rainDropCount, seed ^ 0x7261696e);
 		this.positions = new Float32Array(this.pool.count * 6);
@@ -66,7 +68,7 @@ export class RainRenderer {
 			return;
 		}
 
-		const intensity = clamp01(precipitation.visibleRainIntensity);
+		const intensity = clamp01(precipitation.rainIntensity);
 		const active = Math.min(this.pool.count, Math.ceil(this.pool.count * intensity));
 		this.geometry.setDrawRange(0, active * 2);
 		this.material.opacity = lerp(0.24, 0.78, intensity) * Math.min(1, intensity * 2.4);
@@ -80,16 +82,18 @@ export class RainRenderer {
 		const windX = precipitation.windX;
 		const windZ = precipitation.windZ;
 		const fall = precipitation.fallSpeed;
+		let visible = 0;
 		for (let index = 0; index < active; index += 1) {
 			const scale = this.pool.scale[index] ?? 1;
 			const phase = fract((this.pool.phase[index] ?? 0) + (time * fall * scale) / RAIN_HEIGHT);
 			const x =
 				cameraPosition.x + (this.pool.x[index] ?? 0) * RAIN_RADIUS + windX * (1 - phase) * 0.28;
-			const y = cameraPosition.y + RAIN_HEIGHT * (1 - phase) - 5;
 			const z =
 				cameraPosition.z + (this.pool.z[index] ?? 0) * RAIN_RADIUS + windZ * (1 - phase) * 0.28;
+			if (this.occlusion.exposureAt(x, z) < 0.16) continue;
+			const y = cameraPosition.y + RAIN_HEIGHT * (1 - phase) - 5;
 			const streak = lerp(0.65, 1.9, intensity) * scale;
-			const offset = index * 6;
+			const offset = visible * 6;
 
 			this.positions[offset] = x;
 			this.positions[offset + 1] = y;
@@ -97,7 +101,9 @@ export class RainRenderer {
 			this.positions[offset + 3] = x - windX * 0.035;
 			this.positions[offset + 4] = y - streak;
 			this.positions[offset + 5] = z - windZ * 0.035;
+			visible += 1;
 		}
+		this.geometry.setDrawRange(0, visible * 2);
 
 		const attribute = this.geometry.getAttribute('position') as BufferAttribute;
 		attribute.needsUpdate = true;

@@ -9,6 +9,8 @@ import { WeatherAudioMixer, type WeatherAudioLevels } from './WeatherAudioMixer'
 interface WeatherAudioGraph {
 	readonly context: AudioContext;
 	readonly master: GainNode;
+	readonly environmentBus: GainNode;
+	readonly environmentFilter: BiquadFilterNode;
 	readonly wind: ProceduralWindSource;
 	readonly rain: ProceduralRainSource;
 	readonly afterRain: ProceduralAfterRainSource;
@@ -102,6 +104,10 @@ export class WeatherAudioController {
 		graph.wind.setLevel(levels.wind, now);
 		graph.rain.setLevel(levels.rain, now);
 		graph.afterRain.setLevel(levels.afterRain, now);
+		const filterHz = 1200 + (1 - levels.occlusion) * 16800;
+		graph.environmentFilter.frequency.setTargetAtTime(filterHz, now, 0.12);
+		graph.environmentFilter.Q.setTargetAtTime(levels.occlusion * 0.45, now, 0.12);
+		graph.environmentBus.gain.setTargetAtTime(1 - levels.occlusion * 0.35, now, 0.16);
 		graph.master.gain.setTargetAtTime(this.muted || this.paused ? 0 : levels.master, now, 0.15);
 
 		if (thunder && thunder.strikeId !== this.lastThunderStrikeId) {
@@ -147,6 +153,8 @@ export class WeatherAudioController {
 		graph.rain.dispose();
 		graph.afterRain.dispose();
 		graph.thunder.dispose();
+		graph.environmentBus.disconnect();
+		graph.environmentFilter.disconnect();
 		graph.master.disconnect();
 		void graph.context.close();
 	}
@@ -163,13 +171,22 @@ export class WeatherAudioController {
 		const master = context.createGain();
 		master.gain.value = 0;
 		master.connect(context.destination);
+		const environmentFilter = context.createBiquadFilter();
+		environmentFilter.type = 'lowpass';
+		environmentFilter.frequency.value = 18000;
+		environmentFilter.connect(master);
+		const environmentBus = context.createGain();
+		environmentBus.gain.value = 1;
+		environmentBus.connect(environmentFilter);
 		const graph: WeatherAudioGraph = {
 			context,
 			master,
-			wind: new ProceduralWindSource(context, master, this.seed ^ 0x57494e44),
-			rain: new ProceduralRainSource(context, master, this.seed ^ 0x5241494e),
-			afterRain: new ProceduralAfterRainSource(context, master),
-			thunder: new ProceduralThunderSource(context, master, this.seed ^ 0x54484e44)
+			environmentBus,
+			environmentFilter,
+			wind: new ProceduralWindSource(context, environmentBus, this.seed ^ 0x57494e44),
+			rain: new ProceduralRainSource(context, environmentBus, this.seed ^ 0x5241494e),
+			afterRain: new ProceduralAfterRainSource(context, environmentBus),
+			thunder: new ProceduralThunderSource(context, environmentBus, this.seed ^ 0x54484e44)
 		};
 		this.graph = graph;
 		return graph;

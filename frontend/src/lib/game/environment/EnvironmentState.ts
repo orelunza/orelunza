@@ -52,6 +52,7 @@ export class EnvironmentState {
 	snowIntensity = 0;
 	rainVisibleIntensity = 0;
 	rainShelter = 0;
+	environmentOpenness = 1;
 	rainHaze = 0;
 	visibility = 1;
 	lightningFlash = 0;

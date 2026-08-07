@@ -68,7 +68,7 @@ export class StarFieldRenderer {
 			transparent: true,
 			opacity: 0,
 			depthWrite: false,
-			depthTest: false,
+			depthTest: true,
 			fog: false,
 			toneMapped: false,
 			blending: AdditiveBlending

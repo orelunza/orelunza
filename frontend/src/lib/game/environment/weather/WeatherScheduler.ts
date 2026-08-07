@@ -20,12 +20,19 @@ import {
 	type WeatherSaveState
 } from './WeatherState';
 import { WeatherTransition } from './WeatherTransition';
+import type { WorldSeason } from '../time/WorldDate';
 
 const NEXT_WEATHER_SALT = 0x6f72656c;
 const HOLD_DURATION_SALT = 0x756e7a61;
 const TRANSITION_DURATION_SALT = 0x77656174;
 const MIN_PHASE_SECONDS = 0.01;
 const MAX_PHASE_BOUNDARIES_PER_UPDATE = 100_000;
+
+export interface WeatherClimateContext {
+	season: WorldSeason;
+	/** Regional/seasonal probability multiplier, not an intensity multiplier. */
+	precipitationScale: number;
+}
 
 export interface WeatherSchedulerOptions {
 	seed: number;
@@ -46,6 +53,7 @@ export class WeatherScheduler {
 	private readonly frame: WeatherFrameState;
 	private readonly durationScale: number;
 	private cloudCoverageOverride: number | null = null;
+	private climateContext: WeatherClimateContext = { season: 'spring', precipitationScale: 1 };
 
 	constructor(options: WeatherSchedulerOptions) {
 		const seed = options.seed >>> 0;
@@ -74,6 +82,16 @@ export class WeatherScheduler {
 
 	get currentState(): Readonly<WeatherFrameState> {
 		return this.frame;
+	}
+
+	setClimateContext(context: Readonly<WeatherClimateContext>): void {
+		this.climateContext = {
+			season: context.season,
+			precipitationScale: Math.max(
+				0.2,
+				Math.min(1.8, finitePositive(context.precipitationScale, 1))
+			)
+		};
 	}
 
 	update(deltaSeconds: number): void {
@@ -249,7 +267,34 @@ export class WeatherScheduler {
 
 	private chooseNext(current: WeatherKind, scheduleIndex: number): WeatherKind {
 		const targets = getWeatherTransitionTargets(current);
-		const weights = getWeatherTransitionWeights(current);
+		const baseWeights = getWeatherTransitionWeights(current);
+		const precipitationScale = this.climateContext.precipitationScale;
+		const currentWet = isPrecipitating(current);
+		const weights = baseWeights.map((weight, index) => {
+			const target = targets[index] ?? current;
+			let scale = 1;
+
+			if (isPrecipitating(target)) {
+				scale *= precipitationScale;
+				// Wet fronts have memory, but repeated precipitation becomes less likely.
+				if (currentWet) scale *= 0.58;
+			} else if (currentWet) {
+				scale *= 1.35;
+			} else if (target === 'clear' || target === 'partly_cloudy') {
+				scale *= Math.max(0.72, 1.35 - precipitationScale * 0.35);
+			}
+
+			if (target === 'snow') {
+				scale *=
+					this.climateContext.season === 'winter'
+						? 1.8
+						: this.climateContext.season === 'summer'
+							? 0.06
+							: 0.42;
+			}
+
+			return Math.max(0, weight * scale);
+		});
 		const choice = chooseWeightedIndex(
 			weights,
 			weatherRandomUnit(this.frame.seed, scheduleIndex, NEXT_WEATHER_SALT)
@@ -326,4 +371,8 @@ function finiteNonNegative(value: number | undefined, fallback: number): number 
 
 function finiteUint32(value: number | undefined, fallback: number): number {
 	return Number.isFinite(value) && value !== undefined && value >= 0 ? value >>> 0 : fallback >>> 0;
+}
+
+function isPrecipitating(kind: WeatherKind): boolean {
+	return kind === 'light_rain' || kind === 'heavy_rain' || kind === 'storm' || kind === 'snow';
 }

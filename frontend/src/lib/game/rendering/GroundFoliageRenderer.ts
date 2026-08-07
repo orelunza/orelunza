@@ -263,7 +263,7 @@ export class GroundFoliageRenderer {
 		cameraPosition: Readonly<Vector3>,
 		deltaSeconds: number,
 		windDirection = 0,
-		windStrength = 0.15
+		windStrength = 0
 	): void {
 		if (this.disposed) {
 			return;
@@ -271,10 +271,10 @@ export class GroundFoliageRenderer {
 
 		const delta = clampFinite(deltaSeconds, 0, 0.05, 0);
 		const direction = Number.isFinite(windDirection) ? windDirection : 0;
-		const strength = clampFinite(windStrength, 0, 1, 0.15);
+		const strength = clampFinite(windStrength, 0, 1, 0);
 		this.timeUniform.value = (this.timeUniform.value + delta) % 4096;
 		this.windVector.set(Math.cos(direction), Math.sin(direction)).normalize();
-		this.windStrengthUniform.value = 0.025 + strength * 0.38;
+		this.windStrengthUniform.value = strength <= 0.04 ? 0 : (strength - 0.04) * 0.4;
 		const visibleRadius = this.profile.fadeEnd + CHUNK_SIZE;
 		const visibleRadiusSquared = visibleRadius * visibleRadius;
 
