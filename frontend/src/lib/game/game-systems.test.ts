@@ -1655,6 +1655,63 @@ describe('player physics', () => {
 		).toBe(false);
 	});
 
+	test('camera becomes the player eyes in a cramped interior and recovers outside', () => {
+		const world = new VoxelWorld(STARTER_WORLD_SEED);
+		const player = testPlayer(world);
+		const camera = new ThirdPersonCamera(1, world);
+		const wallZ = Math.floor(player.position.z - 1);
+		const centerX = Math.floor(player.position.x);
+		const wallBlocks: Array<{ x: number; y: number; z: number }> = [];
+
+		for (let x = centerX - 2; x <= centerX + 2; x += 1) {
+			for (let y = Math.floor(player.position.y); y <= Math.floor(player.position.y + 3); y += 1) {
+				const block = { x, y, z: wallZ };
+				wallBlocks.push(block);
+				world.setBlock(block, 'brick');
+			}
+		}
+
+		camera.setOrientation(0, 0.1);
+		for (let index = 0; index < 90; index += 1) {
+			camera.update(player, 1 / 60);
+		}
+
+		const eye = new Vector3(
+			player.position.x,
+			player.position.y + player.height * 0.9,
+			player.position.z
+		);
+
+		expect(camera.firstPersonActive).toBe(true);
+		expect(camera.firstPersonBlend).toBeGreaterThan(0.8);
+		expect(camera.camera.position.distanceTo(eye)).toBeLessThan(0.2);
+
+		for (const block of wallBlocks) {
+			world.removeBlock(block);
+		}
+
+		for (let index = 0; index < 180; index += 1) {
+			camera.update(player, 1 / 60);
+		}
+
+		expect(camera.firstPersonActive).toBe(false);
+		expect(camera.firstPersonBlend).toBeLessThan(0.05);
+		expect(camera.currentDistance).toBeGreaterThan(4);
+	});
+
+	test('first-person avatar visibility hides only the head group', () => {
+		const rig = new HumanoidRig(DEFAULT_CHARACTER_APPEARANCE);
+
+		rig.setHeadVisible(false);
+		expect(rig.headVisible).toBe(false);
+		expect(rig.joints.chest.visible).toBe(true);
+		expect(rig.joints.handLeft.visible).toBe(true);
+
+		rig.setHeadVisible(true);
+		expect(rig.headVisible).toBe(true);
+		rig.dispose();
+	});
+
 	test('camera rotation does not interpolate through a wall beside the player', () => {
 		const world = new VoxelWorld(STARTER_WORLD_SEED);
 		const player = testPlayer(world);

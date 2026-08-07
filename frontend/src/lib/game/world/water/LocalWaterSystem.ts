@@ -31,6 +31,13 @@ export interface LocalWaterUpdateResult {
 	persistenceDirty: boolean;
 }
 
+export interface LocalWaterSample {
+	loaded: boolean;
+	groundY: number;
+	waterDepth: number;
+	waterSurfaceY: number | null;
+}
+
 export interface LocalWaterSystemOptions {
 	activeRadius?: number;
 	simulationStepSeconds?: number;
@@ -367,6 +374,35 @@ export class LocalWaterSystem {
 
 	get diagnostics(): LocalWaterDiagnosticsSnapshot {
 		return { ...this.diagnosticsState };
+	}
+
+	sampleAt(x: number, z: number): LocalWaterSample {
+		const blockX = Math.floor(x);
+		const blockZ = Math.floor(z);
+		const solver = this.solver;
+		if (solver) {
+			const localX = blockX - this.originX;
+			const localZ = blockZ - this.originZ;
+			const index = solver.indexAt(localX, localZ);
+			if (index >= 0 && solver.active[index]) {
+				const groundY = solver.groundHeight[index] ?? 0;
+				const waterDepth = Math.max(0, solver.waterDepth[index] ?? 0);
+				return {
+					loaded: true,
+					groundY,
+					waterDepth,
+					waterSurfaceY: waterDepth > 0.0001 ? groundY + waterDepth : null
+				};
+			}
+		}
+
+		const profile = this.world.getLoadedWaterColumnProfile(blockX, blockZ);
+		return {
+			loaded: profile.loaded,
+			groundY: profile.groundSurfaceY,
+			waterDepth: profile.generatedWaterDepth,
+			waterSurfaceY: profile.generatedWaterSurfaceY
+		};
 	}
 
 	createDebugApi(): LocalWaterDebugApi {

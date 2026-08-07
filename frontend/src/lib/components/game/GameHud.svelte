@@ -3,6 +3,7 @@
 	import BuildHotbar from './BuildHotbar.svelte';
 	import InteractionPrompt from './InteractionPrompt.svelte';
 	import WorldClockHud from './WorldClockHud.svelte';
+	import HumanStatusHud from './HumanStatusHud.svelte';
 
 	interface Props {
 		snapshot: GameSnapshot;
@@ -128,6 +129,8 @@
 			Desktop controls are the current focus.
 		</div>
 	{/if}
+
+	<HumanStatusHud human={snapshot.human} />
 
 	<div class="absolute bottom-24 left-1/2 -translate-x-1/2">
 		<InteractionPrompt

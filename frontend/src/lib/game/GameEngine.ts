@@ -29,7 +29,7 @@ import type { BuildTarget } from './interaction/BuildTarget';
 import { Hotbar } from './inventory/Hotbar';
 import { Inventory } from './inventory/Inventory';
 import { BuildCursor } from './input/BuildCursor';
-import { KeyboardInput } from './input/KeyboardInput';
+import { KeyboardInput, type MovementInput } from './input/KeyboardInput';
 import { MouseInput } from './input/MouseInput';
 import { PointerLockController } from './input/PointerLockController';
 import { GamePersistence } from './persistence/GamePersistence';
@@ -44,6 +44,7 @@ import { VegetationRemovalState } from './vegetation/VegetationRemovalState';
 import { ChunkStreamingSystem } from './world/ChunkStreamingSystem';
 import { createStarterWorld } from './world/WorldGenerator';
 import { LocalWaterSystem, type LocalWaterDebugApi } from './world/water';
+import { HumanConditionSystem, type HumanConditionDebugApi } from './human';
 import {
 	STARTER_WORLD_SEED,
 	WORLD_MAX_Y,
@@ -58,13 +59,13 @@ const SNAPSHOT_INTERVAL_MS = 100;
 const AVATAR_METRICS_INTERVAL_MS = 250;
 const AUTO_SAVE_INTERVAL_MS = 1500;
 const BACKEND_SYNC_INTERVAL_MS = 5000;
-const AVATAR_HIDE_CAMERA_DISTANCE = 0.55;
 
 export class GameEngine {
 	private readonly renderer: GameRenderer;
 	private readonly sky: Sky;
 	private readonly world;
 	private readonly localWater: LocalWaterSystem;
+	private readonly human: HumanConditionSystem;
 	private readonly chunkStreaming: ChunkStreamingSystem;
 	private readonly player: PlayerController;
 	private readonly keyboard: KeyboardInput;
@@ -239,6 +240,7 @@ export class GameEngine {
 			Math.max(1, bounds.width) / Math.max(1, bounds.height)
 		);
 		this.localWater = new LocalWaterSystem(this.world);
+		this.human = new HumanConditionSystem();
 		this.placementSystem = new BlockPlacementSystem(
 			this.world,
 			this.inventory,
@@ -268,13 +270,15 @@ export class GameEngine {
 		);
 		this.persistence.setEnvironment(this.sky);
 		this.persistence.setLocalWater(this.localWater);
+		this.persistence.setHumanCondition(this.human);
 		this.persistence.setVegetationRemovals(this.vegetationRemovals);
 		if (import.meta.env.DEV || import.meta.env.MODE === 'test') {
-			(
-				globalThis as typeof globalThis & {
-					__ORELUNZA_WATER__?: LocalWaterDebugApi;
-				}
-			).__ORELUNZA_WATER__ = this.localWater.createDebugApi();
+			const debugGlobal = globalThis as typeof globalThis & {
+				__ORELUNZA_WATER__?: LocalWaterDebugApi;
+				__ORELUNZA_HUMAN__?: HumanConditionDebugApi;
+			};
+			debugGlobal.__ORELUNZA_WATER__ = this.localWater.createDebugApi();
+			debugGlobal.__ORELUNZA_HUMAN__ = this.human.createDebugApi();
 		}
 		this.removalSystem = new CreationRemovalSystem(
 			this.world,
@@ -636,6 +640,7 @@ export class GameEngine {
 			}
 		}
 
+		let humanMovement: MovementInput = { forward: 0, right: 0, jump: false, sprint: false };
 		if (this.status === 'playing' && this.pointerLock.isLocked) {
 			const mouseDelta = this.mouse.consumeDelta();
 			const cameraDelta = this.buildMode
@@ -647,8 +652,12 @@ export class GameEngine {
 				: mouseDelta;
 
 			this.player.applyMouse(cameraDelta);
+			const requestedMovement = this.keyboard.getMovement();
+			humanMovement = this.human.canAct
+				? { ...requestedMovement, sprint: requestedMovement.sprint && this.human.canSprint }
+				: { forward: 0, right: 0, jump: false, sprint: false };
 			const physicsStartedAt = performance.now();
-			this.player.step(this.keyboard.getMovement(), deltaSeconds);
+			this.player.step(humanMovement, deltaSeconds);
 			this.diagnostics.physicsMs = performance.now() - physicsStartedAt;
 			this.diagnostics.collisionCells = this.player.physics.collider.lastCellsTested;
 			this.diagnostics.cameraMs = this.player.camera.lastUpdateMs;
@@ -729,6 +738,27 @@ export class GameEngine {
 				this.diagnostics.chunkRefreshes += 1;
 			}
 			if (waterUpdate.persistenceDirty) this.persistence.markDirty();
+
+			const position = this.player.state.position;
+			const eyeY = position.y + this.player.state.height * 0.92;
+			const water = this.localWater.sampleAt(position.x, position.z);
+			const forcing = this.sky.localWaterForcing;
+			const humanUpdate = this.human.update(deltaSeconds, {
+				player: this.player.state,
+				movement: humanMovement,
+				environment: {
+					temperatureCelsius: this.sky.temperatureCelsius,
+					windChillCelsius: this.sky.windChillCelsius,
+					rainIntensity: forcing.rainIntensity
+				},
+				water: { waterSurfaceY: water.waterSurfaceY, waterDepth: water.waterDepth },
+				headObstructed: this.world.isSolidLoadedAt({
+					x: Math.floor(position.x),
+					y: Math.floor(eyeY),
+					z: Math.floor(position.z)
+				})
+			});
+			if (humanUpdate.persistenceDirty) this.persistence.markDirty();
 		}
 		this.avatar.setColdBreath(
 			this.sky.breathVisibility,
@@ -736,9 +766,10 @@ export class GameEngine {
 			this.sky.windStrength
 		);
 
-		// When camera collision pulls the eye very close to the player, hide the
-		// avatar instead of rendering the camera inside the head or torso.
-		this.avatar.object.visible = this.player.camera.currentDistance >= AVATAR_HIDE_CAMERA_DISTANCE;
+		// In cramped spaces the automatic camera becomes the player's eyes. Hide
+		// only the head/hair so the body can still be seen when looking downward.
+		this.avatar.object.visible = true;
+		this.avatar.setFirstPersonView(this.player.camera.firstPersonActive);
 		this.avatar.update(
 			this.player.state,
 			Math.hypot(this.player.state.velocity.x, this.player.state.velocity.z) > 0.1,
@@ -1229,6 +1260,7 @@ export class GameEngine {
 	private snapshotKey(): string {
 		const position = this.player.state.position;
 		const chunk = worldToChunk(position);
+		const human = this.human.snapshot;
 
 		return [
 			this.status,
@@ -1258,6 +1290,14 @@ export class GameEngine {
 			this.creativeBuild ? 1 : 0,
 			this.chunkStreaming.snapshot.loadedChunks,
 			this.chunkStreaming.snapshot.pendingLoads,
+			Math.round(human.health * 2) / 2,
+			Math.round(human.stamina),
+			Math.round(human.oxygen),
+			Math.round(human.hydration),
+			Math.round(human.nutrition),
+			Math.round(human.bodyTemperatureCelsius * 10) / 10,
+			Math.round(human.wetness * 20) / 20,
+			human.lifeState,
 			this.introVisible ? 1 : 0,
 			this.message ?? '',
 			this.error ?? ''
@@ -1296,6 +1336,7 @@ export class GameEngine {
 				lunarPhase: this.sky.lunarPhase,
 				lunarIllumination: this.sky.lunarIllumination
 			},
+			human: this.human.snapshot,
 			dayAnnouncement: this.dayAnnouncement ? { ...this.dayAnnouncement } : null,
 			targetedBlock: this.target?.kind === 'block' ? this.target.block : null,
 			buildMode: this.buildMode,

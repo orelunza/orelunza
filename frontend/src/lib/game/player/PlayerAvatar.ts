@@ -214,6 +214,12 @@ export class PlayerAvatar {
 		return this.model.appearanceSnapshot;
 	}
 
+	setFirstPersonView(enabled: boolean): void {
+		// Keep the body visible when looking down in first person, but never render
+		// the camera from inside the procedural head / hair geometry.
+		this.model.rig.setHeadVisible(!enabled);
+	}
+
 	async updateAppearance(appearance: CharacterAppearanceV1): Promise<void> {
 		await this.ready;
 

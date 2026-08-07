@@ -84,8 +84,8 @@
 	let surfaceBiome = $state('Unknown');
 	let surfaceEditCount = $state(0);
 	let planetRenderer: PlanetRenderer | null = null;
-	let enterRegion = (): void => {};
-	let returnToGlobe = (): void => {};
+	let enterRegion = $state<() => void>(() => {});
+	let returnToGlobe = $state<() => void>(() => {});
 
 	$effect(() => {
 		planetRenderer?.setQuality(quality);

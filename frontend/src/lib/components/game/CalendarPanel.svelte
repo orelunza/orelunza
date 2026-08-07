@@ -23,7 +23,7 @@
 	class="absolute inset-0 z-50 flex items-center justify-center bg-black/58 p-4 backdrop-blur-sm"
 	role="presentation"
 >
-	<section
+	<div
 		class="w-[min(46rem,calc(100vw-2rem))] overflow-hidden rounded-md border border-white/12 bg-[#171c20]/96 text-white shadow-2xl"
 		role="dialog"
 		aria-modal="true"
@@ -99,5 +99,5 @@
 				</dl>
 			</aside>
 		</div>
-	</section>
+	</div>
 </div>

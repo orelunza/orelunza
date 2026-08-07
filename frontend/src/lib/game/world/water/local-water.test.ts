@@ -206,6 +206,9 @@ describe('LocalWaterSystem', () => {
 		});
 
 		expect(water.activate({ x: 0, z: 0 }).length).toBeGreaterThan(0);
+		const sample = water.sampleAt(0, 0);
+		expect(sample.waterDepth).toBe(1);
+		expect(sample.waterSurfaceY).toBe(2);
 		const debug = water.createDebugApi();
 		expect(debug.getActiveCenter()).toEqual({ x: 0, z: 0 });
 		expect(debug.addWaterAtPlayer(0.5)).toBe(true);

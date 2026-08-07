@@ -1,0 +1,93 @@
+<script lang="ts">
+	import type { HumanConditionSnapshot } from '$lib/game/human/HumanConditionState';
+
+	interface Props {
+		human: HumanConditionSnapshot;
+	}
+
+	let { human }: Props = $props();
+
+	let healthPercent = $derived(Math.max(0, Math.min(100, human.health)));
+	let staminaPercent = $derived(Math.max(0, Math.min(100, human.stamina)));
+	let oxygenLow = $derived(human.oxygen < 35);
+	let hydrationLow = $derived(human.hydration < 25);
+	let nutritionLow = $derived(human.nutrition < 20);
+	let cold = $derived(human.bodyTemperatureCelsius < 35.5);
+	let hot = $derived(human.bodyTemperatureCelsius > 39);
+	let wet = $derived(human.wetness > 0.65);
+</script>
+
+<div class="absolute bottom-5 left-4 flex w-48 flex-col gap-2" aria-label="Human condition">
+	<div class="rounded-sm border border-white/10 bg-[#15191d]/76 p-2 backdrop-blur-md">
+		<div class="flex items-center justify-between text-[0.65rem] font-semibold text-white/66">
+			<span>Health</span>
+			<span>{Math.round(human.health)}</span>
+		</div>
+		<div class="mt-1 h-1.5 overflow-hidden rounded-full bg-black/36">
+			<div
+				class="h-full rounded-full bg-[#ef6a63] transition-[width] duration-200"
+				style={`width: ${healthPercent}%`}
+			></div>
+		</div>
+
+		<div class="mt-2 flex items-center justify-between text-[0.65rem] font-semibold text-white/66">
+			<span>Stamina</span>
+			<span>{Math.round(human.stamina)}</span>
+		</div>
+		<div class="mt-1 h-1 overflow-hidden rounded-full bg-black/36">
+			<div
+				class="h-full rounded-full bg-[#e4b55d] transition-[width] duration-200"
+				style={`width: ${staminaPercent}%`}
+			></div>
+		</div>
+	</div>
+
+	{#if human.lifeState !== 'alive' || oxygenLow || hydrationLow || nutritionLow || cold || hot || wet}
+		<div class="flex flex-wrap gap-1.5 text-[0.62rem] font-semibold">
+			{#if human.lifeState === 'critical'}
+				<span class="rounded-sm border border-red-400/30 bg-red-950/62 px-2 py-1 text-red-200"
+					>Critical</span
+				>
+			{:else if human.lifeState === 'unconscious'}
+				<span class="rounded-sm border border-red-400/30 bg-red-950/72 px-2 py-1 text-red-100"
+					>Unconscious</span
+				>
+			{:else if human.lifeState === 'dead'}
+				<span class="rounded-sm border border-red-400/30 bg-black/80 px-2 py-1 text-red-100"
+					>Dead</span
+				>
+			{/if}
+			{#if oxygenLow}
+				<span class="rounded-sm border border-sky-300/25 bg-sky-950/66 px-2 py-1 text-sky-100"
+					>Low oxygen</span
+				>
+			{/if}
+			{#if hydrationLow}
+				<span class="rounded-sm border border-blue-300/20 bg-blue-950/60 px-2 py-1 text-blue-100"
+					>Thirsty</span
+				>
+			{/if}
+			{#if nutritionLow}
+				<span class="rounded-sm border border-amber-300/20 bg-amber-950/60 px-2 py-1 text-amber-100"
+					>Hungry</span
+				>
+			{/if}
+			{#if cold}
+				<span class="rounded-sm border border-cyan-200/20 bg-cyan-950/60 px-2 py-1 text-cyan-100"
+					>Cold</span
+				>
+			{/if}
+			{#if hot}
+				<span
+					class="rounded-sm border border-orange-300/20 bg-orange-950/60 px-2 py-1 text-orange-100"
+					>Overheated</span
+				>
+			{/if}
+			{#if wet}
+				<span class="rounded-sm border border-blue-200/20 bg-blue-950/55 px-2 py-1 text-blue-100"
+					>Wet</span
+				>
+			{/if}
+		</div>
+	{/if}
+</div>

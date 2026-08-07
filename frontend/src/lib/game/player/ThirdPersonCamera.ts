@@ -22,6 +22,16 @@ export const MAX_CAMERA_DISTANCE = 10;
 const DEFAULT_CAMERA_DISTANCE = 6.4;
 const DEFAULT_PITCH = 0.34;
 const TARGET_HEIGHT = 1.42;
+const EYE_HEIGHT_RATIO = 0.9;
+
+// Automatic indoor / cramped-space transition. The user's zoom can never enter
+// this range (MIN_CAMERA_DISTANCE is 2.2 m), so first person is driven only by
+// geometry around the player rather than by scroll-wheel zoom.
+const AUTO_FIRST_PERSON_START_DISTANCE = 1.35;
+const AUTO_FIRST_PERSON_FULL_DISTANCE = 0.32;
+const FIRST_PERSON_ENTER_RESPONSE = 15;
+const FIRST_PERSON_EXIT_RESPONSE = 8;
+const FIRST_PERSON_HEAD_HIDE_DISTANCE = 0.58;
 const CAMERA_BOOM_PITCH = 0.22;
 const ZOOM_STEP = 0.0018;
 const MAX_DELTA = 0.05;
@@ -66,6 +76,8 @@ export class ThirdPersonCamera {
 	private pitch = DEFAULT_PITCH;
 	private distance = DEFAULT_CAMERA_DISTANCE;
 	private correctedDistance = DEFAULT_CAMERA_DISTANCE;
+	private visualDistance = DEFAULT_CAMERA_DISTANCE;
+	private firstPersonCurrent = 0;
 
 	private shoulderTarget = SHOULDER_OFFSET_EXPLORE;
 	private shoulderCurrent = SHOULDER_OFFSET_EXPLORE;
@@ -76,6 +88,7 @@ export class ThirdPersonCamera {
 	private updateMs = 0;
 
 	private readonly baseTarget = new Vector3();
+	private readonly eye = new Vector3();
 	private readonly target = new Vector3();
 	private readonly focus = new Vector3();
 	private readonly direction = new Vector3();
@@ -104,7 +117,15 @@ export class ThirdPersonCamera {
 	}
 
 	get currentDistance(): number {
-		return this.correctedDistance;
+		return this.visualDistance;
+	}
+
+	get firstPersonBlend(): number {
+		return this.firstPersonCurrent;
+	}
+
+	get firstPersonActive(): boolean {
+		return this.visualDistance <= FIRST_PERSON_HEAD_HIDE_DISTANCE;
 	}
 
 	get lastUpdateMs(): number {
@@ -177,6 +198,11 @@ export class ThirdPersonCamera {
 		);
 
 		this.baseTarget.set(player.position.x, player.position.y + TARGET_HEIGHT, player.position.z);
+		this.eye.set(
+			player.position.x,
+			player.position.y + player.height * EYE_HEIGHT_RATIO,
+			player.position.z
+		);
 
 		const terrainHeight = this.world.terrainGenerator.heightAt(
 			player.position.x,
@@ -254,12 +280,36 @@ export class ThirdPersonCamera {
 			this.framedDistance
 		);
 
+		// Collision distance, not the building type, decides whether the camera
+		// becomes first-person. A house, cave, tunnel or narrow gap therefore all
+		// behave consistently. Entering is quick for safety; leaving is deliberately
+		// slower so stepping through a doorway never causes a camera pop.
+		const desiredFirstPerson =
+			1 -
+			smoothstep(
+				AUTO_FIRST_PERSON_FULL_DISTANCE,
+				AUTO_FIRST_PERSON_START_DISTANCE,
+				this.correctedDistance
+			);
+		const firstPersonResponse =
+			desiredFirstPerson > this.firstPersonCurrent
+				? FIRST_PERSON_ENTER_RESPONSE
+				: FIRST_PERSON_EXIT_RESPONSE;
+		this.firstPersonCurrent = damp(
+			this.firstPersonCurrent,
+			desiredFirstPerson,
+			firstPersonResponse,
+			delta
+		);
+
 		this.desired.copy(this.direction).multiplyScalar(this.correctedDistance).add(this.target);
 
-		// Do not lerp the eye in world space while yaw changes. That interpolation
-		// cuts the corner of the orbit and can cross nearby voxels. Mouse rotation
-		// should move around the player immediately, like a voxel-game camera.
-		this.camera.position.copy(this.desired);
+		// The collision-contracted third-person point is always safe. Once space is
+		// too tight, move along the clear interior segment toward the actual eye
+		// position. At full blend the camera is exactly at the player's eyes rather
+		// than hovering behind the shoulders.
+		this.camera.position.copy(this.desired).lerp(this.eye, this.firstPersonCurrent);
+		this.visualDistance = this.camera.position.distanceTo(this.eye);
 
 		// The focus moves downward only by a bounded amount. It helps the player
 		// inspect the construction below without forcing both the summit and the

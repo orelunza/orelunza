@@ -155,6 +155,14 @@ export class HumanoidRig {
 		return this.appearance;
 	}
 
+	setHeadVisible(visible: boolean): void {
+		this.joints.head.visible = visible;
+	}
+
+	get headVisible(): boolean {
+		return this.joints.head.visible;
+	}
+
 	updateAppearance(appearance: CharacterAppearanceV1): void {
 		this.appearance = appearance;
 		this.material('skin').color.set(appearance.skinTone);

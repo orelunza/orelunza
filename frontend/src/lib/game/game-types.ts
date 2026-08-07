@@ -11,6 +11,7 @@ import type { HumanoidAnimationSnapshot } from './player/HumanoidPose';
 import type { RenderQuality } from './rendering/QualitySettings';
 import type { WeatherKind } from './environment/weather/WeatherState';
 import type { WorldDayAnnouncement, WorldTimeSnapshot } from './environment/time/WorldDate';
+import type { HumanConditionSnapshot } from './human/HumanConditionState';
 
 export type GameStatus =
 	| 'booting'
@@ -63,6 +64,7 @@ export interface GameSnapshot {
 	regionName: string;
 	zoneName: string;
 	environment: WorldEnvironmentSnapshot;
+	human: HumanConditionSnapshot;
 	dayAnnouncement: WorldDayAnnouncement | null;
 	targetedBlock: TargetedBlock | null;
 	buildMode: boolean;
