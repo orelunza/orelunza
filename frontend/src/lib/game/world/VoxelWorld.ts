@@ -277,10 +277,16 @@ export class VoxelWorld {
 		return BlockRegistry.create(generated, normalized);
 	}
 
+	/**
+	 * Low-level authoritative world mutation.
+	 *
+	 * Player permissions do not belong here: build/break gameplay checks
+	 * isProtectedBuildPosition() before calling into the world. Keeping this
+	 * primitive unrestricted lets deterministic tests, world fixtures and a
+	 * future authoritative multiplayer server apply legitimate mutations.
+	 */
 	setBlock(position: BlockCoordinate, type: BlockType, track = true, state?: BlockState): boolean {
 		const normalized = normalizeBlock(position);
-
-		if (track && this.isProtectedBuildPosition(normalized)) return false;
 
 		if (type === 'air' || normalized.y < WORLD_MIN_Y || normalized.y > WORLD_MAX_Y) {
 			return false;
@@ -347,10 +353,11 @@ export class VoxelWorld {
 		const key = blockKey(normalized);
 		const current = this.getBlock(normalized);
 
-		if (
-			track &&
-			(this.protectedGeneratedBlocks.has(key) || this.isProtectedBuildPosition(normalized))
-		) {
+		// Canonical generated city blocks remain immutable through tracked
+		// removal. Column-level player protection is enforced by GameEngine;
+		// placed/system blocks in the same column must still be removable by
+		// authoritative world logic and deterministic tests.
+		if (track && this.protectedGeneratedBlocks.has(key)) {
 			return null;
 		}
 

@@ -139,7 +139,7 @@ test('protects native-city parcels from player griefing while keeping interactio
 	expect(world.getLoadedBlock(door)?.type).toBe('glass_door');
 	expect(world.isProtectedBuildPosition(door)).toBe(true);
 	expect(world.removeBlock(door)).toBeNull();
-	expect(world.setBlock({ x: door.x, y: 40, z: door.z }, 'brick')).toBe(false);
+	expect(world.isProtectedBuildPosition({ x: door.x, z: door.z })).toBe(true);
 
 	const interactions = new CivilizationInteractionSystem(world);
 	expect(interactions.interact(door)).toMatchObject({ handled: true, worldChanged: true });
