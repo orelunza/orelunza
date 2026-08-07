@@ -4,7 +4,16 @@ import { BlockRegistry } from '../BlockRegistry';
 import type { VoxelWorld } from '../VoxelWorld';
 import type { BlockCoordinate, BlockType, WorldCoordinate } from '../voxel-types';
 
-export type CivilizationExternalAction = 'sleep' | 'wardrobe' | 'eat' | 'drink' | 'wash' | 'radio';
+export type CivilizationExternalAction =
+	| 'sleep'
+	| 'wardrobe'
+	| 'eat'
+	| 'drink'
+	| 'wash'
+	| 'radio'
+	| 'elevator-call'
+	| 'elevator-panel'
+	| 'power';
 
 export interface CivilizationInteractionResult {
 	handled: boolean;
@@ -65,7 +74,7 @@ export class CivilizationInteractionSystem {
 
 					const distanceSquared = horizontalDistanceSquared(player, position);
 					if (block.type === 'glass_door') {
-						if (distanceSquared > 2.8 * 2.8) continue;
+						if (block.state?.powered === false || distanceSquared > 2.8 * 2.8) continue;
 						const key = blockKey(position);
 						this.automaticDoors.set(key, position);
 						if (
@@ -276,6 +285,32 @@ export class CivilizationInteractionSystem {
 					message: `Ate from ${definition.label}`
 				};
 			}
+			case 'elevator-door':
+				return { handled: true, worldChanged: false, message: 'Use the elevator call button' };
+			case 'elevator-call':
+				return {
+					handled: true,
+					worldChanged: false,
+					action: 'elevator-call',
+					position: { ...position },
+					message: 'Calling elevator'
+				};
+			case 'elevator-panel':
+				return {
+					handled: true,
+					worldChanged: false,
+					action: 'elevator-panel',
+					position: { ...position },
+					message: 'Choose a floor'
+				};
+			case 'power':
+				return {
+					handled: true,
+					worldChanged: false,
+					action: 'power',
+					position: { ...position },
+					message: 'Building power panel'
+				};
 			default:
 				return { handled: false, worldChanged: false };
 		}

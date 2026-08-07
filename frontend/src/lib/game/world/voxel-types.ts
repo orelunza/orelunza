@@ -69,7 +69,13 @@ export type BlockType =
 	| 'store_sign'
 	| 'pool_tile'
 	| 'pool_ladder'
-	| 'changing_bench';
+	| 'changing_bench'
+	| 'ceiling_light'
+	| 'elevator_door'
+	| 'elevator_call_button'
+	| 'elevator_panel'
+	| 'power_panel'
+	| 'elevator_platform';
 
 export type BlockFacing = 'north' | 'east' | 'south' | 'west';
 
@@ -83,6 +89,10 @@ export interface BlockState {
 	stock?: number;
 	/** Running state for taps, showers and radios. */
 	running?: boolean;
+	/** Building/elevator runtime state persisted on generated controllers. */
+	floor?: number;
+	targetFloor?: number;
+	moving?: boolean;
 }
 
 export type BlockInteractionKind =
@@ -97,7 +107,11 @@ export type BlockInteractionKind =
 	| 'shower'
 	| 'toilet'
 	| 'radio'
-	| 'food';
+	| 'food'
+	| 'elevator-door'
+	| 'elevator-call'
+	| 'elevator-panel'
+	| 'power';
 export type BlockPlacementRule = 'any' | 'floor' | 'wall';
 export type BlockRenderShape =
 	| 'cube'
@@ -151,7 +165,12 @@ export type BlockRenderShape =
 	| 'checkout-counter'
 	| 'shopping-cart'
 	| 'store-sign'
-	| 'pool-ladder';
+	| 'pool-ladder'
+	| 'ceiling-light'
+	| 'elevator-door'
+	| 'elevator-button'
+	| 'elevator-panel'
+	| 'power-panel';
 
 /** Local AABB in a voxel cell. Values stay in [0, 1]. */
 export interface BlockCollisionBox {

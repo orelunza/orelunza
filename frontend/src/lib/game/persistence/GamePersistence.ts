@@ -10,6 +10,7 @@ import { DEFAULT_DAY_LENGTH_SECONDS } from '../environment/CelestialClock';
 import type { PlanetSurfaceSaveState } from '../planet/surface/PlanetSurfaceState';
 import type { LocalWaterSaveState } from '../world/water/LocalWaterState';
 import type { HumanConditionSaveState } from '../human/HumanConditionState';
+import type { UrbanElevatorSaveState } from '../world/civilization/UrbanElevatorState';
 
 /**
  * Minimal environment surface the persistence layer talks to. The concrete
@@ -41,6 +42,11 @@ export interface PersistableHumanCondition {
 	restore(state: HumanConditionSaveState | null | undefined): void;
 }
 
+export interface PersistableUrbanElevator {
+	serialize(): UrbanElevatorSaveState;
+	restore(state: UrbanElevatorSaveState | null | undefined): void;
+}
+
 export class GamePersistence {
 	private dirty = false;
 	private status: SaveStatus = 'idle';
@@ -51,6 +57,7 @@ export class GamePersistence {
 	private planetSurface: PersistablePlanetSurface | null = null;
 	private localWater: PersistableLocalWater | null = null;
 	private humanCondition: PersistableHumanCondition | null = null;
+	private urbanElevator: PersistableUrbanElevator | null = null;
 	private readonly store = new IndexedDbWorldStore();
 
 	constructor(
@@ -93,6 +100,10 @@ export class GamePersistence {
 		this.humanCondition = humanCondition;
 	}
 
+	setUrbanElevator(urbanElevator: PersistableUrbanElevator): void {
+		this.urbanElevator = urbanElevator;
+	}
+
 	async load(): Promise<WorldSave | null> {
 		const save = await this.store.load(this.worldId);
 
@@ -122,10 +133,12 @@ export class GamePersistence {
 			}
 			this.localWater?.restore(save.localWater);
 			this.humanCondition?.restore(save.human);
+			this.urbanElevator?.restore(save.urbanElevator);
 		} else {
 			this.vegetationRemovals?.restore([]);
 			this.localWater?.restore(undefined);
 			this.humanCondition?.restore(undefined);
+			this.urbanElevator?.restore(undefined);
 		}
 
 		this.lastSavedPayload = JSON.stringify(this.buildSave(save.updatedAt));
@@ -191,6 +204,7 @@ export class GamePersistence {
 			planetSurface: this.planetSurface?.serialize(),
 			localWater: this.localWater?.serialize(),
 			human: this.humanCondition?.serialize(),
+			urbanElevator: this.urbanElevator?.serialize(),
 			updatedAt
 		};
 	}

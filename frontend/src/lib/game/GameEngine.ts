@@ -48,6 +48,9 @@ import { LocalWaterSystem, type LocalWaterDebugApi } from './world/water';
 import { CivilizationInteractionSystem } from './world/civilization/CivilizationInteractionSystem';
 import { nextWardrobeOutfit } from './world/civilization/OutfitWardrobe';
 import { CivilizationRadioAudio } from './world/civilization/CivilizationRadioAudio';
+import { UrbanPowerSystem } from './world/civilization/UrbanPowerSystem';
+import { UrbanElevatorSystem } from './world/civilization/UrbanElevatorSystem';
+import { buildingAtWorld } from './world/civilization/UrbanBuildingRegistry';
 import { HumanConditionSystem, sampleHumanExposure, type HumanConditionDebugApi } from './human';
 import {
 	STARTER_WORLD_SEED,
@@ -83,6 +86,9 @@ export class GameEngine {
 	private readonly placementSystem: BlockPlacementSystem;
 	private readonly civilizationInteractions: CivilizationInteractionSystem;
 	private readonly civilizationRadioAudio = new CivilizationRadioAudio();
+	private readonly urbanPower: UrbanPowerSystem;
+	private readonly urbanElevator: UrbanElevatorSystem;
+	private elevatorPanelOpen = false;
 	private readonly breakingSystem: BlockBreakingSystem;
 	private readonly removalSystem: CreationRemovalSystem;
 	private readonly loop: GameLoop;
@@ -249,6 +255,8 @@ export class GameEngine {
 		this.localWater = new LocalWaterSystem(this.world);
 		this.human = new HumanConditionSystem();
 		this.civilizationInteractions = new CivilizationInteractionSystem(this.world, this.inventory);
+		this.urbanPower = new UrbanPowerSystem(this.world);
+		this.urbanElevator = new UrbanElevatorSystem(this.world, this.urbanPower);
 		this.placementSystem = new BlockPlacementSystem(
 			this.world,
 			this.inventory,
@@ -279,6 +287,7 @@ export class GameEngine {
 		this.persistence.setEnvironment(this.sky);
 		this.persistence.setLocalWater(this.localWater);
 		this.persistence.setHumanCondition(this.human);
+		this.persistence.setUrbanElevator(this.urbanElevator);
 		this.persistence.setVegetationRemovals(this.vegetationRemovals);
 		if (import.meta.env.DEV || import.meta.env.MODE === 'test') {
 			const debugGlobal = globalThis as typeof globalThis & {
@@ -338,6 +347,7 @@ export class GameEngine {
 			this.world.loadChunk(worldToChunk(this.player.state.position));
 			this.chunkStreaming.synchronizeLoaded(this.world.getLoadedChunks());
 			this.localWater.activate(this.player.state.position);
+			for (const position of this.urbanElevator.initialize()) this.refreshBlockRendering(position);
 
 			this.renderer.rebuildWorld(this.world);
 			this.diagnostics.worldRebuilds += 1;
@@ -414,6 +424,41 @@ export class GameEngine {
 		this.status = 'playing';
 		this.pointerLock.request();
 		this.emitSnapshot();
+	}
+
+	openElevatorPanel(): void {
+		if (this.status !== 'playing' || !this.human.canAct) return;
+		const elevator = this.urbanElevator.snapshotFor(this.player.state);
+		if (!elevator.playerInside || elevator.phase !== 'idle') {
+			this.message = 'Enter the stopped elevator first';
+			return;
+		}
+		this.elevatorPanelOpen = true;
+		this.status = 'elevator';
+		this.pointerLock.exit();
+		this.emitSnapshot();
+	}
+
+	closeElevatorPanel(): void {
+		if (this.status !== 'elevator') return;
+		this.elevatorPanelOpen = false;
+		this.status = 'playing';
+		this.pointerLock.request();
+		this.emitSnapshot();
+	}
+
+	selectElevatorFloor(floor: number): boolean {
+		if (this.status !== 'elevator') return false;
+		const result = this.urbanElevator.selectFloor(floor, this.player.state);
+		for (const position of result.changed) this.refreshBlockRendering(position);
+		this.message = result.message;
+		if (result.handled && result.message.startsWith('Elevator →')) {
+			this.elevatorPanelOpen = false;
+			this.status = 'playing';
+			this.pointerLock.request();
+		}
+		this.emitSnapshot();
+		return result.handled;
 	}
 
 	enterBuildMode(): void {
@@ -640,6 +685,8 @@ export class GameEngine {
 				this.closeBuildCatalog();
 			} else if (this.status === 'calendar') {
 				this.closeCalendar();
+			} else if (this.status === 'elevator') {
+				this.closeElevatorPanel();
 			} else {
 				this.resume();
 			}
@@ -706,6 +753,10 @@ export class GameEngine {
 		}
 
 		let humanMovement: MovementInput = { forward: 0, right: 0, jump: false, sprint: false };
+		const elevatorBefore = this.urbanElevator.snapshotFor(this.player.state);
+		const elevatorCarryingPlayer =
+			elevatorBefore.playerInside &&
+			(elevatorBefore.phase === 'moving' || elevatorBefore.phase === 'stopped');
 		if (this.status === 'playing' && this.pointerLock.isLocked) {
 			const mouseDelta = this.mouse.consumeDelta();
 			const cameraDelta = this.buildMode
@@ -720,11 +771,12 @@ export class GameEngine {
 				this.player.applyMouse(cameraDelta);
 			}
 			const requestedMovement = this.keyboard.getMovement();
-			humanMovement = this.human.canAct
-				? { ...requestedMovement, sprint: requestedMovement.sprint && this.human.canSprint }
-				: { forward: 0, right: 0, jump: false, sprint: false };
+			humanMovement =
+				this.human.canAct && !elevatorCarryingPlayer
+					? { ...requestedMovement, sprint: requestedMovement.sprint && this.human.canSprint }
+					: { forward: 0, right: 0, jump: false, sprint: false };
 			const physicsStartedAt = performance.now();
-			this.player.step(humanMovement, deltaSeconds);
+			if (!elevatorCarryingPlayer) this.player.step(humanMovement, deltaSeconds);
 			this.diagnostics.physicsMs = performance.now() - physicsStartedAt;
 			this.diagnostics.collisionCells = this.player.physics.collider.lastCellsTested;
 			this.diagnostics.cameraMs = this.player.camera.lastUpdateMs;
@@ -736,6 +788,19 @@ export class GameEngine {
 			this.diagnostics.collisionCells = 0;
 			this.diagnostics.cameraMs = 0;
 		}
+
+		for (const position of this.urbanElevator.update(deltaSeconds, this.player.state)) {
+			this.refreshBlockRendering(position);
+		}
+		const elevatorAfter = this.urbanElevator.snapshotFor(this.player.state);
+		if (
+			elevatorBefore.phase !== 'idle' &&
+			elevatorAfter.phase === 'idle' &&
+			elevatorAfter.currentFloor !== elevatorBefore.currentFloor
+		) {
+			this.persistence.markDirty();
+		}
+		if (elevatorCarryingPlayer) this.player.updateCamera(deltaSeconds);
 
 		if (this.chunkStreaming.update(this.player.state.position)) {
 			const changes = this.chunkStreaming.lastChanges;
@@ -887,7 +952,11 @@ export class GameEngine {
 			deltaSeconds,
 			this.human.snapshot.lifeState
 		);
-		this.renderer.updateCivilization(this.player.camera.camera.position, this.sky.daylight);
+		this.renderer.updateCivilization(
+			this.player.camera.camera.position,
+			this.sky.daylight,
+			this.urbanElevator.snapshotFor(this.player.state)
+		);
 		this.civilizationRadioAudio.update(this.player.state.position);
 		this.renderer.updateVegetation(
 			this.player.camera.camera.position,
@@ -1063,7 +1132,14 @@ export class GameEngine {
 		if (!result.handled) {
 			result = this.civilizationInteractions.interactNearestDoor(this.player.state.position);
 		}
-		if (!result.handled) return;
+		if (!result.handled) {
+			const elevator = this.urbanElevator.snapshotFor(this.player.state);
+			if (elevator.playerInside && elevator.phase === 'idle') {
+				this.openElevatorPanel();
+				return;
+			}
+			return;
+		}
 		const changedPosition = result.position ?? targetedPosition;
 		if (result.worldChanged && changedPosition) this.markBlockChanged(changedPosition);
 		if (result.action === 'sleep') {
@@ -1097,6 +1173,29 @@ export class GameEngine {
 		}
 		if (result.action === 'radio' && result.position) {
 			this.civilizationRadioAudio.setRadio(result.position, result.active === true);
+		}
+		if (result.action === 'elevator-call' && result.position) {
+			const elevator = this.urbanElevator.callFrom(result.position);
+			for (const position of elevator.changed) this.refreshBlockRendering(position);
+			this.message = elevator.message;
+			return;
+		}
+		if (result.action === 'elevator-panel' && result.position) {
+			if (this.urbanElevator.canUsePanel(result.position, this.player.state)) {
+				this.openElevatorPanel();
+			} else {
+				this.message = 'Wait for the elevator and step inside';
+			}
+			return;
+		}
+		if (result.action === 'power' && result.position) {
+			const power = this.urbanPower.toggleAt(result.position);
+			for (const position of power.changed) this.refreshBlockRendering(position);
+			if (power.handled) this.persistence.markDirty();
+			this.message = power.handled
+				? `${power.buildingLabel} · power ${power.powered ? 'online' : 'offline'}`
+				: 'No building power circuit';
+			return;
 		}
 		this.message = result.message ?? 'Used';
 	}
@@ -1488,6 +1587,8 @@ export class GameEngine {
 		const chunk = worldToChunk(position);
 		const human = this.human.snapshot;
 		const interactionTarget = this.snapshotTargetedBlock();
+		const elevator = this.urbanElevator.snapshotFor(this.player.state);
+		const building = buildingAtWorld(position.x, position.z);
 
 		return [
 			this.status,
@@ -1541,6 +1642,14 @@ export class GameEngine {
 			human.lastDeathCause ?? '',
 			human.deathCount,
 			Math.ceil(human.respawnProtectionSeconds),
+			elevator.currentFloor,
+			elevator.targetFloor,
+			Math.round(elevator.cabinY * 10),
+			elevator.phase,
+			elevator.powered ? 1 : 0,
+			elevator.playerInside ? 1 : 0,
+			this.elevatorPanelOpen ? 1 : 0,
+			building?.id ?? '',
 			this.introVisible ? 1 : 0,
 			this.message ?? '',
 			this.error ?? ''
@@ -1580,6 +1689,14 @@ export class GameEngine {
 				lunarIllumination: this.sky.lunarIllumination
 			},
 			human: this.human.snapshot,
+			urban: {
+				elevator: this.urbanElevator.snapshotFor(this.player.state),
+				elevatorPanelOpen: this.elevatorPanelOpen,
+				buildingName:
+					buildingAtWorld(this.player.state.position.x, this.player.state.position.z)?.label ??
+					null,
+				buildingPowered: this.urbanPower.isPoweredAt(this.player.state.position)
+			},
 			dayAnnouncement: this.dayAnnouncement ? { ...this.dayAnnouncement } : null,
 			targetedBlock: this.snapshotTargetedBlock(),
 			buildMode: this.buildMode,

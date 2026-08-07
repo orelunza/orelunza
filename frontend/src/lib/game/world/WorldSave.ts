@@ -8,6 +8,8 @@ import type { LocalWaterSaveState } from './water/LocalWaterState';
 import { isLocalWaterSaveState } from './water/LocalWaterState';
 import type { HumanConditionSaveState } from '../human/HumanConditionState';
 import { isHumanConditionSaveState } from '../human/HumanConditionState';
+import type { UrbanElevatorSaveState } from './civilization/UrbanElevatorState';
+import { isUrbanElevatorSaveState } from './civilization/UrbanElevatorState';
 
 export interface WorldSaveV1 {
 	version: 1;
@@ -51,6 +53,8 @@ export interface WorldSaveV3 {
 	localWater?: LocalWaterSaveState;
 	/** Added by Human Lot 1; optional for every older V3 save. */
 	human?: HumanConditionSaveState;
+	/** Added by City Lot 4; optional for every older V3 save. */
+	urbanElevator?: UrbanElevatorSaveState;
 	updatedAt: number;
 }
 
@@ -123,6 +127,7 @@ export function isWorldSaveV3(value: unknown): value is WorldSaveV3 {
 			(typeof candidate.planetSurface === 'object' && candidate.planetSurface !== null)) &&
 		(candidate.localWater === undefined || isLocalWaterSaveState(candidate.localWater)) &&
 		(candidate.human === undefined || isHumanConditionSaveState(candidate.human)) &&
+		(candidate.urbanElevator === undefined || isUrbanElevatorSaveState(candidate.urbanElevator)) &&
 		Array.isArray(candidate.placedBlocks) &&
 		Array.isArray(candidate.removedBlocks)
 	);

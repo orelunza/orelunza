@@ -83,6 +83,11 @@ export class PlayerController {
 		this.syncCameraState();
 	}
 
+	updateCamera(deltaSeconds: number): void {
+		this.camera.update(this.state, safeDelta(deltaSeconds));
+		this.syncCameraState();
+	}
+
 	setTransform(position: WorldCoordinate, yaw = 0, pitch = 0): void {
 		const resolvedYaw = finiteAngle(yaw, 0);
 		const resolvedPitch = Number.isFinite(pitch) && pitch !== 0 ? pitch : DEFAULT_PITCH;

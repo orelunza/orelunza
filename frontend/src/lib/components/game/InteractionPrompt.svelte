@@ -9,9 +9,16 @@
 		selectedSlot: InventorySlot | null;
 		pointerLocked: boolean;
 		buildMode?: boolean;
+		elevatorReady?: boolean;
 	}
 
-	let { target, selectedSlot, pointerLocked, buildMode = false }: Props = $props();
+	let {
+		target,
+		selectedSlot,
+		pointerLocked,
+		buildMode = false,
+		elevatorReady = false
+	}: Props = $props();
 	let interaction = $derived(target ? BlockRegistry.get(target.type).interaction : undefined);
 
 	function interactionText(kind: typeof interaction, currentTarget: TargetedBlock | null): string {
@@ -40,6 +47,14 @@
 				return 'Switch radio';
 			case 'food':
 				return 'Eat';
+			case 'elevator-door':
+				return 'Use call button';
+			case 'elevator-call':
+				return 'Call elevator';
+			case 'elevator-panel':
+				return 'Choose floor';
+			case 'power':
+				return 'Toggle building power';
 			default:
 				return 'Use';
 		}
@@ -74,6 +89,16 @@
 				>
 				<span>{interactionText(interaction, target)}</span>
 			{/if}
+		</span>
+	{:else if !buildMode && !target && elevatorReady}
+		<span
+			class="inline-flex items-center gap-2 rounded-sm border border-[#f97316]/24 bg-[#1a1e22]/80 px-3 py-2 backdrop-blur-md"
+		>
+			<span
+				class="rounded border border-white/15 bg-white/8 px-1.5 py-0.5 text-[0.65rem] font-semibold text-white/82"
+				>E</span
+			>
+			<span>Choose elevator floor</span>
 		</span>
 	{:else if buildMode && target}
 		<span class="rounded-sm border border-white/10 bg-[#1a1e22]/75 px-3 py-2 backdrop-blur-md">

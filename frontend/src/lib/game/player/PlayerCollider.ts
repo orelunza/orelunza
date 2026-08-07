@@ -27,6 +27,7 @@ interface Aabb {
 }
 
 const GROUND_PROBE = 0.06;
+const FIXTURE_NEIGHBOR_MARGIN = 1;
 
 export class PlayerCollider {
 	private cellsTested = 0;
@@ -61,12 +62,14 @@ export class PlayerCollider {
 
 	wouldCollideAabb(position: WorldCoordinate, radius: number, height: number): boolean {
 		const box = this.playerAabb(position, radius, height);
-		const minX = Math.floor(box.minX);
-		const maxX = Math.floor(box.maxX);
+		// Large city furniture can overhang its one-metre anchor voxel. Scan one
+		// horizontal neighbour ring so collision follows the visible fixture.
+		const minX = Math.floor(box.minX) - FIXTURE_NEIGHBOR_MARGIN;
+		const maxX = Math.floor(box.maxX) + FIXTURE_NEIGHBOR_MARGIN;
 		const minY = Math.floor(box.minY);
 		const maxY = Math.floor(box.maxY);
-		const minZ = Math.floor(box.minZ);
-		const maxZ = Math.floor(box.maxZ);
+		const minZ = Math.floor(box.minZ) - FIXTURE_NEIGHBOR_MARGIN;
+		const maxZ = Math.floor(box.maxZ) + FIXTURE_NEIGHBOR_MARGIN;
 
 		for (let x = minX; x <= maxX; x += 1) {
 			for (let y = minY; y <= maxY; y += 1) {

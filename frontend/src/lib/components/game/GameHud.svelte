@@ -5,6 +5,7 @@
 	import WorldClockHud from './WorldClockHud.svelte';
 	import HumanStatusHud from './HumanStatusHud.svelte';
 	import HumanConditionOverlay from './HumanConditionOverlay.svelte';
+	import ElevatorPanel from './ElevatorPanel.svelte';
 
 	interface Props {
 		snapshot: GameSnapshot;
@@ -13,9 +14,20 @@
 		onCalendar?: () => void;
 		onWorldMap?: () => void;
 		onRespawn?: () => void;
+		onElevatorFloor?: (floor: number) => void;
+		onCloseElevator?: () => void;
 	}
 
-	let { snapshot, onHotbarSelect, onPause, onCalendar, onWorldMap, onRespawn }: Props = $props();
+	let {
+		snapshot,
+		onHotbarSelect,
+		onPause,
+		onCalendar,
+		onWorldMap,
+		onRespawn,
+		onElevatorFloor,
+		onCloseElevator
+	}: Props = $props();
 
 	let selectedSlot = $derived(
 		snapshot.buildMode && snapshot.selectedBuildBlock
@@ -134,6 +146,20 @@
 		</div>
 	{/if}
 
+	{#if snapshot.urban.buildingName}
+		<div
+			class="absolute top-20 left-3 rounded-sm border border-white/10 bg-[#1a1e22]/76 px-3 py-2 text-xs backdrop-blur-md"
+		>
+			<p class="m-0 font-semibold">{snapshot.urban.buildingName}</p>
+			<p class="m-0 text-white/52">
+				{snapshot.urban.buildingPowered ? 'Power online' : 'Power offline'}{snapshot.urban.elevator
+					.playerInside
+					? ` · Elevator ${snapshot.urban.elevator.currentFloor}`
+					: ''}
+			</p>
+		</div>
+	{/if}
+
 	<HumanStatusHud human={snapshot.human} />
 	<HumanConditionOverlay human={snapshot.human} {onRespawn} />
 
@@ -143,6 +169,8 @@
 			{selectedSlot}
 			pointerLocked={snapshot.pointerLocked}
 			buildMode={snapshot.buildMode}
+			elevatorReady={snapshot.urban.elevator.playerInside &&
+				snapshot.urban.elevator.phase === 'idle'}
 		/>
 	</div>
 
@@ -157,5 +185,13 @@
 				onSelect={onHotbarSelect}
 			/>
 		</div>
+	{/if}
+
+	{#if snapshot.urban.elevatorPanelOpen}
+		<ElevatorPanel
+			elevator={snapshot.urban.elevator}
+			onSelect={onElevatorFloor}
+			onClose={onCloseElevator}
+		/>
 	{/if}
 </div>

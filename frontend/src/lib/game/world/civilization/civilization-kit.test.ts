@@ -3,6 +3,7 @@ import { BlockRegistry } from '../BlockRegistry';
 import { VoxelWorld } from '../VoxelWorld';
 import type { TargetedBlock } from '../../game-types';
 import { CivilizationInteractionSystem } from './CivilizationInteractionSystem';
+import { civilizationGeometry } from './CivilizationGeometry';
 import { blockStateForPlacement, facingFromYaw, placementRuleAllows } from './CivilizationBlocks';
 import { nextWardrobeOutfit } from './OutfitWardrobe';
 
@@ -34,6 +35,16 @@ describe('civilization kit', () => {
 			BlockRegistry.collisionBox(BlockRegistry.create('floor_lamp', { x: 0, y: 0, z: 0 }))
 		).not.toBeNull();
 		expect(BlockRegistry.get('fire_pit').heatCelsius).toBeGreaterThan(0);
+	});
+
+	test('uses human-scale furniture geometry for urban rooms', () => {
+		const bed = civilizationGeometry('bed');
+		const sofa = civilizationGeometry('sofa');
+		expect(bed?.boundingBox).not.toBeNull();
+		expect(sofa?.boundingBox).not.toBeNull();
+		expect((bed?.boundingBox?.max.z ?? 0) - (bed?.boundingBox?.min.z ?? 0)).toBeGreaterThan(1.7);
+		expect((bed?.boundingBox?.max.x ?? 0) - (bed?.boundingBox?.min.x ?? 0)).toBeGreaterThan(1.3);
+		expect((sofa?.boundingBox?.max.x ?? 0) - (sofa?.boundingBox?.min.x ?? 0)).toBeGreaterThan(1.6);
 	});
 
 	test('uses support-aware placement and deterministic facing', () => {

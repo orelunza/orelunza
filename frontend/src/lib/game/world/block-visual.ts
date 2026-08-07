@@ -78,6 +78,7 @@ export function blockVisual(type: BlockType): BlockVisual {
 				: type === 'glass' ||
 					  type === 'glass_panel' ||
 					  type === 'glass_door' ||
+					  type === 'elevator_door' ||
 					  type === 'bus_shelter'
 					? 0.78
 					: 1

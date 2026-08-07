@@ -12,6 +12,7 @@ import type { RenderQuality } from './rendering/QualitySettings';
 import type { WeatherKind } from './environment/weather/WeatherState';
 import type { WorldDayAnnouncement, WorldTimeSnapshot } from './environment/time/WorldDate';
 import type { HumanConditionSnapshot } from './human/HumanConditionState';
+import type { UrbanElevatorSnapshot } from './world/civilization/UrbanElevatorSystem';
 
 export type GameStatus =
 	| 'booting'
@@ -20,6 +21,7 @@ export type GameStatus =
 	| 'paused'
 	| 'inventory'
 	| 'calendar'
+	| 'elevator'
 	| 'build-catalog'
 	| 'error'
 	| 'destroyed';
@@ -53,6 +55,13 @@ export interface WorldEnvironmentSnapshot {
 	lunarIllumination: number;
 }
 
+export interface UrbanSystemsSnapshot {
+	elevator: UrbanElevatorSnapshot;
+	elevatorPanelOpen: boolean;
+	buildingName: string | null;
+	buildingPowered: boolean;
+}
+
 export interface GameSnapshot {
 	status: GameStatus;
 	player: PlayerTransform;
@@ -67,6 +76,7 @@ export interface GameSnapshot {
 	zoneName: string;
 	environment: WorldEnvironmentSnapshot;
 	human: HumanConditionSnapshot;
+	urban: UrbanSystemsSnapshot;
 	dayAnnouncement: WorldDayAnnouncement | null;
 	targetedBlock: TargetedBlock | null;
 	buildMode: boolean;

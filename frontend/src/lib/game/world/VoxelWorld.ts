@@ -69,6 +69,8 @@ export class VoxelWorld {
 		string,
 		Map<number, NaturalTerrainOverrideType>
 	>();
+	private readonly runtimeBlocks = new Map<string, BlockType>();
+	private readonly runtimeChunkBlocks = new Map<string, Set<string>>();
 	private readonly transientBlocks = new Map<string, TransientBlock>();
 	private readonly transientAir = new Set<string>();
 	private readonly transientChunkBlocks = new Map<string, Set<string>>();
@@ -179,6 +181,7 @@ export class VoxelWorld {
 
 		for (const key of this.generatedBlocks.keys()) keys.add(key);
 		for (const key of this.naturalTerrainOverrides.keys()) keys.add(key);
+		for (const key of this.runtimeBlocks.keys()) keys.add(key);
 		for (const key of this.transientBlocks.keys()) keys.add(key);
 		for (const key of this.placedBlocks.keys()) keys.add(key);
 
@@ -203,6 +206,7 @@ export class VoxelWorld {
 
 		const keys = new Set<string>(this.generatedChunkBlocks.get(key) ?? []);
 		for (const naturalKey of this.naturalTerrainChunkBlocks.get(key) ?? []) keys.add(naturalKey);
+		for (const runtimeKey of this.runtimeChunkBlocks.get(key) ?? []) keys.add(runtimeKey);
 		for (const transientKey of this.transientChunkBlocks.get(key) ?? []) keys.add(transientKey);
 		for (const blockPositionKey of this.placedBlocks.keys()) {
 			if (chunkKey(worldToChunk(parseKey(blockPositionKey))) === key) keys.add(blockPositionKey);
@@ -262,6 +266,9 @@ export class VoxelWorld {
 
 		const placed = this.placedBlocks.get(key);
 		if (placed) return BlockRegistry.create(placed.type, normalized, undefined, placed.state);
+
+		const runtime = this.runtimeBlocks.get(key);
+		if (runtime) return BlockRegistry.create(runtime, normalized);
 
 		const transient = this.transientBlocks.get(key);
 		if (transient) return BlockRegistry.create(transient.type, normalized, transient.fillLevel);
@@ -584,6 +591,33 @@ export class VoxelWorld {
 			this.naturalTerrainColumnBlocks.get(column) ?? new Map<number, NaturalTerrainOverrideType>();
 		columnBlocks.set(position.y, type);
 		this.naturalTerrainColumnBlocks.set(column, columnBlocks);
+	}
+
+	/** Runtime-only solid used by moving systems such as elevators. Never saved. */
+	setRuntimeBlock(position: BlockCoordinate, type: BlockType): boolean {
+		const normalized = normalizeBlock(position);
+		if (type === 'air' || normalized.y < WORLD_MIN_Y || normalized.y > WORLD_MAX_Y) return false;
+		const key = blockKey(normalized);
+		if (this.runtimeBlocks.get(key) === type) return false;
+		this.runtimeBlocks.set(key, type);
+		const chunk = chunkKey(worldToChunk(normalized));
+		const keys = this.runtimeChunkBlocks.get(chunk) ?? new Set<string>();
+		keys.add(key);
+		this.runtimeChunkBlocks.set(chunk, keys);
+		this.structureVersion += 1;
+		return true;
+	}
+
+	clearRuntimeBlock(position: BlockCoordinate): boolean {
+		const normalized = normalizeBlock(position);
+		const key = blockKey(normalized);
+		if (!this.runtimeBlocks.delete(key)) return false;
+		const chunk = chunkKey(worldToChunk(normalized));
+		const keys = this.runtimeChunkBlocks.get(chunk);
+		keys?.delete(key);
+		if (keys?.size === 0) this.runtimeChunkBlocks.delete(chunk);
+		this.structureVersion += 1;
+		return true;
 	}
 
 	setTransientWaterColumn(
@@ -1024,6 +1058,9 @@ export class VoxelWorld {
 		if (placed) {
 			return BlockRegistry.create(placed.type, normalized, undefined, placed.state);
 		}
+
+		const runtime = this.runtimeBlocks.get(key);
+		if (runtime) return BlockRegistry.create(runtime, normalized);
 
 		const transient = this.transientBlocks.get(key);
 		if (transient) {

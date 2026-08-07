@@ -64,26 +64,29 @@ function createGeometry(shape: BlockRenderShape, active: boolean): BufferGeometr
 			]);
 		case 'table':
 			return merge([
-				box(0.92, 0.1, 0.92, 0, 0.23, 0),
-				...[-0.36, 0.36].flatMap((x) => [-0.36, 0.36].map((z) => box(0.09, 0.7, 0.09, x, -0.17, z)))
+				box(1.34, 0.1, 0.9, 0, 0.23, 0),
+				...[-0.54, 0.54].flatMap((x) => [-0.34, 0.34].map((z) => box(0.09, 0.7, 0.09, x, -0.17, z)))
 			]);
 		case 'bed':
+			// Full-size urban bed: roughly 1.45 m wide by 1.9 m long. It is
+			// intentionally larger than its anchor voxel so bedrooms read at human
+			// scale instead of looking like doll-house furniture.
 			return merge([
-				box(0.92, 0.15, 0.94, 0, -0.4, 0),
-				box(0.84, 0.18, 0.86, 0, -0.23, 0.02),
-				box(0.68, 0.11, 0.25, 0, -0.08, -0.25),
-				box(0.92, 0.42, 0.08, 0, -0.08, 0.43)
+				box(1.45, 0.16, 1.9, 0, -0.39, 0),
+				box(1.34, 0.2, 1.75, 0, -0.2, -0.02),
+				box(1.05, 0.12, 0.38, 0, -0.02, -0.58),
+				box(1.45, 0.48, 0.1, 0, -0.02, 0.9)
 			]);
 		case 'mattress':
-			return merge([box(0.92, 0.2, 0.94, 0, -0.4, 0), box(0.65, 0.08, 0.24, 0, -0.25, -0.27)]);
+			return merge([box(1.38, 0.22, 1.82, 0, -0.39, 0), box(1.02, 0.09, 0.36, 0, -0.2, -0.58)]);
 		case 'curtain':
 			return merge([box(0.9, 0.82, 0.045, 0, 0.02, 0), box(0.98, 0.05, 0.07, 0, 0.45, 0)]);
 		case 'wardrobe':
 			return merge([
-				box(0.9, 1.72, 0.56, 0, 0.36, 0),
-				box(0.025, 1.58, 0.04, 0, 0.36, -0.3),
-				box(0.04, 0.04, 0.05, -0.08, 0.38, -0.33),
-				box(0.04, 0.04, 0.05, 0.08, 0.38, -0.33)
+				box(1.28, 1.82, 0.62, 0, 0.41, 0),
+				box(0.025, 1.66, 0.04, 0, 0.41, -0.33),
+				box(0.04, 0.04, 0.05, -0.1, 0.43, -0.36),
+				box(0.04, 0.04, 0.05, 0.1, 0.43, -0.36)
 			]);
 		case 'clothes-rack':
 			return merge([
@@ -118,10 +121,10 @@ function createGeometry(shape: BlockRenderShape, active: boolean): BufferGeometr
 			]);
 		case 'sofa':
 			return merge([
-				box(0.94, 0.3, 0.7, 0, -0.25, 0.05),
-				box(0.94, 0.48, 0.16, 0, 0.1, 0.32),
-				box(0.12, 0.48, 0.72, -0.41, -0.05, 0.04),
-				box(0.12, 0.48, 0.72, 0.41, -0.05, 0.04)
+				box(1.78, 0.32, 0.76, 0, -0.24, 0.05),
+				box(1.78, 0.52, 0.16, 0, 0.12, 0.35),
+				box(0.14, 0.52, 0.78, -0.82, -0.03, 0.04),
+				box(0.14, 0.52, 0.78, 0.82, -0.03, 0.04)
 			]);
 		case 'kitchen-counter':
 			return merge([
@@ -314,6 +317,37 @@ function createGeometry(shape: BlockRenderShape, active: boolean): BufferGeometr
 			]);
 		case 'store-sign':
 			return merge([box(0.82, 0.38, 0.08, 0, 0.15, 0), box(0.08, 0.5, 0.08, -0.38, 0.15, 0)]);
+
+		case 'ceiling-light':
+			return merge([box(0.7, 0.08, 0.7, 0, 0.43, 0), box(0.46, 0.05, 0.46, 0, 0.38, 0)]);
+		case 'elevator-door':
+			return merge([
+				box(active ? 0.18 : 0.46, 1.9, 0.1, active ? -0.35 : -0.23, 0.44, 0),
+				box(active ? 0.18 : 0.46, 1.9, 0.1, active ? 0.35 : 0.23, 0.44, 0),
+				box(0.98, 0.08, 0.16, 0, 1.4, 0)
+			]);
+		case 'elevator-button':
+			return merge([
+				box(0.2, 0.32, 0.06, 0, 0.15, 0.46),
+				new CylinderGeometry(0.035, 0.035, 0.025, 10).rotateX(Math.PI / 2).translate(0, 0.16, 0.5)
+			]);
+		case 'elevator-panel': {
+			const parts = [box(0.36, 0.72, 0.06, 0, 0.12, 0.46)];
+			for (const y of [-0.1, 0.08, 0.26]) {
+				for (const x of [-0.09, 0.09]) {
+					parts.push(
+						new CylinderGeometry(0.025, 0.025, 0.02, 8).rotateX(Math.PI / 2).translate(x, y, 0.5)
+					);
+				}
+			}
+			return merge(parts);
+		}
+		case 'power-panel':
+			return merge([
+				box(0.66, 0.86, 0.18, 0, 0.05, 0.35),
+				box(0.5, 0.04, 0.03, 0, 0.18, 0.46),
+				box(0.1, 0.1, 0.04, 0.17, -0.16, 0.46)
+			]);
 		case 'pool-ladder':
 			return merge([
 				cylinder(0.035, 0.035, 1.45, 8, -0.28, 0.22, 0),

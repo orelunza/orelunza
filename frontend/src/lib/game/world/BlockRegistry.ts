@@ -348,7 +348,7 @@ const BLOCKS: Record<BlockType, BlockDefinition> = {
 		hardness: 0.45,
 		shape: 'table',
 		placement: 'floor',
-		collision: { minX: 0.05, maxX: 0.95, minY: 0, maxY: 0.78, minZ: 0.05, maxZ: 0.95 }
+		collision: { minX: -0.17, maxX: 1.17, minY: 0, maxY: 0.78, minZ: 0.05, maxZ: 0.95 }
 	},
 	bed: {
 		type: 'bed',
@@ -367,7 +367,7 @@ const BLOCKS: Record<BlockType, BlockDefinition> = {
 		interaction: 'bed',
 		orientable: true,
 		defaultState: { facing: 'north' },
-		collision: { minX: 0.04, maxX: 0.96, minY: 0, maxY: 0.42, minZ: 0.04, maxZ: 0.96 }
+		collision: { minX: -0.225, maxX: 1.225, minY: 0, maxY: 0.42, minZ: -0.45, maxZ: 1.45 }
 	},
 	mattress: {
 		type: 'mattress',
@@ -385,7 +385,7 @@ const BLOCKS: Record<BlockType, BlockDefinition> = {
 		placement: 'floor',
 		orientable: true,
 		defaultState: { facing: 'north' },
-		collision: { minX: 0.04, maxX: 0.96, minY: 0, maxY: 0.24, minZ: 0.04, maxZ: 0.96 }
+		collision: { minX: -0.19, maxX: 1.19, minY: 0, maxY: 0.24, minZ: -0.41, maxZ: 1.41 }
 	},
 	curtain: {
 		type: 'curtain',
@@ -422,7 +422,7 @@ const BLOCKS: Record<BlockType, BlockDefinition> = {
 		interaction: 'wardrobe',
 		orientable: true,
 		defaultState: { facing: 'north' },
-		collision: { minX: 0.04, maxX: 0.96, minY: 0, maxY: 1, minZ: 0.18, maxZ: 0.82 }
+		collision: { minX: -0.14, maxX: 1.14, minY: 0, maxY: 1, minZ: 0.19, maxZ: 0.81 }
 	},
 	clothes_rack: {
 		type: 'clothes_rack',
@@ -533,7 +533,7 @@ const BLOCKS: Record<BlockType, BlockDefinition> = {
 		placement: 'floor',
 		orientable: true,
 		defaultState: { facing: 'north' },
-		collision: { minX: 0.04, maxX: 0.96, minY: 0, maxY: 0.7, minZ: 0.08, maxZ: 0.92 }
+		collision: { minX: -0.39, maxX: 1.39, minY: 0, maxY: 0.7, minZ: 0.12, maxZ: 0.88 }
 	},
 	kitchen_counter: {
 		type: 'kitchen_counter',
@@ -1155,6 +1155,109 @@ const BLOCKS: Record<BlockType, BlockDefinition> = {
 		hardness: 0,
 		nutrition: 22
 	},
+
+	ceiling_light: {
+		type: 'ceiling_light',
+		label: 'Ceiling Light',
+		description: 'A compact powered ceiling fixture used throughout multi-storey buildings.',
+		category: 'light',
+		color: 0xe8ddb6,
+		solid: false,
+		passable: true,
+		collectable: false,
+		transparent: true,
+		placeable: false,
+		hardness: 0.1,
+		shape: 'ceiling-light',
+		interaction: 'lamp',
+		defaultState: { lit: true, powered: true },
+		light: { color: 0xffe7ba, intensity: 1.75, distance: 7 }
+	},
+	elevator_door: {
+		type: 'elevator_door',
+		label: 'Elevator Door',
+		description: 'A powered sliding landing door controlled by the elevator safety system.',
+		category: 'utility',
+		color: 0x7c858b,
+		solid: true,
+		passable: false,
+		collectable: false,
+		transparent: false,
+		placeable: false,
+		hardness: 1.2,
+		shape: 'elevator-door',
+		interaction: 'elevator-door',
+		orientable: true,
+		defaultState: { facing: 'north', open: false, powered: true },
+		collision: { minX: 0.04, maxX: 0.96, minY: 0, maxY: 1, minZ: 0.43, maxZ: 0.57 }
+	},
+	elevator_call_button: {
+		type: 'elevator_call_button',
+		label: 'Elevator Call Button',
+		description: 'Calls the building elevator to this landing.',
+		category: 'utility',
+		color: 0x5e666c,
+		solid: false,
+		passable: true,
+		collectable: true,
+		transparent: true,
+		placeable: false,
+		hardness: 0.2,
+		shape: 'elevator-button',
+		interaction: 'elevator-call',
+		orientable: true,
+		defaultState: { facing: 'north', powered: true }
+	},
+	elevator_panel: {
+		type: 'elevator_panel',
+		label: 'Elevator Floor Panel',
+		description: 'Opens the elevator floor selector while the cabin is at the landing.',
+		category: 'utility',
+		color: 0x373e43,
+		solid: false,
+		passable: true,
+		collectable: true,
+		transparent: true,
+		placeable: false,
+		hardness: 0.2,
+		shape: 'elevator-panel',
+		interaction: 'elevator-panel',
+		orientable: true,
+		defaultState: { facing: 'south', powered: true }
+	},
+	power_panel: {
+		type: 'power_panel',
+		label: 'Building Power Panel',
+		description: 'Controls the simple electrical service for one native-city building.',
+		category: 'utility',
+		color: 0x4d5559,
+		solid: true,
+		passable: false,
+		collectable: false,
+		transparent: false,
+		placeable: false,
+		hardness: 1,
+		shape: 'power-panel',
+		interaction: 'power',
+		orientable: true,
+		defaultState: { facing: 'north', powered: true },
+		collision: { minX: 0.12, maxX: 0.88, minY: 0, maxY: 1, minZ: 0.32, maxZ: 0.68 }
+	},
+	elevator_platform: {
+		type: 'elevator_platform',
+		label: 'Elevator Platform',
+		description: 'Internal runtime collision platform for a moving elevator cabin.',
+		category: 'utility',
+		color: 0x4f565a,
+		solid: true,
+		passable: false,
+		collectable: false,
+		transparent: true,
+		placeable: false,
+		hardness: 999,
+		shape: 'slab',
+		collision: { minX: 0, maxX: 1, minY: 0, maxY: 1, minZ: 0, maxZ: 1 }
+	},
 	bottled_water: {
 		type: 'bottled_water',
 		label: 'Bottled Water',
@@ -1188,7 +1291,9 @@ export class BlockRegistry {
 	): VoxelBlock {
 		const definition = this.get(type);
 		const normalizedState = this.normalizeState(type, state);
-		const openDoor = definition.interaction === 'door' && normalizedState?.open === true;
+		const openDoor =
+			(definition.interaction === 'door' || definition.interaction === 'elevator-door') &&
+			normalizedState?.open === true;
 
 		return {
 			type,
@@ -1216,7 +1321,8 @@ export class BlockRegistry {
 		if (
 			definition.interaction === 'door' ||
 			definition.interaction === 'curtain' ||
-			definition.interaction === 'container'
+			definition.interaction === 'container' ||
+			definition.interaction === 'elevator-door'
 		) {
 			result.open = source.open === true;
 		}
@@ -1227,7 +1333,12 @@ export class BlockRegistry {
 			definition.interaction === 'lamp' ||
 			definition.interaction === 'radio' ||
 			type === 'refrigerator' ||
-			type === 'drink_cooler'
+			type === 'drink_cooler' ||
+			type === 'glass_door' ||
+			type === 'elevator_door' ||
+			type === 'elevator_call_button' ||
+			type === 'elevator_panel' ||
+			type === 'power_panel'
 		) {
 			result.powered = source.powered !== false;
 		}
@@ -1244,6 +1355,13 @@ export class BlockRegistry {
 				0,
 				Math.floor(Number.isFinite(source.stock) ? (source.stock as number) : fallback)
 			);
+		}
+		if (type === 'elevator_panel') {
+			if (Number.isFinite(source.floor))
+				result.floor = Math.max(1, Math.floor(source.floor as number));
+			if (Number.isFinite(source.targetFloor))
+				result.targetFloor = Math.max(1, Math.floor(source.targetFloor as number));
+			result.moving = source.moving === true;
 		}
 
 		return Object.keys(result).length > 0 ? result : undefined;
@@ -1273,7 +1391,11 @@ export class BlockRegistry {
 		block: Pick<VoxelBlock, 'type' | 'state' | 'solid' | 'passable'>
 	): BlockCollisionBox | null {
 		const definition = this.get(block.type);
-		if (definition.interaction === 'door' && block.state?.open === true) return null;
+		if (
+			(definition.interaction === 'door' || definition.interaction === 'elevator-door') &&
+			block.state?.open === true
+		)
+			return null;
 		// Explicit fixture collision is independent from voxel solidity. This lets
 		// narrow props such as lamps and clothes racks block the human without
 		// turning their whole voxel into a roof/rain occluder or terrain surface.

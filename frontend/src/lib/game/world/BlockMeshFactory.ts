@@ -78,7 +78,7 @@ export class BlockMeshFactory {
 		const groups = new Map<string, RenderGroup>();
 
 		for (const block of blocks) {
-			if (block.type === 'air') continue;
+			if (block.type === 'air' || block.type === 'elevator_platform') continue;
 			const zone = world?.terrainGenerator.zoneAt(block.position.x, block.position.z) ?? '';
 			const geometryVariant =
 				block.type === 'leaves' ? leafCanopyShapeAt(block.position, zone) : ('default' as const);

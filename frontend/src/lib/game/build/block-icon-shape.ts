@@ -137,7 +137,13 @@ const BLOCK_ICON_SHAPES: Record<BlockType, BlockIconShape> = {
 	store_sign: 'store-sign',
 	pool_tile: 'pool-tile',
 	pool_ladder: 'pool-ladder',
-	changing_bench: 'changing-bench'
+	changing_bench: 'changing-bench',
+	ceiling_light: 'floor-lamp',
+	elevator_door: 'glass-door',
+	elevator_call_button: 'radio',
+	elevator_panel: 'radio',
+	power_panel: 'kitchen-cabinet',
+	elevator_platform: 'stone-slab'
 };
 
 export function blockIconShape(type: BlockType): BlockIconShape {

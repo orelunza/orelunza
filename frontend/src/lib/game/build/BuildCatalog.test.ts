@@ -22,7 +22,7 @@ describe('BuildCatalog', () => {
 
 		catalog.setSearchQuery('window');
 
-		expect(catalog.filteredItems.map((block) => block.type)).toContain('glass');
+		expect(catalog.filteredItems.map((block) => block.type)).toContain('glass_panel');
 	});
 
 	test('filters blocks by category', () => {

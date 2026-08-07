@@ -33,6 +33,15 @@
 				token: number;
 		  }
 		| {
+				type: 'elevator-floor';
+				floor: number;
+				token: number;
+		  }
+		| {
+				type: 'close-elevator';
+				token: number;
+		  }
+		| {
 				type: 'use-inventory';
 				index: number;
 				token: number;
@@ -128,6 +137,14 @@
 
 			case 'hotbar':
 				engine.selectHotbar(command.index);
+				break;
+
+			case 'elevator-floor':
+				engine.selectElevatorFloor(command.floor);
+				break;
+
+			case 'close-elevator':
+				engine.closeElevatorPanel();
 				break;
 
 			case 'use-inventory':

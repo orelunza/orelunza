@@ -7,6 +7,7 @@ import { VoxelWorld } from '../VoxelWorld';
 import { CENTRAL_CITY_CENTER, STARTER_WORLD_SEED, WORLD_SPAWN, worldToChunk } from '../voxel-types';
 import { CivilizationInteractionSystem } from './CivilizationInteractionSystem';
 import { civilizationGeometry } from './CivilizationGeometry';
+import { CIVIC_TOWER } from './UrbanBuildingRegistry';
 
 function cityColumn(generator: CityGenerator, localX: number, localZ: number, groundY = 9) {
 	return generator.generateForColumn(
@@ -39,9 +40,21 @@ describe('public civilization kit', () => {
 
 	test('lays a real road surface with markings and sidewalks in the native city', () => {
 		const city = new CityGenerator();
-		expect(cityColumn(city, 0, 18).some((block) => block.type === 'asphalt')).toBe(true);
-		expect(cityColumn(city, 0, 20).some((block) => block.type === 'road_marking')).toBe(true);
-		expect(cityColumn(city, 4, 18).some((block) => block.type === 'sidewalk')).toBe(true);
+		const publicTypes = new Set<string>();
+		for (let localX = -4; localX <= 4; localX += 1) {
+			for (let localZ = 24; localZ <= 32; localZ += 1) {
+				for (const block of cityColumn(city, localX, localZ)) {
+					if (
+						block.type === 'asphalt' ||
+						block.type === 'road_marking' ||
+						block.type === 'sidewalk'
+					) {
+						publicTypes.add(block.type);
+					}
+				}
+			}
+		}
+		expect(publicTypes).toEqual(new Set(['asphalt', 'road_marking', 'sidewalk']));
 	});
 
 	test('builds a stocked supermarket interior instead of an empty shell', () => {
@@ -103,12 +116,16 @@ describe('public civilization kit', () => {
 		expect(world.getLoadedBlock(position)?.state?.open).toBe(true);
 	});
 
-	test('gives tall standing fixtures real collision instead of letting the player phase through them', () => {
+	test('gives furniture and standing fixtures real collision instead of letting the player phase through them', () => {
 		for (const type of ['floor_lamp', 'street_lamp', 'clothes_rack', 'shopping_cart'] as const) {
 			const block = BlockRegistry.create(type, { x: 0, y: 0, z: 0 });
 			expect(BlockRegistry.collisionBox(block)).not.toBeNull();
 			expect(block.solid).toBe(false);
 		}
+		const bed = BlockRegistry.collisionBox(BlockRegistry.create('bed', { x: 0, y: 0, z: 0 }));
+		const sofa = BlockRegistry.collisionBox(BlockRegistry.create('sofa', { x: 0, y: 0, z: 0 }));
+		expect(bed?.maxZ).toBeGreaterThan(1);
+		expect(sofa?.maxX).toBeGreaterThan(1);
 	});
 
 	test('uses an unobstructed adjacent double-door entrance for the supermarket', () => {
@@ -134,7 +151,11 @@ describe('public civilization kit', () => {
 
 test('protects native-city parcels from player griefing while keeping interactions stateful', () => {
 	const world = new VoxelWorld(STARTER_WORLD_SEED);
-	const door = { x: CENTRAL_CITY_CENTER.x, y: 10, z: CENTRAL_CITY_CENTER.z + 5 };
+	const door = {
+		x: CENTRAL_CITY_CENTER.x,
+		y: 10,
+		z: CENTRAL_CITY_CENTER.z + 7
+	};
 	world.loadChunk(worldToChunk(door));
 	expect(world.getLoadedBlock(door)?.type).toBe('glass_door');
 	expect(world.isProtectedBuildPosition(door)).toBe(true);
@@ -190,8 +211,8 @@ test('renders supermarket fixtures with visible product colors instead of empty 
 test('never places public lamps inside building footprints or entrance clearance lanes', () => {
 	const city = new CityGenerator();
 	const entrances = [
-		{ x: 0, z: 5 },
-		{ x: 0, z: 15 },
+		{ x: 0, z: CIVIC_TOWER.halfDepth },
+		{ x: 0, z: 16 },
 		{ x: -21, z: 22 },
 		{ x: -20, z: 22 },
 		{ x: 20, z: 21 }
@@ -227,6 +248,28 @@ describe('native city public district', () => {
 		expect(blocks).toContainEqual({ position: { x, y: 7, z }, type: 'pool_tile' });
 		expect(blocks).toContainEqual({ position: { x, y: 8, z }, type: 'water' });
 		expect(blocks).toContainEqual({ position: { x, y: 9, z }, type: 'water' });
+
+		for (const [dz, stairY] of [
+			[2, 7],
+			[3, 8],
+			[4, 9]
+		] as const) {
+			for (const dx of [-1, 0, 1]) {
+				const stairColumn = city.generateForColumn(
+					CENTRAL_CITY_CENTER.x + 23 + dx,
+					7,
+					CENTRAL_CITY_CENTER.z - 20 + dz
+				);
+				expect(stairColumn).toContainEqual({
+					position: {
+						x: CENTRAL_CITY_CENTER.x + 23 + dx,
+						y: stairY,
+						z: CENTRAL_CITY_CENTER.z - 20 + dz
+					},
+					type: 'stone_stairs'
+				});
+			}
+		}
 		expect(worldToChunk({ x, z }).z).toBeLessThan(worldToChunk(WORLD_SPAWN).z);
 	});
 });

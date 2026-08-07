@@ -28,6 +28,9 @@ import {
 import { VegetationRemovalState } from '../vegetation/VegetationRemovalState';
 import type { SurfaceWeatherFrameState } from '../environment/surface/SurfaceWeatherState';
 import { WorldFixtureRenderer } from './WorldFixtureRenderer';
+import { UrbanElevatorRenderer } from './UrbanElevatorRenderer';
+import { urbanTypeVisible } from './UrbanLodSystem';
+import type { UrbanElevatorSnapshot } from '../world/civilization/UrbanElevatorSystem';
 
 export class GameRenderer {
 	readonly scene = new Scene();
@@ -43,8 +46,11 @@ export class GameRenderer {
 	private readonly groundFoliage: GroundFoliageRenderer;
 	private readonly meshFactory = new BlockMeshFactory();
 	private readonly fixtures = new WorldFixtureRenderer(this.scene);
+	private readonly urbanElevator = new UrbanElevatorRenderer(this.scene);
 	private readonly meshesByChunk = new Map<string, BlockInstanceLookup[]>();
 	private blockMeshes: BlockInstanceLookup[] = [];
+	private lastUrbanLodX = Number.POSITIVE_INFINITY;
+	private lastUrbanLodZ = Number.POSITIVE_INFINITY;
 
 	constructor(
 		readonly canvas: HTMLCanvasElement,
@@ -115,6 +121,8 @@ export class GameRenderer {
 		}
 
 		this.rebuildLookupCache();
+		this.lastUrbanLodX = Number.POSITIVE_INFINITY;
+		this.lastUrbanLodZ = Number.POSITIVE_INFINITY;
 	}
 
 	/**
@@ -150,6 +158,8 @@ export class GameRenderer {
 		}
 
 		this.rebuildLookupCache();
+		this.lastUrbanLodX = Number.POSITIVE_INFINITY;
+		this.lastUrbanLodZ = Number.POSITIVE_INFINITY;
 	}
 
 	/**
@@ -167,6 +177,8 @@ export class GameRenderer {
 		}
 
 		this.rebuildLookupCache();
+		this.lastUrbanLodX = Number.POSITIVE_INFINITY;
+		this.lastUrbanLodZ = Number.POSITIVE_INFINITY;
 	}
 
 	removeChunk(chunk: ChunkCoordinate): void {
@@ -211,8 +223,14 @@ export class GameRenderer {
 		this.groundFoliage.updateSurfaceWeather(state);
 	}
 
-	updateCivilization(cameraPosition: Readonly<Vector3>, daylight = 0): void {
+	updateCivilization(
+		cameraPosition: Readonly<Vector3>,
+		daylight = 0,
+		elevator?: UrbanElevatorSnapshot
+	): void {
 		this.fixtures.update(cameraPosition, daylight);
+		if (elevator) this.urbanElevator.update(elevator, cameraPosition);
+		this.updateUrbanLod(cameraPosition);
 	}
 
 	updateVegetation(
@@ -224,6 +242,26 @@ export class GameRenderer {
 		this.meshFactory.updateVegetationWind(deltaSeconds, windDirection, windStrength);
 		this.tallGrass.update(cameraPosition, deltaSeconds, windDirection, windStrength);
 		this.groundFoliage.update(cameraPosition, deltaSeconds, windDirection, windStrength);
+	}
+
+	private updateUrbanLod(cameraPosition: Readonly<Vector3>): void {
+		const dx = cameraPosition.x - this.lastUrbanLodX;
+		const dz = cameraPosition.z - this.lastUrbanLodZ;
+		if (Number.isFinite(this.lastUrbanLodX) && dx * dx + dz * dz < 16) return;
+		this.lastUrbanLodX = cameraPosition.x;
+		this.lastUrbanLodZ = cameraPosition.z;
+		for (const [key, lookups] of this.meshesByChunk) {
+			const [x, z] = key.split(',').map(Number);
+			const chunk = { x, z };
+			for (const lookup of lookups) {
+				lookup.mesh.visible = urbanTypeVisible(
+					lookup.type,
+					chunk,
+					cameraPosition.x,
+					cameraPosition.z
+				);
+			}
+		}
 	}
 
 	render(camera: Camera): void {
@@ -239,6 +277,7 @@ export class GameRenderer {
 		this.tallGrass.dispose();
 		this.groundFoliage.dispose();
 		this.fixtures.dispose();
+		this.urbanElevator.dispose();
 		this.meshFactory.dispose();
 		this.renderer.dispose();
 	}

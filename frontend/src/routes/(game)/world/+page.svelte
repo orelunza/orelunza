@@ -47,6 +47,15 @@
 				token: number;
 		  }
 		| {
+				type: 'elevator-floor';
+				floor: number;
+				token: number;
+		  }
+		| {
+				type: 'close-elevator';
+				token: number;
+		  }
+		| {
 				type: 'use-inventory';
 				index: number;
 				token: number;
@@ -103,6 +112,14 @@
 			index,
 			token: ++commandToken
 		};
+	}
+
+	function sendElevatorFloorCommand(floor: number): void {
+		command = { type: 'elevator-floor', floor, token: ++commandToken };
+	}
+
+	function closeElevatorPanel(): void {
+		command = { type: 'close-elevator', token: ++commandToken };
 	}
 
 	async function initialize(): Promise<void> {
@@ -344,6 +361,8 @@
 				onRespawn={() => {
 					sendCommand('respawn');
 				}}
+				onElevatorFloor={sendElevatorFloorCommand}
+				onCloseElevator={closeElevatorPanel}
 			/>
 
 			{#if snapshot.status === 'calendar'}

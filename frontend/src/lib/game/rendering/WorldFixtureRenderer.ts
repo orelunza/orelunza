@@ -12,8 +12,8 @@ interface LightFixture {
 	nightOnly: boolean;
 }
 
-const MAX_ACTIVE_LIGHTS = 16;
-const RESELECT_DISTANCE_SQUARED = 2.25;
+const MAX_ACTIVE_LIGHTS = 6;
+const RESELECT_DISTANCE_SQUARED = 9;
 
 /**
  * Keeps expensive real-time point lights limited to the nearest active city
@@ -35,7 +35,13 @@ export class WorldFixtureRenderer {
 			const definition = BlockRegistry.get(block.type);
 			if (!definition.light || !BlockRegistry.isLit(block)) continue;
 			const lightHeight =
-				block.type === 'street_lamp' ? 1.65 : block.type === 'fire_pit' ? 0.35 : 0.8;
+				block.type === 'street_lamp'
+					? 1.65
+					: block.type === 'fire_pit'
+						? 0.35
+						: block.type === 'ceiling_light'
+							? 0.15
+							: 0.8;
 			fixtures.push({
 				id: `${block.position.x},${block.position.y},${block.position.z}`,
 				position: new Vector3(
