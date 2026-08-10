@@ -25,6 +25,7 @@
 	let appearance = $state<CharacterAppearanceV1>({ ...DEFAULT_CHARACTER_APPEARANCE });
 	let step = $state<1 | 2 | 3>(1);
 	let home = $state<WorldLocation | null>(null);
+	let spawning = $state(false);
 
 	let playerId = $derived(sessionState.humanId || 'local-player');
 
@@ -54,6 +55,13 @@
 		} finally {
 			saving = false;
 		}
+	}
+	async function beginLife(): Promise<void> {
+		spawning = true;
+		await new Promise<void>((done) =>
+			window.setTimeout(done, matchMedia('(prefers-reduced-motion: reduce)').matches ? 180 : 1100)
+		);
+		await saveCharacter();
 	}
 
 	function chooseHome(destination: PlanetTravelRequest | null): void {
@@ -133,8 +141,13 @@
 		</section>
 	</main>
 {:else if step === 3 && home}
-	<main class="grid h-dvh place-items-center bg-[#131619] p-4 text-white">
-		<section class="w-full max-w-md rounded-md border border-white/10 bg-[#1a1e22] p-6">
+	<main class="relative grid h-dvh place-items-center overflow-hidden bg-[#131619] p-4 text-white">
+		<div class="absolute inset-0">
+			<PlanetPreviewCanvas mode="onboarding" focusLocation={home} descending={spawning} />
+		</div>
+		<section
+			class="relative z-10 w-full max-w-md rounded-md border border-white/10 bg-[#1a1e22]/90 p-6 backdrop-blur-md"
+		>
 			<p class="m-0 text-xs font-semibold tracking-[.2em] text-sky-200 uppercase">Step 3 of 3</p>
 			<h1 class="mt-3 text-3xl font-semibold">Start your life in</h1>
 			<p class="mt-5 mb-0 text-2xl font-semibold">{home.settlementName}</p>
@@ -147,7 +160,9 @@
 				><button
 					type="button"
 					class="rounded-sm bg-[#f97316] px-4 py-2 font-semibold text-black"
-					onclick={() => void saveCharacter()}>Start life in {home.countryName}</button
+					disabled={spawning}
+					onclick={() => void beginLife()}
+					>{spawning ? 'Entering your home…' : `Start life in ${home.countryName}`}</button
 				>
 			</div>
 		</section>

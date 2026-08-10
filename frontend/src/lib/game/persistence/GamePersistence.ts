@@ -11,6 +11,7 @@ import type { PlanetSurfaceSaveState } from '../planet/surface/PlanetSurfaceStat
 import type { LocalWaterSaveState } from '../world/water/LocalWaterState';
 import type { HumanConditionSaveState } from '../human/HumanConditionState';
 import type { UrbanElevatorSaveState } from '../world/civilization/UrbanElevatorState';
+import type { TravelPlan } from '../world/travel/TravelPlan';
 
 /**
  * Minimal environment surface the persistence layer talks to. The concrete
@@ -46,6 +47,10 @@ export interface PersistableUrbanElevator {
 	serialize(): UrbanElevatorSaveState;
 	restore(state: UrbanElevatorSaveState | null | undefined): void;
 }
+export interface PersistableRoutePlan {
+	get(): TravelPlan | null;
+	restore(plan: TravelPlan | null | undefined): void;
+}
 
 export class GamePersistence {
 	private dirty = false;
@@ -58,6 +63,7 @@ export class GamePersistence {
 	private localWater: PersistableLocalWater | null = null;
 	private humanCondition: PersistableHumanCondition | null = null;
 	private urbanElevator: PersistableUrbanElevator | null = null;
+	private routePlan: PersistableRoutePlan | null = null;
 	private readonly store = new IndexedDbWorldStore();
 
 	constructor(
@@ -103,6 +109,9 @@ export class GamePersistence {
 	setUrbanElevator(urbanElevator: PersistableUrbanElevator): void {
 		this.urbanElevator = urbanElevator;
 	}
+	setRoutePlan(routePlan: PersistableRoutePlan): void {
+		this.routePlan = routePlan;
+	}
 
 	async load(): Promise<WorldSave | null> {
 		const save = await this.store.load(this.worldId);
@@ -134,6 +143,7 @@ export class GamePersistence {
 			this.localWater?.restore(save.localWater);
 			this.humanCondition?.restore(save.human);
 			this.urbanElevator?.restore(save.urbanElevator);
+			this.routePlan?.restore(save.routePlan);
 		} else {
 			this.vegetationRemovals?.restore([]);
 			this.localWater?.restore(undefined);
@@ -205,6 +215,7 @@ export class GamePersistence {
 			localWater: this.localWater?.serialize(),
 			human: this.humanCondition?.serialize(),
 			urbanElevator: this.urbanElevator?.serialize(),
+			routePlan: this.routePlan?.get() ?? undefined,
 			updatedAt
 		};
 	}

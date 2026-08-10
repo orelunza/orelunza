@@ -32,10 +32,13 @@
 		type SettlementAnchor
 	} from '$lib/game/world/geography/SettlementCatalog';
 	import { greatCircleDistanceKm } from '$lib/game/world/geography/GeographicDistance';
+	import type { WorldLocation } from '$lib/game/world/geography/WorldLocation';
 	import PlanetTravelHud from './PlanetTravelHud.svelte';
 
 	interface Props {
 		mode?: 'onboarding' | 'navigation';
+		focusLocation?: WorldLocation | null;
+		descending?: boolean;
 		currentLocation?: GeographicLocationSnapshot | null;
 		travelling?: boolean;
 		travelError?: string | null;
@@ -45,6 +48,8 @@
 	}
 	let {
 		mode = 'navigation',
+		focusLocation = null,
+		descending = false,
 		currentLocation = null,
 		travelling = false,
 		travelError = null,
@@ -225,6 +230,13 @@
 			if (mode === 'navigation' && e.code === 'Escape') onClose?.();
 		};
 		const render = () => {
+			if (descending && focusLocation) {
+				const targetYaw = (-focusLocation.longitude * Math.PI) / 180;
+				const targetPolar = Math.PI / 2 - (focusLocation.latitude * Math.PI) / 180;
+				orbitYaw += (targetYaw - orbitYaw) * 0.035;
+				orbitPolar += (targetPolar - orbitPolar) * 0.035;
+				distance += (118 - distance) * 0.028;
+			}
 			camera.position.setFromSphericalCoords(distance, orbitPolar, orbitYaw);
 			camera.lookAt(0, 0, 0);
 			planet.update(camera, Math.max(1, canvas!.clientHeight));

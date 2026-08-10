@@ -10,6 +10,7 @@ import type { HumanConditionSaveState } from '../human/HumanConditionState';
 import { isHumanConditionSaveState } from '../human/HumanConditionState';
 import type { UrbanElevatorSaveState } from './civilization/UrbanElevatorState';
 import { isUrbanElevatorSaveState } from './civilization/UrbanElevatorState';
+import type { TravelPlan } from './travel/TravelPlan';
 
 export interface WorldSaveV1 {
 	version: 1;
@@ -55,6 +56,7 @@ export interface WorldSaveV3 {
 	human?: HumanConditionSaveState;
 	/** Added by City Lot 4; optional for every older V3 save. */
 	urbanElevator?: UrbanElevatorSaveState;
+	routePlan?: TravelPlan;
 	updatedAt: number;
 }
 

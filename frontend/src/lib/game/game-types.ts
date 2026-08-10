@@ -25,6 +25,7 @@ export type GameStatus =
 	| 'elevator'
 	| 'build-catalog'
 	| 'world-map'
+	| 'globe'
 	| 'travelling'
 	| 'error'
 	| 'destroyed';

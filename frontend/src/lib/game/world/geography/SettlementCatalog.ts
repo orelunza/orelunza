@@ -35,6 +35,10 @@ const PRIMARY_SETTLEMENTS: readonly SettlementAnchor[] = [
 		generationSeed: 'ke-nairobi'
 	}
 ];
+/** The small verified catalog is the only global settlement source currently shipped. */
+export function knownSettlements(): readonly SettlementAnchor[] {
+	return PRIMARY_SETTLEMENTS;
+}
 export function settlementForCountry(country: Readonly<CountrySummary>): SettlementAnchor {
 	const known = PRIMARY_SETTLEMENTS.find(
 		(entry) => entry.countryId === country.isoA3 || entry.countryId === country.id

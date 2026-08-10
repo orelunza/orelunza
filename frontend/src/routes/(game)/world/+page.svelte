@@ -11,6 +11,8 @@
 	import LoadingWorld from '$lib/components/game/LoadingWorld.svelte';
 	import PauseMenu from '$lib/components/game/PauseMenu.svelte';
 	import PlanetPreviewCanvas from '$lib/components/game/PlanetPreviewCanvas.svelte';
+	import WorldMapOverlay from '$lib/components/game/WorldMapOverlay.svelte';
+	import WorldTransitionOverlay from '$lib/components/game/WorldTransitionOverlay.svelte';
 	import type { PlanetTravelRequest } from '$lib/game/planet/surface/PlanetTravelRequest';
 	import type { WorldLocation } from '$lib/game/world/geography/WorldLocation';
 	import { ApiError } from '$lib/api/ApiError';
@@ -39,7 +41,12 @@
 				token: number;
 		  }
 		| {
-				type: 'open-world-map' | 'close-world-map';
+				type: 'open-world-map' | 'close-world-map' | 'open-globe';
+				token: number;
+		  }
+		| {
+				type: 'plan-route';
+				destination: PlanetTravelRequest;
 				token: number;
 		  }
 		| {
@@ -168,12 +175,15 @@
 		}
 	}
 
-	function openWorldGlobe(): void {
+	function openMap(): void {
 		if (snapshot?.status === 'world-map' || loading || !appearance) {
 			return;
 		}
 
 		command = { type: 'open-world-map', token: ++commandToken };
+	}
+	function openGlobe(): void {
+		command = { type: 'open-globe', token: ++commandToken };
 	}
 
 	function closeWorldGlobe(): void {
@@ -185,7 +195,7 @@
 	}
 
 	function travelTo(destination: PlanetTravelRequest): void {
-		command = { type: 'travel-to-planet', destination, token: ++commandToken };
+		command = { type: 'plan-route', destination, token: ++commandToken };
 	}
 
 	async function logout(): Promise<void> {
@@ -198,18 +208,33 @@
 		void initialize();
 
 		const handleWorldGlobeShortcut = (event: KeyboardEvent): void => {
-			if (event.repeat || event.code !== 'KeyM') {
+			if (event.repeat || (event.code !== 'KeyM' && event.code !== 'KeyG')) {
 				return;
 			}
 
+			if (
+				(event.target as HTMLElement | null)?.closest(
+					'input, textarea, select, [contenteditable="true"]'
+				)
+			)
+				return;
+			if (event.code === 'KeyG') {
+				if (snapshot?.status === 'globe') void closeWorldGlobe();
+				else openGlobe();
+				return;
+			}
 			if (snapshot?.status === 'world-map') {
+				void closeWorldGlobe();
+				return;
+			}
+			if (snapshot?.status === 'globe') {
 				void closeWorldGlobe();
 			} else if (
 				(snapshot?.status === 'playing' || snapshot?.status === 'paused') &&
 				snapshot.human.lifeState !== 'unconscious' &&
 				snapshot.human.lifeState !== 'dead'
 			) {
-				void openWorldGlobe();
+				void openMap();
 			}
 		};
 
@@ -366,7 +391,7 @@
 					sendCommand('open-calendar');
 				}}
 				onWorldMap={() => {
-					void openWorldGlobe();
+					void openMap();
 				}}
 				onRespawn={() => {
 					sendCommand('respawn');
@@ -404,7 +429,7 @@
 						sendCommand('save');
 					}}
 					onOpenWorldMap={() => {
-						void openWorldGlobe();
+						void openMap();
 					}}
 					onLogout={logout}
 				/>
@@ -433,9 +458,10 @@
 		{/if}
 	{/if}
 
-	{#if appearance && (snapshot?.status === 'world-map' || snapshot?.status === 'travelling')}
+	{#if appearance && (snapshot?.status === 'globe' || snapshot?.status === 'travelling')}
 		<div class="absolute inset-0 z-[70]" data-testid="world-globe-mode">
 			<PlanetPreviewCanvas
+				mode="navigation"
 				currentLocation={snapshot.geographicLocation}
 				travelling={snapshot.status === 'travelling'}
 				travelError={snapshot.error}
@@ -445,5 +471,11 @@
 				onTravel={travelTo}
 			/>
 		</div>
+	{/if}
+	{#if appearance && snapshot?.status === 'world-map' && snapshot}
+		<WorldMapOverlay {snapshot} onClose={() => void closeWorldGlobe()} onGlobe={openGlobe} />
+	{/if}
+	{#if appearance && snapshot?.status === 'travelling'}
+		<WorldTransitionOverlay />
 	{/if}
 </main>

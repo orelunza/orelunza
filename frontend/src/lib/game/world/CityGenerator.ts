@@ -752,12 +752,35 @@ export class CityGenerator {
 	}
 }
 
-function isRoad(localX: number, localZ: number): boolean {
+export function isCityRoad(localX: number, localZ: number): boolean {
 	return (
 		(Math.abs(localX) <= 2 && localZ >= -38 && localZ <= 32) ||
 		(Math.abs(localZ) <= 2 && localX >= -35 && localX <= 35) ||
 		(Math.abs(localZ - 26) <= 2 && localX >= -34 && localX <= 34)
 	);
+}
+const isRoad = isCityRoad;
+
+/**
+ * Centre lines for the same road predicates used by generateForColumn.  Map
+ * consumers deliberately receive this authored/generated geometry instead of
+ * making a second road layout from a random stream.
+ */
+export function cityRoadCenterlines(): readonly (readonly { x: number; z: number }[])[] {
+	return [
+		[
+			{ x: 0, z: -38 },
+			{ x: 0, z: 32 }
+		],
+		[
+			{ x: -35, z: 0 },
+			{ x: 35, z: 0 }
+		],
+		[
+			{ x: -34, z: 26 },
+			{ x: 34, z: 26 }
+		]
+	];
 }
 
 function isSidewalk(localX: number, localZ: number): boolean {

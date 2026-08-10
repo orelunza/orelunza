@@ -8,7 +8,12 @@
 
 	type GameCommand =
 		| {
-				type: 'open-world-map' | 'close-world-map';
+				type: 'open-world-map' | 'close-world-map' | 'open-globe';
+				token: number;
+		  }
+		| {
+				type: 'plan-route';
+				destination: PlanetTravelRequest;
 				token: number;
 		  }
 		| {
@@ -123,6 +128,12 @@
 				break;
 			case 'close-world-map':
 				engine.closeWorldMap();
+				break;
+			case 'open-globe':
+				engine.openGlobe();
+				break;
+			case 'plan-route':
+				engine.planRoute(command.destination);
 				break;
 			case 'travel-to-planet':
 				void engine.travelToPlanet(command.destination);

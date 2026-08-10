@@ -683,15 +683,42 @@ export class GameEngine {
 		this.emitSnapshot();
 	}
 
+	openGlobe(): void {
+		if (this.status !== 'playing' && this.status !== 'world-map' && this.status !== 'paused')
+			return;
+		this.status = 'globe';
+		this.pointerLock.exit();
+		this.emitSnapshot();
+	}
+
+	planRoute(request: PlanetTravelRequest): void {
+		if (this.status !== 'globe') return;
+		const origin = this.worldLocation();
+		const destination: WorldLocation = {
+			countryId: request.countryId ?? 'unknown',
+			countryName: request.countryName ?? 'Unknown',
+			settlementId: request.settlementId ?? 'surface',
+			settlementName: request.settlementName ?? 'Destination',
+			latitude: (request.coordinate.latitudeRadians * 180) / Math.PI,
+			longitude: (request.coordinate.longitudeRadians * 180) / Math.PI,
+			elevationMeters: request.elevationMeters,
+			worldAnchorId: request.settlementId ?? 'surface',
+			biomeName: request.biomeName
+		};
+		this.travelPlan = createTravelPlan(origin, destination, request.totalDistanceKm ?? 0);
+		this.status = 'world-map';
+		this.emitSnapshot();
+	}
+
 	closeWorldMap(): void {
-		if (this.status !== 'world-map') return;
+		if (this.status !== 'world-map' && this.status !== 'globe') return;
 		this.status = 'playing';
 		this.pointerLock.request();
 		this.emitSnapshot();
 	}
 
 	async travelToPlanet(request: PlanetTravelRequest): Promise<void> {
-		if (this.travelling || this.status !== 'world-map') return;
+		if (this.travelling || (this.status !== 'world-map' && this.status !== 'globe')) return;
 		this.travelling = true;
 		this.status = 'travelling';
 		this.error = null;
@@ -712,7 +739,7 @@ export class GameEngine {
 			biomeName: request.biomeName
 		};
 		this.travelPlan = createTravelPlan(origin, destinationLocation, request.totalDistanceKm ?? 0);
-		this.travelPlan.status = 'travelling';
+		this.travelPlan.status = 'active';
 		try {
 			await this.persistence.save(true);
 			const coordinateSystem = new PlanetCoordinateSystem();
@@ -740,7 +767,7 @@ export class GameEngine {
 					this.travelPlan.travelledDistanceKm = this.travelPlan.totalDistanceKm;
 					this.travelPlan.remainingDistanceKm = 0;
 					this.travelPlan.progress = 1;
-					this.travelPlan.status = 'arrived';
+					this.travelPlan.status = 'completed';
 				}
 				this.status = 'playing';
 				this.message = `Travelled to ${request.countryName ?? next.region.ecology.zoneName}`;
@@ -755,7 +782,7 @@ export class GameEngine {
 			this.world = previousWorld;
 			this.status = 'world-map';
 			this.error = cause instanceof Error ? cause.message : 'Unable to travel to that destination.';
-			if (this.travelPlan) this.travelPlan.status = 'failed';
+			if (this.travelPlan) this.travelPlan.status = 'blocked';
 			this.emitSnapshot();
 			throw cause;
 		} finally {
@@ -826,6 +853,12 @@ export class GameEngine {
 		persistence.setLocalWater(this.localWater);
 		persistence.setHumanCondition(this.human);
 		persistence.setUrbanElevator(this.urbanElevator);
+		persistence.setRoutePlan({
+			get: () => this.travelPlan,
+			restore: (plan) => {
+				this.travelPlan = plan ?? null;
+			}
+		});
 		persistence.setVegetationRemovals(this.vegetationRemovals);
 		if (session instanceof PlanetWorldSession) persistence.setPlanetSurface(session.session);
 		return persistence;
