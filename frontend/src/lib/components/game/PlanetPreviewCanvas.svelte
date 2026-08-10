@@ -35,18 +35,22 @@
 	import PlanetTravelHud from './PlanetTravelHud.svelte';
 
 	interface Props {
+		mode?: 'onboarding' | 'navigation';
 		currentLocation?: GeographicLocationSnapshot | null;
 		travelling?: boolean;
 		travelError?: string | null;
 		onClose?: () => void;
 		onTravel?: (destination: PlanetTravelRequest) => void | Promise<void>;
+		onSelection?: (destination: PlanetTravelRequest | null) => void;
 	}
 	let {
+		mode = 'navigation',
 		currentLocation = null,
 		travelling = false,
 		travelError = null,
 		onClose,
-		onTravel
+		onTravel,
+		onSelection
 	}: Props = $props();
 	let canvas = $state<HTMLCanvasElement | null>(null);
 	let destination = $state<PlanetSurfaceDestination | null>(null);
@@ -74,6 +78,7 @@
 		renderer.outputColorSpace = SRGBColorSpace;
 		const camera = new PerspectiveCamera(45, 1, 0.1, 5000);
 		const planet = new PlanetRenderer(scene);
+		planet.setDebugVisible(false);
 		const destinationMarker = new PlanetDestinationMarker(
 			planet.definition,
 			planet.coordinateSystem
@@ -109,8 +114,12 @@
 		let frame = 0;
 		let request = 0;
 		const resize = () => {
-			const w = Math.max(1, canvas!.clientWidth),
-				h = Math.max(1, canvas!.clientHeight);
+			const bounds = canvas!.getBoundingClientRect();
+			const w = bounds.width,
+				h = bounds.height;
+			// The onboarding stage can be laid out after mount. Never lock the
+			// renderer to a synthetic 1×1 buffer when the first measurement is zero.
+			if (w <= 0 || h <= 0) return;
 			renderer.setSize(w, h, false);
 			camera.aspect = w / h;
 			camera.updateProjectionMatrix();
@@ -141,6 +150,22 @@
 				distanceKm =
 					currentLocation && settlement ? greatCircleDistanceKm(currentLocation, settlement) : null;
 				message = destination.status === 'ocean' ? 'Ocean travel is not available yet.' : null;
+				if (mode === 'onboarding') {
+					onSelection?.(
+						destination.status === 'land'
+							? {
+									coordinate: destination.coordinate,
+									elevationMeters: destination.sample!.elevationMeters,
+									countryId: details.country?.id ?? null,
+									countryName: details.country?.name ?? null,
+									biomeId: details.biome,
+									biomeName: details.biomeLabel,
+									settlementId: settlement?.id ?? null,
+									settlementName: settlement?.name ?? null
+								}
+							: null
+					);
+				}
 			} catch {
 				if (id === request) {
 					message = 'Unable to read this destination.';
@@ -181,7 +206,7 @@
 				y = e.clientY - previous.y;
 			previous.set(e.clientX, e.clientY);
 			travel += Math.abs(x) + Math.abs(y);
-			orbitYaw += x * 0.005;
+			orbitYaw -= x * 0.005;
 			orbitPolar = Math.max(0.08, Math.min(Math.PI - 0.08, orbitPolar + y * 0.005));
 		};
 		const up = (e: PointerEvent) => {
@@ -196,8 +221,8 @@
 		};
 		const key = (e: KeyboardEvent) => {
 			if (e.repeat) return;
-			if (e.code === 'Enter') void confirm();
-			if (e.code === 'Escape') onClose?.();
+			if (mode === 'navigation' && e.code === 'Enter') void confirm();
+			if (mode === 'navigation' && e.code === 'Escape') onClose?.();
 		};
 		const render = () => {
 			camera.position.setFromSphericalCoords(distance, orbitPolar, orbitYaw);
@@ -244,28 +269,35 @@
 		aria-label="Orelunza world map"
 		data-testid="planet-preview-canvas"
 	></canvas>
-	<section
-		class="pointer-events-none absolute top-4 left-4 max-w-sm rounded-xl border border-white/10 bg-black/55 p-4 text-white backdrop-blur-md"
-	>
-		<p class="m-0 text-xs font-semibold tracking-[.25em] text-sky-300 uppercase">Orelunza Earth</p>
-		<h1 class="mt-1 text-xl font-semibold">World map</h1>
-		<p class="mb-0 text-sm text-white/65">
-			Click land to choose a destination. Drag to rotate, scroll to zoom.
-		</p>
-		{#if currentLocation}<p class="mt-2 mb-0 text-xs text-emerald-200">
-				You are here · {currentLocation.countryName ??
-					currentLocation.biomeName ??
-					'Planet surface'}
-			</p>{/if}
-		<button
-			type="button"
-			class="pointer-events-auto mt-3 rounded-md border border-white/15 px-3 py-1 text-sm hover:bg-white/10"
-			onclick={onClose}>Close · M</button
+	{#if mode === 'navigation'}<section
+			class="pointer-events-none absolute top-4 left-4 max-w-sm rounded-xl border border-white/10 bg-black/55 p-4 text-white backdrop-blur-md"
 		>
-	</section>
+			<p class="m-0 text-xs font-semibold tracking-[.25em] text-sky-300 uppercase">
+				Orelunza Earth
+			</p>
+			<h1 class="mt-1 text-xl font-semibold">World map</h1>
+			<p class="mb-0 text-sm text-white/65">
+				Click land to choose a destination. Drag to rotate, scroll to zoom.
+			</p>
+			{#if currentLocation}<p class="mt-2 mb-0 text-xs text-emerald-200">
+					You are here · {currentLocation.countryName ??
+						currentLocation.biomeName ??
+						'Planet surface'}
+				</p>{/if}
+			<button
+				type="button"
+				class="pointer-events-auto mt-3 rounded-md border border-white/15 px-3 py-1 text-sm hover:bg-white/10"
+				onclick={onClose}>Close · M</button
+			>
+		</section>{/if}
 	<div class="pointer-events-none absolute right-4 bottom-4">
-		<PlanetTravelHud {destination} {loading} {message} onEnter={confirm} />
-		{#if settlement}
+		{#if mode === 'navigation'}<PlanetTravelHud
+				{destination}
+				{loading}
+				{message}
+				onEnter={confirm}
+			/>{/if}
+		{#if mode === 'navigation' && settlement}
 			<section
 				class="pointer-events-auto mt-2 rounded-xl border border-white/10 bg-black/65 p-4 text-white backdrop-blur-md"
 			>

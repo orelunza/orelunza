@@ -6,6 +6,7 @@
 	import CharacterColorPicker from '$lib/components/game/CharacterColorPicker.svelte';
 	import CharacterPreview from '$lib/components/game/CharacterPreview.svelte';
 	import PlanetPreviewCanvas from '$lib/components/game/PlanetPreviewCanvas.svelte';
+	import MapPinIcon from '$lib/components/icons/MapPinIcon.svelte';
 	import LoadingWorld from '$lib/components/game/LoadingWorld.svelte';
 	import {
 		DEFAULT_CHARACTER_APPEARANCE,
@@ -55,7 +56,11 @@
 		}
 	}
 
-	function chooseHome(destination: PlanetTravelRequest): void {
+	function chooseHome(destination: PlanetTravelRequest | null): void {
+		if (!destination) {
+			home = null;
+			return;
+		}
 		home = {
 			countryId: destination.countryId ?? 'unknown',
 			countryName: destination.countryName ?? 'Unknown',
@@ -67,7 +72,7 @@
 			worldAnchorId: destination.settlementId ?? 'entry',
 			biomeName: destination.biomeName
 		};
-		step = 3;
+		step = 2;
 	}
 
 	onMount(() => {
@@ -82,17 +87,50 @@
 {#if loading}
 	<LoadingWorld message="Opening character creator" detail="Preparing your appearance options." />
 {:else if step === 2}
-	<main class="relative h-dvh w-screen overflow-hidden">
-		<PlanetPreviewCanvas onClose={() => (step = 1)} onTravel={chooseHome} />
-		<div
-			class="pointer-events-none absolute top-4 right-4 z-10 max-w-xs rounded-md bg-black/65 p-4 text-white"
-		>
-			<p class="m-0 text-xs font-semibold tracking-[.2em] text-sky-200 uppercase">Step 2 of 3</p>
-			<h1 class="mt-2 text-xl font-semibold">Choose where to begin life</h1>
-			<p class="mb-0 text-sm text-white/65">
-				Choose land on Earth. Your country and starting settlement will be confirmed next.
+	<main class="relative flex min-h-dvh w-screen flex-col overflow-hidden bg-[#080d12] text-white">
+		<header class="z-10 px-5 pt-[max(1rem,env(safe-area-inset-top))] text-center">
+			<p class="m-0 text-xs font-medium text-white/50">
+				Create character <span class="px-1 text-white/25">•</span>
+				<strong class="text-amber-200">Choose home</strong>
+				<span class="px-1 text-white/25">•</span> Confirm
 			</p>
+			<h1 class="mt-4 mb-1 text-2xl font-semibold">Where do you want to begin your life?</h1>
+			<p class="m-0 text-sm text-white/60">Select a country on the Earth.</p>
+		</header>
+		<div
+			class="relative mx-auto h-[clamp(20rem,62vh,38rem)] w-[min(92vw,62vh,38rem)] max-w-5xl shrink-0"
+		>
+			<PlanetPreviewCanvas mode="onboarding" onSelection={chooseHome} />
 		</div>
+		<section class="mx-auto w-full max-w-xl px-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+			<div class="rounded-xl border border-white/10 bg-[#141b22]/95 p-4 shadow-xl">
+				{#if home}<p class="m-0 text-xs font-semibold tracking-[.18em] text-amber-200 uppercase">
+						Selected home
+					</p>
+					<p class="mt-2 mb-0 flex items-center gap-2 text-lg font-semibold">
+						<span class="text-amber-200"><MapPinIcon /></span>{home.countryName}
+					</p>
+					<p class="m-0 text-sm text-white/60">
+						Starting location · {home.settlementName.endsWith('Entry Settlement')
+							? 'Central entry area'
+							: home.settlementName}
+					</p>{:else}<p class="m-0 text-sm text-white/65">
+						Tap anywhere on land to select a country.
+					</p>{/if}
+				<div class="mt-4 flex justify-between gap-3">
+					<button
+						type="button"
+						class="min-h-11 rounded-md px-4 text-sm hover:bg-white/10"
+						onclick={() => (step = 1)}>← Back</button
+					><button
+						type="button"
+						class="min-h-11 rounded-md bg-[#f97316] px-5 text-sm font-semibold text-black disabled:opacity-40"
+						disabled={!home}
+						onclick={() => (step = 3)}>Continue →</button
+					>
+				</div>
+			</div>
+		</section>
 	</main>
 {:else if step === 3 && home}
 	<main class="grid h-dvh place-items-center bg-[#131619] p-4 text-white">
