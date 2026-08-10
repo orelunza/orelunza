@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { onMount, tick } from 'svelte';
+	import { onMount } from 'svelte';
 
 	import BuildCatalogOverlay from '$lib/components/game/BuildCatalogOverlay.svelte';
 	import CalendarPanel from '$lib/components/game/CalendarPanel.svelte';
@@ -11,6 +11,7 @@
 	import LoadingWorld from '$lib/components/game/LoadingWorld.svelte';
 	import PauseMenu from '$lib/components/game/PauseMenu.svelte';
 	import PlanetPreviewCanvas from '$lib/components/game/PlanetPreviewCanvas.svelte';
+	import type { PlanetTravelRequest } from '$lib/game/planet/surface/PlanetTravelRequest';
 	import { ApiError } from '$lib/api/ApiError';
 	import type { CharacterAppearanceV1 } from '$lib/game/character/CharacterAppearance';
 	import { CharacterStore } from '$lib/game/character/CharacterStore';
@@ -34,6 +35,15 @@
 	type GameCommand =
 		| {
 				type: SimpleGameCommand;
+				token: number;
+		  }
+		| {
+				type: 'open-world-map' | 'close-world-map';
+				token: number;
+		  }
+		| {
+				type: 'travel-to-planet';
+				destination: PlanetTravelRequest;
 				token: number;
 		  }
 		| {
@@ -68,7 +78,6 @@
 	let command = $state<GameCommand | undefined>(undefined);
 	let commandToken = 0;
 	let controller: AbortController | null = null;
-	let worldView = $state<'surface' | 'globe'>('surface');
 
 	const characterStore = new CharacterStore();
 
@@ -156,27 +165,24 @@
 		}
 	}
 
-	async function openWorldGlobe(): Promise<void> {
-		if (worldView === 'globe' || loading || !appearance) {
+	function openWorldGlobe(): void {
+		if (snapshot?.status === 'world-map' || loading || !appearance) {
 			return;
 		}
 
-		// Commands use a single reactive channel, so let save reach the engine before pause.
-		sendCommand('save');
-		await tick();
-		sendCommand('pause');
-		await tick();
-		worldView = 'globe';
+		command = { type: 'open-world-map', token: ++commandToken };
 	}
 
-	async function closeWorldGlobe(): Promise<void> {
-		if (worldView !== 'globe') {
+	function closeWorldGlobe(): void {
+		if (snapshot?.status !== 'world-map') {
 			return;
 		}
 
-		worldView = 'surface';
-		await tick();
-		sendCommand('resume');
+		command = { type: 'close-world-map', token: ++commandToken };
+	}
+
+	function travelTo(destination: PlanetTravelRequest): void {
+		command = { type: 'travel-to-planet', destination, token: ++commandToken };
 	}
 
 	async function logout(): Promise<void> {
@@ -193,7 +199,7 @@
 				return;
 			}
 
-			if (worldView === 'globe') {
+			if (snapshot?.status === 'world-map') {
 				void closeWorldGlobe();
 			} else if (
 				(snapshot?.status === 'playing' || snapshot?.status === 'paused') &&
@@ -423,12 +429,16 @@
 		{/if}
 	{/if}
 
-	{#if appearance && worldView === 'globe'}
+	{#if appearance && (snapshot?.status === 'world-map' || snapshot?.status === 'travelling')}
 		<div class="absolute inset-0 z-[70]" data-testid="world-globe-mode">
 			<PlanetPreviewCanvas
-				onExit={() => {
+				currentLocation={snapshot.geographicLocation}
+				travelling={snapshot.status === 'travelling'}
+				travelError={snapshot.error}
+				onClose={() => {
 					void closeWorldGlobe();
 				}}
+				onTravel={travelTo}
 			/>
 		</div>
 	{/if}

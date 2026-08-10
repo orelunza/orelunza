@@ -43,7 +43,18 @@ import type { WorldDayAnnouncement } from './environment/time/WorldDate';
 import { BlockRegistry } from './world/BlockRegistry';
 import { VegetationRemovalState } from './vegetation/VegetationRemovalState';
 import { ChunkStreamingSystem } from './world/ChunkStreamingSystem';
-import { createStarterWorld } from './world/WorldGenerator';
+import {
+	FlatWorldSession,
+	PlanetWorldSession,
+	type ActiveWorldSession
+} from './world/ActiveWorldSession';
+import { PlanetCoordinateSystem } from './planet/PlanetCoordinateSystem';
+import { PlanetGeographyQuery } from './geography/PlanetGeographyQuery';
+import { CountryResolver } from './geography/countries/CountryResolver';
+import { PlanetEcologyQuery } from './geography/ecology/PlanetEcologyQuery';
+import { PlanetSurfaceContextResolver } from './geography/ecology/PlanetSurfaceContextResolver';
+import { PlanetSurfaceSpawnResolver } from './planet/surface/PlanetSurfaceSpawnResolver';
+import type { PlanetTravelRequest } from './planet/surface/PlanetTravelRequest';
 import { LocalWaterSystem, type LocalWaterDebugApi } from './world/water';
 import { CivilizationInteractionSystem } from './world/civilization/CivilizationInteractionSystem';
 import { nextWardrobeOutfit } from './world/civilization/OutfitWardrobe';
@@ -70,11 +81,12 @@ const BACKEND_SYNC_INTERVAL_MS = 5000;
 export class GameEngine {
 	private readonly renderer: GameRenderer;
 	private readonly sky: Sky;
-	private readonly world;
-	private readonly localWater: LocalWaterSystem;
+	private activeSession: ActiveWorldSession;
+	private world;
+	private localWater: LocalWaterSystem;
 	private readonly human: HumanConditionSystem;
 	private readonly chunkStreaming: ChunkStreamingSystem;
-	private readonly player: PlayerController;
+	private player: PlayerController;
 	private readonly keyboard: KeyboardInput;
 	private readonly mouse: MouseInput;
 	private readonly buildCursor = new BuildCursor();
@@ -83,16 +95,16 @@ export class GameEngine {
 	private readonly hotbar = new Hotbar();
 	private readonly vegetationRemovals = new VegetationRemovalState();
 	private readonly raycaster: CreationRaycaster;
-	private readonly placementSystem: BlockPlacementSystem;
-	private readonly civilizationInteractions: CivilizationInteractionSystem;
+	private placementSystem: BlockPlacementSystem;
+	private civilizationInteractions: CivilizationInteractionSystem;
 	private readonly civilizationRadioAudio = new CivilizationRadioAudio();
-	private readonly urbanPower: UrbanPowerSystem;
-	private readonly urbanElevator: UrbanElevatorSystem;
+	private urbanPower: UrbanPowerSystem;
+	private urbanElevator: UrbanElevatorSystem;
 	private elevatorPanelOpen = false;
-	private readonly breakingSystem: BlockBreakingSystem;
-	private readonly removalSystem: CreationRemovalSystem;
+	private breakingSystem: BlockBreakingSystem;
+	private removalSystem: CreationRemovalSystem;
 	private readonly loop: GameLoop;
-	private readonly persistence: GamePersistence;
+	private persistence: GamePersistence;
 	private readonly avatar: PlayerAvatar;
 	private readonly worldSync = new WorldSyncService();
 	private readonly resizeObserver: ResizeObserver;
@@ -121,6 +133,18 @@ export class GameEngine {
 	private lastWorldRebuildAt = Number.NEGATIVE_INFINITY;
 	private startPromise: Promise<void> | null = null;
 	private destroyed = false;
+	private travelling = false;
+	private readonly planetSessions = new Map<string, PlanetWorldSession>();
+	private currentGeographicLocation: import('./game-types').GeographicLocationSnapshot | null =
+		null;
+	private lastMiniMapAt = Number.NEGATIVE_INFINITY;
+	private miniMap: import('./game-types').MiniMapSnapshot = {
+		size: 9,
+		cells: [],
+		playerYaw: 0,
+		northRadians: 0,
+		zoneName: 'Loading'
+	};
 	private mobileLimited = false;
 	private buildMode = false;
 	private selectedBuildBlock: BlockType | null = null;
@@ -208,7 +232,8 @@ export class GameEngine {
 	};
 
 	constructor(private readonly options: GameEngineOptions) {
-		this.world = createStarterWorld(options.seed || STARTER_WORLD_SEED);
+		this.activeSession = new FlatWorldSession(options.seed || STARTER_WORLD_SEED);
+		this.world = this.activeSession.world;
 		this.chunkStreaming = new ChunkStreamingSystem({
 			visibleRadius: 2,
 			retainRadius: 3,
@@ -632,6 +657,156 @@ export class GameEngine {
 		return true;
 	}
 
+	openWorldMap(): void {
+		if (this.status !== 'playing' && this.status !== 'paused') return;
+		this.status = 'world-map';
+		this.pointerLock.exit();
+		this.emitSnapshot();
+	}
+
+	closeWorldMap(): void {
+		if (this.status !== 'world-map') return;
+		this.status = 'playing';
+		this.pointerLock.request();
+		this.emitSnapshot();
+	}
+
+	async travelToPlanet(request: PlanetTravelRequest): Promise<void> {
+		if (this.travelling || this.status !== 'world-map') return;
+		this.travelling = true;
+		this.status = 'travelling';
+		this.error = null;
+		this.pointerLock.exit();
+		this.emitSnapshot();
+		const previousSession = this.activeSession;
+		const previousWorld = this.world;
+		try {
+			await this.persistence.save(true);
+			const coordinateSystem = new PlanetCoordinateSystem();
+			const geography = new PlanetGeographyQuery();
+			const countries = new CountryResolver();
+			const ecology = new PlanetEcologyQuery();
+			try {
+				const resolver = new PlanetSurfaceSpawnResolver(
+					coordinateSystem,
+					geography,
+					new PlanetSurfaceContextResolver(countries, ecology)
+				);
+				const prepared = await resolver.resolve({
+					...request.coordinate,
+					altitudeMeters: request.elevationMeters
+				});
+				let next = this.planetSessions.get(prepared.coordinates.anchor.id);
+				if (!next) {
+					next = new PlanetWorldSession(prepared, request);
+					this.planetSessions.set(prepared.coordinates.anchor.id, next);
+				}
+				await this.activateWorldSession(next, next.region.spawnPosition);
+				this.currentGeographicLocation = this.geographicLocationFor(next);
+				this.status = 'playing';
+				this.message = `Travelled to ${request.countryName ?? next.region.ecology.zoneName}`;
+				this.emitSnapshot();
+			} finally {
+				geography.dispose();
+				countries.dispose();
+				ecology.dispose();
+			}
+		} catch (cause) {
+			this.activeSession = previousSession;
+			this.world = previousWorld;
+			this.status = 'world-map';
+			this.error = cause instanceof Error ? cause.message : 'Unable to travel to that destination.';
+			this.emitSnapshot();
+			throw cause;
+		} finally {
+			this.travelling = false;
+		}
+	}
+
+	private async activateWorldSession(session: ActiveWorldSession, spawn: Vector3): Promise<void> {
+		this.activeSession = session;
+		this.world = session.world;
+		const bounds = this.options.canvas.getBoundingClientRect();
+		const previous = this.player.state;
+		this.player = new PlayerController(
+			this.world,
+			this.options.playerId,
+			this.options.worldId,
+			spawn,
+			Math.max(1, bounds.width) / Math.max(1, bounds.height)
+		);
+		this.player.setTransform(spawn, previous.yaw, previous.pitch);
+		this.localWater = new LocalWaterSystem(this.world);
+		this.civilizationInteractions = new CivilizationInteractionSystem(this.world, this.inventory);
+		this.urbanPower = new UrbanPowerSystem(this.world);
+		this.urbanElevator = new UrbanElevatorSystem(this.world, this.urbanPower);
+		this.placementSystem = new BlockPlacementSystem(
+			this.world,
+			this.inventory,
+			this.player.state,
+			this.player.physics.collider,
+			(position) => this.markBlockChanged(position)
+		);
+		this.breakingSystem = new BlockBreakingSystem(this.world, this.inventory, (position) =>
+			this.markBlockChanged(position)
+		);
+		this.removalSystem = new CreationRemovalSystem(
+			this.world,
+			this.breakingSystem,
+			this.renderer,
+			() => {
+				this.diagnostics.chunkRefreshes += 1;
+				this.persistence.markDirty();
+			}
+		);
+		this.persistence = this.createPersistence(session);
+		await this.persistence.load();
+		this.world.loadChunk(worldToChunk(spawn));
+		this.chunkStreaming.synchronizeLoaded(this.world.getLoadedChunks());
+		this.renderer.rebuildWorld(this.world);
+		this.needsWorldRebuild = false;
+	}
+
+	private createPersistence(session: ActiveWorldSession): GamePersistence {
+		const suffix =
+			session instanceof PlanetWorldSession ? `:${session.region.coordinates.anchor.id}` : '';
+		const persistence = new GamePersistence(
+			`${this.options.worldId}${suffix}`,
+			this.options.seed,
+			this.world,
+			this.player,
+			this.inventory,
+			this.options.appearance,
+			(status) => {
+				this.saveStatus = status;
+				this.emitSnapshot();
+			}
+		);
+		persistence.setEnvironment(this.sky);
+		persistence.setLocalWater(this.localWater);
+		persistence.setHumanCondition(this.human);
+		persistence.setUrbanElevator(this.urbanElevator);
+		persistence.setVegetationRemovals(this.vegetationRemovals);
+		if (session instanceof PlanetWorldSession) persistence.setPlanetSurface(session.session);
+		return persistence;
+	}
+
+	private geographicLocationFor(
+		session: PlanetWorldSession
+	): import('./game-types').GeographicLocationSnapshot {
+		const position = this.player.state.position;
+		const coordinate = session.session.updatePlayerLocalPosition(
+			new Vector3(position.x, position.y, position.z)
+		).geodetic;
+		return {
+			latitude: (coordinate.latitudeRadians * 180) / Math.PI,
+			longitude: (coordinate.longitudeRadians * 180) / Math.PI,
+			elevationMeters: coordinate.altitudeMeters,
+			countryName: session.request.countryName ?? session.region.ecology.country?.name ?? null,
+			biomeName: session.request.biomeName ?? session.region.ecology.biomeLabel
+		};
+	}
+
 	destroy(): void {
 		if (this.destroyed) {
 			return;
@@ -664,6 +839,8 @@ export class GameEngine {
 			delete debugGlobal.__ORELUNZA_HUMAN__;
 		}
 		this.localWater.dispose();
+		for (const session of this.planetSessions.values()) session.dispose();
+		this.activeSession.dispose();
 		this.civilizationRadioAudio.dispose();
 		this.sky.dispose();
 		this.renderer.dispose();
@@ -885,6 +1062,10 @@ export class GameEngine {
 		}
 
 		this.sky.update(this.player.camera.camera.position, deltaSeconds);
+		if (this.activeSession instanceof PlanetWorldSession) {
+			this.currentGeographicLocation = this.geographicLocationFor(this.activeSession);
+		}
+		this.updateMiniMap(frameStartedAt);
 		this.updateWorldDayAnnouncement(frameStartedAt);
 		this.renderer.updateSurfaceWeather(this.sky.surfaceWeather);
 
@@ -1680,6 +1861,10 @@ export class GameEngine {
 				this.player.state.position.x,
 				this.player.state.position.z
 			),
+			geographicLocation: this.currentGeographicLocation
+				? { ...this.currentGeographicLocation }
+				: null,
+			miniMap: { ...this.miniMap, cells: this.miniMap.cells.map((cell) => ({ ...cell })) },
 			environment: {
 				time: { ...this.sky.worldTime },
 				weather: this.sky.weather,
@@ -1739,6 +1924,28 @@ export class GameEngine {
 		this.diagnostics.triangles = info.render.triangles;
 		this.diagnostics.threeObjects = countObjects(this.renderer.scene);
 		this.diagnostics.activeLoops = this.loop.isRunning ? 1 : 0;
+	}
+
+	private updateMiniMap(now: number): void {
+		if (now - this.lastMiniMapAt < 500) return;
+		this.lastMiniMapAt = now;
+		const size = 9;
+		const cells: import('./game-types').MiniMapCell[] = [];
+		const centre = this.player.state.position;
+		for (let z = 0; z < size; z += 1)
+			for (let x = 0; x < size; x += 1) {
+				const wx = Math.floor(centre.x + (x - (size - 1) / 2) * 8);
+				const wz = Math.floor(centre.z + (z - (size - 1) / 2) * 8);
+				const height = this.world.terrainGenerator.heightAt(wx, wz);
+				cells.push({ x, z, terrain: height <= 1 ? 'water' : 'land' });
+			}
+		this.miniMap = {
+			size,
+			cells,
+			playerYaw: this.player.state.bodyYaw,
+			northRadians: 0,
+			zoneName: this.world.terrainGenerator.zoneAt(centre.x, centre.z)
+		};
 	}
 }
 

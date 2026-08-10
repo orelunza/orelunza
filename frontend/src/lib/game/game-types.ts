@@ -23,12 +23,36 @@ export type GameStatus =
 	| 'calendar'
 	| 'elevator'
 	| 'build-catalog'
+	| 'world-map'
+	| 'travelling'
 	| 'error'
 	| 'destroyed';
 
 export type SaveStatus = 'idle' | 'dirty' | 'saving' | 'saved' | 'error';
 
 export type WorldGeometry = 'local-flat' | 'planet-earth';
+
+export interface GeographicLocationSnapshot {
+	latitude: number;
+	longitude: number;
+	elevationMeters: number;
+	countryName?: string | null;
+	biomeName?: string | null;
+}
+
+export interface MiniMapCell {
+	x: number;
+	z: number;
+	terrain: 'land' | 'water';
+}
+
+export interface MiniMapSnapshot {
+	size: number;
+	cells: MiniMapCell[];
+	playerYaw: number;
+	northRadians: number;
+	zoneName: string;
+}
 
 export interface PlayerTransform {
 	playerId: string;
@@ -74,6 +98,8 @@ export interface GameSnapshot {
 	saveStatus: SaveStatus;
 	regionName: string;
 	zoneName: string;
+	geographicLocation: GeographicLocationSnapshot | null;
+	miniMap: MiniMapSnapshot;
 	environment: WorldEnvironmentSnapshot;
 	human: HumanConditionSnapshot;
 	urban: UrbanSystemsSnapshot;

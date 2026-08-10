@@ -4,8 +4,18 @@
 	import { GameEngine } from '$lib/game/GameEngine';
 	import type { GameEngineOptions, GameSnapshot } from '$lib/game/game-types';
 	import type { BlockType } from '$lib/game/world/voxel-types';
+	import type { PlanetTravelRequest } from '$lib/game/planet/surface/PlanetTravelRequest';
 
 	type GameCommand =
+		| {
+				type: 'open-world-map' | 'close-world-map';
+				token: number;
+		  }
+		| {
+				type: 'travel-to-planet';
+				destination: PlanetTravelRequest;
+				token: number;
+		  }
 		| {
 				type:
 					| 'pause'
@@ -105,6 +115,15 @@
 		switch (command.type) {
 			case 'pause':
 				engine.pause();
+				break;
+			case 'open-world-map':
+				engine.openWorldMap();
+				break;
+			case 'close-world-map':
+				engine.closeWorldMap();
+				break;
+			case 'travel-to-planet':
+				void engine.travelToPlanet(command.destination);
 				break;
 
 			case 'resume':

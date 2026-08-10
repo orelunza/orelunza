@@ -6,6 +6,7 @@
 	import HumanStatusHud from './HumanStatusHud.svelte';
 	import HumanConditionOverlay from './HumanConditionOverlay.svelte';
 	import ElevatorPanel from './ElevatorPanel.svelte';
+	import WorldMiniMap from './WorldMiniMap.svelte';
 
 	interface Props {
 		snapshot: GameSnapshot;
@@ -108,14 +109,7 @@
 
 	<div class="pointer-events-auto absolute top-3 right-3 flex items-center gap-2">
 		{#if snapshot.human.lifeState !== 'unconscious' && snapshot.human.lifeState !== 'dead'}
-			<button
-				type="button"
-				class="rounded-sm border border-white/10 bg-[#1a1e22]/76 px-3 py-2 text-xs backdrop-blur-md hover:bg-white/10"
-				aria-label="Open the world globe"
-				onclick={onWorldMap}
-			>
-				Globe · M
-			</button>
+			<WorldMiniMap snapshot={snapshot.miniMap} onOpen={onWorldMap} />
 		{/if}
 
 		<button
