@@ -86,9 +86,13 @@ const CIVIC_BUILDING_SPEC: BuildingSpec = {
  */
 export class CityGenerator {
 	generateForColumn(x: number, groundY: number, z: number): CityBlock[] {
-		const blocks: CityBlock[] = [];
 		const localX = x - CENTRAL_CITY_CENTER.x;
 		const localZ = z - CENTRAL_CITY_CENTER.z;
+		// Terrain generation invokes this once for every column in every chunk.
+		// The authored city is finite; avoid allocating an array and scanning all
+		// building rules for the overwhelming majority of wilderness columns.
+		if (!this.mayAffectColumn(localX, localZ)) return [];
+		const blocks: CityBlock[] = [];
 
 		this.addPublicGround(blocks, x, groundY, z, localX, localZ);
 		this.addCivicPlaza(blocks, x, groundY, z, localX, localZ);
@@ -104,6 +108,10 @@ export class CityGenerator {
 		this.addStreetFurniture(blocks, x, groundY, z, localX, localZ);
 
 		return blocks;
+	}
+
+	private mayAffectColumn(localX: number, localZ: number): boolean {
+		return localX >= -40 && localX <= 40 && localZ >= -44 && localZ <= 38;
 	}
 
 	isProtectedColumn(x: number, z: number): boolean {

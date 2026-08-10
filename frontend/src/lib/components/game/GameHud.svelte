@@ -85,6 +85,10 @@
 			<p class="m-0 font-sans text-xs font-semibold text-white">Performance</p>
 			<p class="m-0">FPS {snapshot.performance.fps}</p>
 			<p class="m-0">Frame {snapshot.performance.frameMs}ms</p>
+			<p class="m-0">
+				Frame p95 / max {snapshot.performance.frameP95Ms} / {snapshot.performance.frameMaxMs}ms
+			</p>
+			<p class="m-0">Long frames (&gt;33ms) {snapshot.performance.longFrames}</p>
 			<p class="m-0">Draw calls {snapshot.performance.drawCalls}</p>
 			<p class="m-0">Triangles {snapshot.performance.triangles}</p>
 			<p class="m-0">Chunks {snapshot.performance.chunksLoaded}</p>

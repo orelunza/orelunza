@@ -48,9 +48,19 @@ export class GameRenderer {
 	private readonly fixtures = new WorldFixtureRenderer(this.scene);
 	private readonly urbanElevator = new UrbanElevatorRenderer(this.scene);
 	private readonly meshesByChunk = new Map<string, BlockInstanceLookup[]>();
+	/** Mesh work is intentionally separate from world generation. */
+	private readonly pendingChunkRefreshes = new Map<string, ChunkCoordinate>();
 	private blockMeshes: BlockInstanceLookup[] = [];
 	private lastUrbanLodX = Number.POSITIVE_INFINITY;
 	private lastUrbanLodZ = Number.POSITIVE_INFINITY;
+	private pendingChunkWorkMs = 0;
+	private lastShadowUpdateAt = Number.NEGATIVE_INFINITY;
+	private shadowAnchorX = Number.POSITIVE_INFINITY;
+	private shadowAnchorZ = Number.POSITIVE_INFINITY;
+
+	get lastPendingChunkWorkMs(): number {
+		return this.pendingChunkWorkMs;
+	}
 
 	constructor(
 		readonly canvas: HTMLCanvasElement,
@@ -77,6 +87,11 @@ export class GameRenderer {
 		// quality profile; configure the type once here.
 		this.renderer.shadowMap.enabled = this.quality.shadows;
 		this.renderer.shadowMap.type = PCFSoftShadowMap;
+		// A camera yaw does not change the light-space contents. Three otherwise
+		// redraws the full directional shadow map on every render, which is an
+		// especially expensive duplicate pass for a static voxel world.
+		this.renderer.shadowMap.autoUpdate = false;
+		this.renderer.shadowMap.needsUpdate = this.quality.shadows;
 		this.tallGrass = new TallGrassRenderer(
 			this.scene,
 			this.quality,
@@ -153,13 +168,49 @@ export class GameRenderer {
 			if (unloadedKeys.has(key) || !world.hasChunk(chunk)) {
 				continue;
 			}
-
-			this.replaceChunk(world, chunk);
+			this.pendingChunkRefreshes.set(key, { ...chunk });
 		}
+	}
 
-		this.rebuildLookupCache();
-		this.lastUrbanLodX = Number.POSITIVE_INFINITY;
-		this.lastUrbanLodZ = Number.POSITIVE_INFINITY;
+	/**
+	 * Upload at most one chunk mesh per frame. `replaceChunk` includes visible
+	 * block discovery, instancing, foliage and fixtures, so checking a clock
+	 * after it completes cannot prevent the hitch it caused.
+	 */
+	processPendingChunkWork(
+		world: VoxelWorld,
+		timeBudgetMs = 2.5,
+		priorityChunk?: ChunkCoordinate
+	): boolean {
+		const startedAt = performance.now();
+		let changed = false;
+		const priorityKey = priorityChunk ? chunkKey(priorityChunk) : null;
+		const priority = priorityKey ? this.pendingChunkRefreshes.get(priorityKey) : undefined;
+		if (priority && priorityKey) {
+			this.pendingChunkRefreshes.delete(priorityKey);
+			if (world.hasChunk(priority)) {
+				this.replaceChunk(world, priority);
+				changed = true;
+			}
+		}
+		for (const [key, chunk] of this.pendingChunkRefreshes) {
+			if (changed) break;
+			this.pendingChunkRefreshes.delete(key);
+			if (world.hasChunk(chunk)) {
+				this.replaceChunk(world, chunk);
+				changed = true;
+			}
+			// One indivisible mesh build is the upper bound. The budget prevents a
+			// second one from being added to the same frame on fast hardware.
+			if (performance.now() - startedAt >= timeBudgetMs || changed) break;
+		}
+		if (changed) {
+			this.rebuildLookupCache();
+			this.lastUrbanLodX = Number.POSITIVE_INFINITY;
+			this.lastUrbanLodZ = Number.POSITIVE_INFINITY;
+		}
+		this.pendingChunkWorkMs = performance.now() - startedAt;
+		return changed;
 	}
 
 	/**
@@ -268,6 +319,19 @@ export class GameRenderer {
 		this.renderer.render(this.scene, camera);
 	}
 
+	/** Refresh light-space only as the player/light context moves, never for yaw. */
+	updateShadowMap(cameraPosition: Readonly<Vector3>): void {
+		if (!this.quality.shadows || !this.renderer.shadowMap.enabled) return;
+		const now = performance.now();
+		const dx = cameraPosition.x - this.shadowAnchorX;
+		const dz = cameraPosition.z - this.shadowAnchorZ;
+		if (now - this.lastShadowUpdateAt < 250 && dx * dx + dz * dz < 1) return;
+		this.lastShadowUpdateAt = now;
+		this.shadowAnchorX = cameraPosition.x;
+		this.shadowAnchorZ = cameraPosition.z;
+		this.renderer.shadowMap.needsUpdate = true;
+	}
+
 	dispose(): void {
 		this.clearChunkMeshes();
 		this.blockMeshes = [];
@@ -298,6 +362,7 @@ export class GameRenderer {
 
 	private removeChunkInternal(chunk: ChunkCoordinate): void {
 		const key = chunkKey(chunk);
+		this.pendingChunkRefreshes.delete(key);
 		const lookups = this.meshesByChunk.get(key);
 
 		this.tallGrass.removeChunk(chunk);
@@ -346,5 +411,6 @@ export class GameRenderer {
 		}
 
 		this.meshesByChunk.clear();
+		this.pendingChunkRefreshes.clear();
 	}
 }

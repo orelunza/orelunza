@@ -22,6 +22,7 @@ export interface ChunkStreamingSnapshot {
 	visibleRadius: number;
 	retainRadius: number;
 	ready: boolean;
+	prefetching: number;
 }
 
 export interface ChunkStreamingChanges {
@@ -49,6 +50,7 @@ export class ChunkStreamingSystem {
 	private readonly pendingLoadKeys = new Set<string>();
 	private pendingLoads: ChunkCoordinate[] = [];
 	private center: ChunkCoordinate | null = null;
+	private direction = { x: 0, z: 0 };
 	private disposed = false;
 	private lastUpdateChanges: ChunkStreamingChanges = emptyChanges();
 
@@ -133,6 +135,12 @@ export class ChunkStreamingSystem {
 		const unloaded: ChunkCoordinate[] = [];
 
 		if (!sameChunk(this.center, nextCenter)) {
+			if (this.center) {
+				this.direction = {
+					x: Math.sign(nextCenter.x - this.center.x),
+					z: Math.sign(nextCenter.z - this.center.z)
+				};
+			}
 			this.center = nextCenter;
 			this.rebuildLoadQueue();
 		}
@@ -211,7 +219,12 @@ export class ChunkStreamingSystem {
 			pendingLoads: this.pendingLoads.length,
 			visibleRadius: this.visibleRadius,
 			retainRadius: this.retainRadius,
-			ready: this.pendingLoads.length === 0
+			ready: this.pendingLoads.length === 0,
+			prefetching: this.center
+				? this.pendingLoads.filter(
+						(chunk) => !isInsideRadius(chunk, this.center!, this.visibleRadius)
+					).length
+				: 0
 		};
 	}
 
@@ -259,6 +272,19 @@ export class ChunkStreamingSystem {
 			}
 		}
 
+		// Keep a narrow, bounded strip ahead of travel warm. It is inside the
+		// existing retain radius, so this is prefetch rather than an expansion of
+		// the world's memory footprint.
+		if (this.direction.x || this.direction.z) {
+			const distance = this.visibleRadius + 1;
+			for (let offset = -this.visibleRadius; offset <= this.visibleRadius; offset += 1) {
+				this.enqueueLoad({
+					x: this.center.x + this.direction.x * distance + this.direction.z * offset,
+					z: this.center.z + this.direction.z * distance + this.direction.x * offset
+				});
+			}
+		}
+
 		this.sortLoadQueue();
 	}
 
@@ -280,8 +306,15 @@ export class ChunkStreamingSystem {
 		}
 
 		const center = this.center;
+		const direction = this.direction;
 
 		this.pendingLoads.sort((left, right) => {
+			const leftVisible = isInsideRadius(left, center, this.visibleRadius);
+			const rightVisible = isInsideRadius(right, center, this.visibleRadius);
+			if (leftVisible !== rightVisible) return leftVisible ? -1 : 1;
+			const leftForward = (left.x - center.x) * direction.x + (left.z - center.z) * direction.z;
+			const rightForward = (right.x - center.x) * direction.x + (right.z - center.z) * direction.z;
+			if (leftForward !== rightForward) return rightForward - leftForward;
 			const leftDistance = distanceSquared(left, center);
 			const rightDistance = distanceSquared(right, center);
 

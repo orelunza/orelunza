@@ -1,5 +1,7 @@
 export interface GameLoopHandlers {
 	update: (deltaSeconds: number) => void;
+	/** Runs once per animation frame, after fixed simulation and before render. */
+	background?: () => void;
 	render: () => void;
 }
 
@@ -56,6 +58,10 @@ export class GameLoop {
 			this.accumulator -= FIXED_STEP;
 		}
 
+		// Streaming must not run once for every catch-up simulation step. A long
+		// frame otherwise turns into several synchronous chunk jobs before the
+		// browser gets a chance to paint again.
+		this.handlers.background?.();
 		this.handlers.render();
 		this.frame = requestAnimationFrame(this.tick);
 	};

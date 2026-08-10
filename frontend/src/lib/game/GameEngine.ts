@@ -1,5 +1,6 @@
 import { Vector3 } from 'three';
 import { GameLoop } from './GameLoop';
+import { PerformanceMonitor } from './debug/PerformanceMonitor';
 import type {
 	GameDiagnosticsSnapshot,
 	GameEngineOptions,
@@ -107,6 +108,8 @@ export class GameEngine {
 	private breakingSystem: BlockBreakingSystem;
 	private removalSystem: CreationRemovalSystem;
 	private readonly loop: GameLoop;
+	private readonly performanceMonitor = new PerformanceMonitor();
+	private debugPerformance = false;
 	private persistence: GamePersistence;
 	private readonly avatar: PlayerAvatar;
 	private readonly worldSync = new WorldSyncService();
@@ -337,6 +340,7 @@ export class GameEngine {
 		);
 		this.loop = new GameLoop({
 			update: (delta) => this.update(delta),
+			background: () => this.processStreamingFrame(),
 			render: () => this.render()
 		});
 		this.resizeObserver = new ResizeObserver(() => this.resize());
@@ -958,6 +962,10 @@ export class GameEngine {
 				this.resume();
 			}
 		}
+		if (commands.debugPerformance && import.meta.env.DEV) {
+			this.debugPerformance = !this.debugPerformance;
+			this.emitSnapshot();
+		}
 
 		if (commands.calendar && this.human.canAct) {
 			if (this.status === 'calendar') {
@@ -1068,13 +1076,6 @@ export class GameEngine {
 			this.persistence.markDirty();
 		}
 		if (elevatorCarryingPlayer) this.player.updateCamera(deltaSeconds);
-
-		if (this.chunkStreaming.update(this.player.state.position)) {
-			const changes = this.chunkStreaming.lastChanges;
-
-			this.renderer.applyStreamingChanges(this.world, changes);
-			this.diagnostics.chunkRefreshes += changes.loaded.length + changes.unloaded.length;
-		}
 
 		// Full rebuilds are now reserved for rare global edits such as block
 		// placement/removal. Chunk streaming is rendered incrementally above.
@@ -1256,8 +1257,31 @@ export class GameEngine {
 		this.recordFrame(frameStartedAt);
 	}
 
+	/**
+	 * The only gameplay-critical background job. It deliberately runs once per
+	 * browser frame: ChunkStreamingSystem owns request priority/deduplication,
+	 * while GameRenderer spreads resulting mesh uploads over later frames.
+	 */
+	private processStreamingFrame(): void {
+		this.performanceMonitor.recordFrameStart();
+		const streamingStartedAt = performance.now();
+		if (this.chunkStreaming.update(this.player.state.position)) {
+			const changes = this.chunkStreaming.lastChanges;
+			this.renderer.applyStreamingChanges(this.world, changes);
+			this.diagnostics.chunkRefreshes += changes.loaded.length + changes.unloaded.length;
+		}
+		this.renderer.processPendingChunkWork(
+			this.world,
+			2.5,
+			worldToChunk(this.player.state.position)
+		);
+		const streamingMs = performance.now() - streamingStartedAt;
+		if (streamingMs > 0) this.performanceMonitor.recordChunkRebuild(streamingMs);
+	}
+
 	private render(): void {
 		const renderStartedAt = performance.now();
+		this.renderer.updateShadowMap(this.player.camera.camera.position);
 		this.renderer.render(this.player.camera.camera);
 		this.diagnostics.renderMs = performance.now() - renderStartedAt;
 	}
@@ -1990,7 +2014,11 @@ export class GameEngine {
 			error: this.error,
 			mobileLimited: this.mobileLimited,
 			diagnostics: { ...this.diagnostics },
-			avatar: { ...this.avatar.diagnostics.animation }
+			avatar: { ...this.avatar.diagnostics.animation },
+			debugPerformance: this.debugPerformance,
+			performance: this.debugPerformance
+				? this.performanceMonitor.snapshot(this.renderer.renderer, this.renderer.scene, this.world)
+				: null
 		};
 	}
 
