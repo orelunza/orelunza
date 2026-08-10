@@ -12,6 +12,7 @@
 	import PauseMenu from '$lib/components/game/PauseMenu.svelte';
 	import PlanetPreviewCanvas from '$lib/components/game/PlanetPreviewCanvas.svelte';
 	import type { PlanetTravelRequest } from '$lib/game/planet/surface/PlanetTravelRequest';
+	import type { WorldLocation } from '$lib/game/world/geography/WorldLocation';
 	import { ApiError } from '$lib/api/ApiError';
 	import type { CharacterAppearanceV1 } from '$lib/game/character/CharacterAppearance';
 	import { CharacterStore } from '$lib/game/character/CharacterStore';
@@ -75,6 +76,7 @@
 	let loadError = $state<ApiError | null>(null);
 	let snapshot = $state<GameSnapshot | null>(null);
 	let appearance = $state<CharacterAppearanceV1 | null>(null);
+	let homeLocation = $state<WorldLocation | null>(null);
 	let command = $state<GameCommand | undefined>(undefined);
 	let commandToken = 0;
 	let controller: AbortController | null = null;
@@ -149,6 +151,7 @@
 			}
 
 			appearance = character;
+			homeLocation = characterStore.loadHome(playerId);
 
 			const regions = await worldState.loadWorld(controller.signal).catch(() => []);
 
@@ -237,6 +240,7 @@
 			{regionName}
 			seed={STARTER_WORLD_SEED}
 			{appearance}
+			{homeLocation}
 			{command}
 			onSnapshot={(next) => {
 				snapshot = next;

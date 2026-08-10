@@ -8,4 +8,7 @@ export interface PlanetTravelRequest {
 	countryName?: string | null;
 	biomeId?: string | null;
 	biomeName?: string | null;
+	settlementId?: string | null;
+	settlementName?: string | null;
+	totalDistanceKm?: number;
 }

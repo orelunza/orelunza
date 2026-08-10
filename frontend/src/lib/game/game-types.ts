@@ -13,6 +13,7 @@ import type { WeatherKind } from './environment/weather/WeatherState';
 import type { WorldDayAnnouncement, WorldTimeSnapshot } from './environment/time/WorldDate';
 import type { HumanConditionSnapshot } from './human/HumanConditionState';
 import type { UrbanElevatorSnapshot } from './world/civilization/UrbanElevatorSystem';
+import type { WorldLocation } from './world/geography/WorldLocation';
 
 export type GameStatus =
 	| 'booting'
@@ -38,6 +39,8 @@ export interface GeographicLocationSnapshot {
 	elevationMeters: number;
 	countryName?: string | null;
 	biomeName?: string | null;
+	settlementId?: string | null;
+	settlementName?: string | null;
 }
 
 export interface MiniMapCell {
@@ -99,6 +102,7 @@ export interface GameSnapshot {
 	regionName: string;
 	zoneName: string;
 	geographicLocation: GeographicLocationSnapshot | null;
+	travel: import('./world/travel/TravelPlan').TravelPlan | null;
 	miniMap: MiniMapSnapshot;
 	environment: WorldEnvironmentSnapshot;
 	human: HumanConditionSnapshot;
@@ -129,6 +133,7 @@ export interface GameEngineOptions {
 	quality?: RenderQuality;
 	worldGeometry?: WorldGeometry;
 	appearance: CharacterAppearanceV1;
+	homeLocation?: WorldLocation | null;
 	onSnapshot?: (snapshot: GameSnapshot) => void;
 	onError?: (error: Error) => void;
 	onMove?: (position: WorldCoordinate, yaw: number, pitch: number) => void | Promise<void>;

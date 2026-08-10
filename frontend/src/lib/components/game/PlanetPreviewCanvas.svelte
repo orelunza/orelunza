@@ -27,6 +27,11 @@
 		type PlanetSurfaceDestination
 	} from '$lib/game/planet/surface/PlanetSurfaceDestination';
 	import type { PlanetTravelRequest } from '$lib/game/planet/surface/PlanetTravelRequest';
+	import {
+		settlementForCountry,
+		type SettlementAnchor
+	} from '$lib/game/world/geography/SettlementCatalog';
+	import { greatCircleDistanceKm } from '$lib/game/world/geography/GeographicDistance';
 	import PlanetTravelHud from './PlanetTravelHud.svelte';
 
 	interface Props {
@@ -47,6 +52,8 @@
 	let destination = $state<PlanetSurfaceDestination | null>(null);
 	let loading = $state(false);
 	let message = $state<string | null>(null);
+	let settlement = $state<SettlementAnchor | null>(null);
+	let distanceKm = $state<number | null>(null);
 	$effect(() => {
 		if (!travelling && travelError) {
 			loading = false;
@@ -130,6 +137,9 @@
 				const details = await context.resolve(coordinate, sample);
 				if (id !== request) return;
 				destination = resolveSurfaceDestination(coordinate, sample, 0.55, details);
+				settlement = details.country ? settlementForCountry(details.country) : null;
+				distanceKm =
+					currentLocation && settlement ? greatCircleDistanceKm(currentLocation, settlement) : null;
 				message = destination.status === 'ocean' ? 'Ocean travel is not available yet.' : null;
 			} catch {
 				if (id === request) {
@@ -149,7 +159,10 @@
 					countryId: destination.ecology?.country?.id ?? null,
 					countryName: destination.ecology?.country?.name ?? null,
 					biomeId: destination.ecology?.biome ?? null,
-					biomeName: destination.ecology?.biomeLabel ?? null
+					biomeName: destination.ecology?.biomeLabel ?? null,
+					settlementId: settlement?.id ?? null,
+					settlementName: settlement?.name ?? null,
+					totalDistanceKm: distanceKm ?? undefined
 				});
 			} catch (error) {
 				message = error instanceof Error ? error.message : 'Travel failed.';
@@ -252,5 +265,18 @@
 	</section>
 	<div class="pointer-events-none absolute right-4 bottom-4">
 		<PlanetTravelHud {destination} {loading} {message} onEnter={confirm} />
+		{#if settlement}
+			<section
+				class="pointer-events-auto mt-2 rounded-xl border border-white/10 bg-black/65 p-4 text-white backdrop-blur-md"
+			>
+				<p class="m-0 text-xs font-semibold tracking-[.2em] text-sky-200 uppercase">Destination</p>
+				<p class="mt-2 mb-0 text-lg font-semibold">{settlement.name}</p>
+				<p class="m-0 text-sm text-white/60">{settlement.countryName}</p>
+				{#if currentLocation && distanceKm !== null}<p class="mt-3 mb-0 text-sm">
+						From {currentLocation.settlementName ?? currentLocation.countryName ?? 'your location'} ·
+						<strong>{Math.round(distanceKm).toLocaleString()} km</strong>
+					</p>{/if}
+			</section>
+		{/if}
 	</div>
 </div>

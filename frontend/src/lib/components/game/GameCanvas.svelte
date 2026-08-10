@@ -68,6 +68,7 @@
 		regionName,
 		seed,
 		appearance,
+		homeLocation,
 		onSnapshot,
 		onError,
 		onMove,
@@ -92,6 +93,7 @@
 			regionName,
 			seed,
 			appearance,
+			homeLocation,
 			onSnapshot,
 			onError,
 			onMove

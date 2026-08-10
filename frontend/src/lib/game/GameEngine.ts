@@ -55,6 +55,9 @@ import { PlanetEcologyQuery } from './geography/ecology/PlanetEcologyQuery';
 import { PlanetSurfaceContextResolver } from './geography/ecology/PlanetSurfaceContextResolver';
 import { PlanetSurfaceSpawnResolver } from './planet/surface/PlanetSurfaceSpawnResolver';
 import type { PlanetTravelRequest } from './planet/surface/PlanetTravelRequest';
+import type { TravelPlan } from './world/travel/TravelPlan';
+import { createTravelPlan } from './world/travel/TravelPlan';
+import type { WorldLocation } from './world/geography/WorldLocation';
 import { LocalWaterSystem, type LocalWaterDebugApi } from './world/water';
 import { CivilizationInteractionSystem } from './world/civilization/CivilizationInteractionSystem';
 import { nextWardrobeOutfit } from './world/civilization/OutfitWardrobe';
@@ -137,6 +140,7 @@ export class GameEngine {
 	private readonly planetSessions = new Map<string, PlanetWorldSession>();
 	private currentGeographicLocation: import('./game-types').GeographicLocationSnapshot | null =
 		null;
+	private travelPlan: TravelPlan | null = null;
 	private lastMiniMapAt = Number.NEGATIVE_INFINITY;
 	private miniMap: import('./game-types').MiniMapSnapshot = {
 		size: 9,
@@ -381,6 +385,21 @@ export class GameEngine {
 			this.status = 'playing';
 			this.emitSnapshot();
 			this.loop.start();
+			if (this.options.homeLocation && this.activeSession instanceof FlatWorldSession) {
+				this.status = 'world-map';
+				await this.travelToPlanet({
+					coordinate: {
+						latitudeRadians: (this.options.homeLocation.latitude * Math.PI) / 180,
+						longitudeRadians: (this.options.homeLocation.longitude * Math.PI) / 180,
+						altitudeMeters: this.options.homeLocation.elevationMeters
+					},
+					elevationMeters: this.options.homeLocation.elevationMeters,
+					countryId: this.options.homeLocation.countryId,
+					countryName: this.options.homeLocation.countryName,
+					settlementId: this.options.homeLocation.settlementId,
+					settlementName: this.options.homeLocation.settlementName
+				});
+			}
 			this.diagnostics.activeLoops = this.loop.isRunning ? 1 : 0;
 			this.emitSnapshot();
 		} catch (error) {
@@ -680,6 +699,20 @@ export class GameEngine {
 		this.emitSnapshot();
 		const previousSession = this.activeSession;
 		const previousWorld = this.world;
+		const origin = this.worldLocation();
+		const destinationLocation: WorldLocation = {
+			countryId: request.countryId ?? 'unknown',
+			countryName: request.countryName ?? 'Unknown',
+			settlementId: request.settlementId ?? 'surface',
+			settlementName: request.settlementName ?? 'Destination',
+			latitude: (request.coordinate.latitudeRadians * 180) / Math.PI,
+			longitude: (request.coordinate.longitudeRadians * 180) / Math.PI,
+			elevationMeters: request.elevationMeters,
+			worldAnchorId: request.settlementId ?? 'surface',
+			biomeName: request.biomeName
+		};
+		this.travelPlan = createTravelPlan(origin, destinationLocation, request.totalDistanceKm ?? 0);
+		this.travelPlan.status = 'travelling';
 		try {
 			await this.persistence.save(true);
 			const coordinateSystem = new PlanetCoordinateSystem();
@@ -703,6 +736,12 @@ export class GameEngine {
 				}
 				await this.activateWorldSession(next, next.region.spawnPosition);
 				this.currentGeographicLocation = this.geographicLocationFor(next);
+				if (this.travelPlan) {
+					this.travelPlan.travelledDistanceKm = this.travelPlan.totalDistanceKm;
+					this.travelPlan.remainingDistanceKm = 0;
+					this.travelPlan.progress = 1;
+					this.travelPlan.status = 'arrived';
+				}
 				this.status = 'playing';
 				this.message = `Travelled to ${request.countryName ?? next.region.ecology.zoneName}`;
 				this.emitSnapshot();
@@ -716,6 +755,7 @@ export class GameEngine {
 			this.world = previousWorld;
 			this.status = 'world-map';
 			this.error = cause instanceof Error ? cause.message : 'Unable to travel to that destination.';
+			if (this.travelPlan) this.travelPlan.status = 'failed';
 			this.emitSnapshot();
 			throw cause;
 		} finally {
@@ -803,7 +843,24 @@ export class GameEngine {
 			longitude: (coordinate.longitudeRadians * 180) / Math.PI,
 			elevationMeters: coordinate.altitudeMeters,
 			countryName: session.request.countryName ?? session.region.ecology.country?.name ?? null,
-			biomeName: session.request.biomeName ?? session.region.ecology.biomeLabel
+			biomeName: session.request.biomeName ?? session.region.ecology.biomeLabel,
+			settlementId: session.request.settlementId ?? session.region.coordinates.anchor.id,
+			settlementName: session.request.settlementName ?? session.region.ecology.zoneName
+		};
+	}
+
+	private worldLocation(): WorldLocation {
+		const current = this.currentGeographicLocation;
+		return {
+			countryId: current?.countryName ?? 'local',
+			countryName: current?.countryName ?? this.options.regionName,
+			settlementId: current?.settlementId ?? 'local-flat',
+			settlementName: current?.settlementName ?? this.options.regionName,
+			latitude: current?.latitude ?? 0,
+			longitude: current?.longitude ?? 0,
+			elevationMeters: current?.elevationMeters ?? 0,
+			worldAnchorId: current?.settlementId ?? 'local-flat',
+			biomeName: current?.biomeName
 		};
 	}
 
@@ -1863,6 +1920,13 @@ export class GameEngine {
 			),
 			geographicLocation: this.currentGeographicLocation
 				? { ...this.currentGeographicLocation }
+				: null,
+			travel: this.travelPlan
+				? {
+						...this.travelPlan,
+						origin: { ...this.travelPlan.origin },
+						destination: { ...this.travelPlan.destination }
+					}
 				: null,
 			miniMap: { ...this.miniMap, cells: this.miniMap.cells.map((cell) => ({ ...cell })) },
 			environment: {

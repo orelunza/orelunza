@@ -5,6 +5,7 @@
 
 	import CharacterColorPicker from '$lib/components/game/CharacterColorPicker.svelte';
 	import CharacterPreview from '$lib/components/game/CharacterPreview.svelte';
+	import PlanetPreviewCanvas from '$lib/components/game/PlanetPreviewCanvas.svelte';
 	import LoadingWorld from '$lib/components/game/LoadingWorld.svelte';
 	import {
 		DEFAULT_CHARACTER_APPEARANCE,
@@ -12,6 +13,8 @@
 	} from '$lib/game/character/CharacterAppearance';
 	import { CharacterStore } from '$lib/game/character/CharacterStore';
 	import { sessionState } from '$lib/state/session.svelte';
+	import type { PlanetTravelRequest } from '$lib/game/planet/surface/PlanetTravelRequest';
+	import type { WorldLocation } from '$lib/game/world/geography/WorldLocation';
 
 	const store = new CharacterStore();
 	const colors = ['#b98565', '#8f6048', '#d1a17f', '#55372c', '#4f8f74', '#f97316', '#37485f'];
@@ -19,6 +22,8 @@
 	let loading = $state(false);
 	let saving = $state(false);
 	let appearance = $state<CharacterAppearanceV1>({ ...DEFAULT_CHARACTER_APPEARANCE });
+	let step = $state<1 | 2 | 3>(1);
+	let home = $state<WorldLocation | null>(null);
 
 	let playerId = $derived(sessionState.humanId || 'local-player');
 
@@ -34,17 +39,35 @@
 			...DEFAULT_CHARACTER_APPEARANCE,
 			displayName: sessionState.displayName || DEFAULT_CHARACTER_APPEARANCE.displayName
 		};
+		home = store.loadHome(playerId);
 	}
 
 	async function saveCharacter(): Promise<void> {
 		saving = true;
 
 		try {
+			if (!home) return;
 			await store.save(playerId, appearance);
+			store.saveHome(playerId, home);
 			await goto(resolve('/world'));
 		} finally {
 			saving = false;
 		}
+	}
+
+	function chooseHome(destination: PlanetTravelRequest): void {
+		home = {
+			countryId: destination.countryId ?? 'unknown',
+			countryName: destination.countryName ?? 'Unknown',
+			settlementId: destination.settlementId ?? 'entry',
+			settlementName: destination.settlementName ?? 'Entry Settlement',
+			latitude: (destination.coordinate.latitudeRadians * 180) / Math.PI,
+			longitude: (destination.coordinate.longitudeRadians * 180) / Math.PI,
+			elevationMeters: destination.elevationMeters,
+			worldAnchorId: destination.settlementId ?? 'entry',
+			biomeName: destination.biomeName
+		};
+		step = 3;
 	}
 
 	onMount(() => {
@@ -58,6 +81,39 @@
 
 {#if loading}
 	<LoadingWorld message="Opening character creator" detail="Preparing your appearance options." />
+{:else if step === 2}
+	<main class="relative h-dvh w-screen overflow-hidden">
+		<PlanetPreviewCanvas onClose={() => (step = 1)} onTravel={chooseHome} />
+		<div
+			class="pointer-events-none absolute top-4 right-4 z-10 max-w-xs rounded-md bg-black/65 p-4 text-white"
+		>
+			<p class="m-0 text-xs font-semibold tracking-[.2em] text-sky-200 uppercase">Step 2 of 3</p>
+			<h1 class="mt-2 text-xl font-semibold">Choose where to begin life</h1>
+			<p class="mb-0 text-sm text-white/65">
+				Choose land on Earth. Your country and starting settlement will be confirmed next.
+			</p>
+		</div>
+	</main>
+{:else if step === 3 && home}
+	<main class="grid h-dvh place-items-center bg-[#131619] p-4 text-white">
+		<section class="w-full max-w-md rounded-md border border-white/10 bg-[#1a1e22] p-6">
+			<p class="m-0 text-xs font-semibold tracking-[.2em] text-sky-200 uppercase">Step 3 of 3</p>
+			<h1 class="mt-3 text-3xl font-semibold">Start your life in</h1>
+			<p class="mt-5 mb-0 text-2xl font-semibold">{home.settlementName}</p>
+			<p class="m-0 text-white/60">{home.countryName}</p>
+			<div class="mt-6 flex justify-between gap-3">
+				<button
+					type="button"
+					class="rounded-sm border border-white/15 px-4 py-2"
+					onclick={() => (step = 2)}>Back</button
+				><button
+					type="button"
+					class="rounded-sm bg-[#f97316] px-4 py-2 font-semibold text-black"
+					onclick={() => void saveCharacter()}>Start life in {home.countryName}</button
+				>
+			</div>
+		</section>
+	</main>
 {:else}
 	<main class="grid h-dvh w-screen place-items-center overflow-hidden bg-[#131619] px-4 text-white">
 		<section
@@ -83,7 +139,7 @@
 				class="grid content-start gap-4"
 				onsubmit={(event) => {
 					event.preventDefault();
-					void saveCharacter();
+					step = 2;
 				}}
 			>
 				<label class="grid gap-1 text-sm">
@@ -135,7 +191,7 @@
 					class="mt-2 rounded-sm bg-[#f97316] px-4 py-3 text-sm font-semibold text-black transition hover:bg-[#fb8b3d]"
 					disabled={saving}
 				>
-					{saving ? 'Saving character...' : 'Enter the world'}
+					{saving ? 'Saving character...' : 'Choose where to begin'}
 				</button>
 			</form>
 		</section>

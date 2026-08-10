@@ -3,6 +3,7 @@ import {
 	serializeCharacterAppearance,
 	type CharacterAppearanceV1
 } from './CharacterAppearance';
+import type { WorldLocation } from '../world/geography/WorldLocation';
 
 const DB_NAME = 'orelunza-characters';
 const STORE_NAME = 'appearances';
@@ -56,6 +57,19 @@ export class CharacterStore {
 				reject(transaction.error ?? new Error('Unable to save character.'));
 			transaction.oncomplete = () => resolve();
 		});
+	}
+
+	loadHome(playerId: string): WorldLocation | null {
+		try {
+			const raw = localStorage.getItem(`${storageKey(playerId)}:home`);
+			return raw ? (JSON.parse(raw) as WorldLocation) : null;
+		} catch {
+			return null;
+		}
+	}
+
+	saveHome(playerId: string, location: WorldLocation): void {
+		localStorage.setItem(`${storageKey(playerId)}:home`, JSON.stringify(location));
 	}
 
 	private database(): Promise<IDBDatabase> {
