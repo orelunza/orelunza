@@ -12,7 +12,7 @@
 				token: number;
 		  }
 		| {
-				type: 'set-destination';
+				type: 'set-destination' | 'anchor-current-world';
 				destination: PlanetTravelRequest;
 				token: number;
 		  }
@@ -133,6 +133,9 @@
 				break;
 			case 'set-destination':
 				engine.setNavigationDestination(command.destination);
+				break;
+			case 'anchor-current-world':
+				engine.anchorCurrentWorld(command.destination);
 				break;
 			case 'clear-destination':
 				engine.clearNavigationDestination();

@@ -61,6 +61,14 @@ import { createTravelPlan } from './world/travel/TravelPlan';
 import type { WorldLocation } from './world/geography/WorldLocation';
 import { greatCircleDistanceKm } from './world/geography/GeographicDistance';
 import {
+	createLocalWorldPlanetAnchor,
+	createLocalWorldPlanetAnchorFromLocation,
+	geographicLocationFromLocalAnchor,
+	restoreLocalWorldPlanetAnchor,
+	serializeLocalWorldPlanetAnchor,
+	type LocalWorldPlanetAnchor
+} from './world/geography/LocalWorldPlanetAnchor';
+import {
 	createNavigationDestination,
 	type NavigationDestination
 } from './world/navigation/NavigationDestination';
@@ -146,6 +154,8 @@ export class GameEngine {
 	private destroyed = false;
 	private travelling = false;
 	private readonly planetSessions = new Map<string, PlanetWorldSession>();
+	private readonly earthCoordinates = new PlanetCoordinateSystem();
+	private localWorldPlanetAnchor: LocalWorldPlanetAnchor | null = null;
 	private currentGeographicLocation: import('./game-types').GeographicLocationSnapshot | null =
 		null;
 	private navigationDestination: NavigationDestination | null = null;
@@ -153,6 +163,7 @@ export class GameEngine {
 	private lastMiniMapAt = Number.NEGATIVE_INFINITY;
 	private miniMap: import('./game-types').MiniMapSnapshot = {
 		size: 9,
+		cellSizeMeters: 8,
 		cells: [],
 		playerYaw: 0,
 		northRadians: 0,
@@ -322,11 +333,7 @@ export class GameEngine {
 				this.emitSnapshot();
 			}
 		);
-		this.persistence.setEnvironment(this.sky);
-		this.persistence.setLocalWater(this.localWater);
-		this.persistence.setHumanCondition(this.human);
-		this.persistence.setUrbanElevator(this.urbanElevator);
-		this.persistence.setVegetationRemovals(this.vegetationRemovals);
+		this.configurePersistence(this.persistence, this.activeSession);
 		if (import.meta.env.DEV || import.meta.env.MODE === 'test') {
 			const debugGlobal = globalThis as typeof globalThis & {
 				__ORELUNZA_WATER__?: LocalWaterDebugApi;
@@ -392,24 +399,25 @@ export class GameEngine {
 			this.diagnostics.worldRebuilds += 1;
 			this.lastWorldRebuildAt = performance.now();
 			this.needsWorldRebuild = false;
+
+			// A saved/selected home location anchors the existing local world to Earth.
+			// It must not teleport the player or replace the world session.
+			if (
+				this.activeSession instanceof FlatWorldSession &&
+				!this.localWorldPlanetAnchor &&
+				this.options.homeLocation
+			) {
+				this.localWorldPlanetAnchor = createLocalWorldPlanetAnchorFromLocation(
+					this.earthCoordinates,
+					this.options.homeLocation,
+					this.player.state.position
+				);
+				this.persistence.markDirty();
+			}
+			this.refreshCurrentGeographicLocation();
 			this.status = 'playing';
 			this.emitSnapshot();
 			this.loop.start();
-			if (this.options.homeLocation && this.activeSession instanceof FlatWorldSession) {
-				this.status = 'world-map';
-				await this.travelToPlanet({
-					coordinate: {
-						latitudeRadians: (this.options.homeLocation.latitude * Math.PI) / 180,
-						longitudeRadians: (this.options.homeLocation.longitude * Math.PI) / 180,
-						altitudeMeters: this.options.homeLocation.elevationMeters
-					},
-					elevationMeters: this.options.homeLocation.elevationMeters,
-					countryId: this.options.homeLocation.countryId,
-					countryName: this.options.homeLocation.countryName,
-					settlementId: this.options.homeLocation.settlementId,
-					settlementName: this.options.homeLocation.settlementName
-				});
-			}
 			this.diagnostics.activeLoops = this.loop.isRunning ? 1 : 0;
 			this.emitSnapshot();
 		} catch (error) {
@@ -687,9 +695,11 @@ export class GameEngine {
 	}
 
 	openWorldMap(): void {
-		if (this.status !== 'playing' && this.status !== 'paused') return;
+		if (this.status !== 'playing' && this.status !== 'paused' && this.status !== 'globe') return;
 		this.status = 'world-map';
 		this.pointerLock.exit();
+		this.lastMiniMapAt = Number.NEGATIVE_INFINITY;
+		this.updateMiniMap(performance.now());
 		this.emitSnapshot();
 	}
 
@@ -704,19 +714,38 @@ export class GameEngine {
 	setNavigationDestination(request: PlanetTravelRequest): void {
 		if (this.status !== 'globe' && this.status !== 'world-map') return;
 		const destination = this.worldLocationFromTravelRequest(request);
+		const current = this.currentGeographicLocation;
 		const directDistanceKm =
 			request.totalDistanceKm ??
-			greatCircleDistanceKm(this.worldLocation(), {
-				latitude: destination.latitude,
-				longitude: destination.longitude
-			});
+			(current
+				? greatCircleDistanceKm(current, {
+						latitude: destination.latitude,
+						longitude: destination.longitude
+					})
+				: null);
 		this.navigationDestination = createNavigationDestination(destination, directDistanceKm);
-
-		// Choosing a place does not create a physical route. Any old approximate
-		// plan is invalid once the destination intent changes.
 		if (this.travelPlan?.status === 'planned') this.travelPlan = null;
-		this.persistence.markDirty();
+
+		// Destination selection changes the player's navigation intent, not the
+		// physical position. Once selected, the useful next view is the local map.
 		this.status = 'world-map';
+		this.pointerLock.exit();
+		this.lastMiniMapAt = Number.NEGATIVE_INFINITY;
+		this.updateMiniMap(performance.now());
+		this.persistence.markDirty();
+		this.emitSnapshot();
+	}
+
+	anchorCurrentWorld(request: PlanetTravelRequest): void {
+		if (this.status !== 'globe' || !(this.activeSession instanceof FlatWorldSession)) return;
+		if (this.localWorldPlanetAnchor) return;
+		this.localWorldPlanetAnchor = createLocalWorldPlanetAnchor(
+			this.earthCoordinates,
+			request,
+			this.player.state.position
+		);
+		this.refreshCurrentGeographicLocation();
+		this.persistence.markDirty();
 		this.emitSnapshot();
 	}
 
@@ -877,10 +906,16 @@ export class GameEngine {
 				this.emitSnapshot();
 			}
 		);
+		this.configurePersistence(persistence, session);
+		return persistence;
+	}
+
+	private configurePersistence(persistence: GamePersistence, session: ActiveWorldSession): void {
 		persistence.setEnvironment(this.sky);
 		persistence.setLocalWater(this.localWater);
 		persistence.setHumanCondition(this.human);
 		persistence.setUrbanElevator(this.urbanElevator);
+		persistence.setVegetationRemovals(this.vegetationRemovals);
 		persistence.setNavigationDestination({
 			get: () => this.navigationDestination,
 			restore: (destination) => {
@@ -890,8 +925,6 @@ export class GameEngine {
 		persistence.setRoutePlan({
 			get: () => this.travelPlan,
 			restore: (plan) => {
-				// Older builds stored a mere destination as a "planned route". Migrate
-				// that intent without pretending a route had actually been computed.
 				if (plan?.status === 'planned') {
 					if (!this.navigationDestination) {
 						this.navigationDestination = createNavigationDestination(
@@ -905,9 +938,21 @@ export class GameEngine {
 				this.travelPlan = plan ?? null;
 			}
 		});
-		persistence.setVegetationRemovals(this.vegetationRemovals);
-		if (session instanceof PlanetWorldSession) persistence.setPlanetSurface(session.session);
-		return persistence;
+		if (session instanceof FlatWorldSession) {
+			persistence.setLocalWorldPlanetAnchor({
+				get: () =>
+					this.localWorldPlanetAnchor
+						? serializeLocalWorldPlanetAnchor(this.localWorldPlanetAnchor)
+						: null,
+				restore: (state) => {
+					this.localWorldPlanetAnchor = state
+						? restoreLocalWorldPlanetAnchor(this.earthCoordinates, state)
+						: null;
+				}
+			});
+		} else if (session instanceof PlanetWorldSession) {
+			persistence.setPlanetSurface(session.session);
+		}
 	}
 
 	private geographicLocationFor(
@@ -926,6 +971,35 @@ export class GameEngine {
 			settlementId: session.request.settlementId ?? session.region.coordinates.anchor.id,
 			settlementName: session.request.settlementName ?? session.region.ecology.zoneName
 		};
+	}
+
+	private refreshCurrentGeographicLocation(): void {
+		if (this.activeSession instanceof PlanetWorldSession) {
+			this.currentGeographicLocation = this.geographicLocationFor(this.activeSession);
+		} else if (this.localWorldPlanetAnchor) {
+			this.currentGeographicLocation = geographicLocationFromLocalAnchor(
+				this.localWorldPlanetAnchor,
+				this.player.state.position
+			);
+		} else {
+			this.currentGeographicLocation = null;
+		}
+
+		if (this.currentGeographicLocation && this.navigationDestination) {
+			const distance = greatCircleDistanceKm(
+				this.currentGeographicLocation,
+				this.navigationDestination.location
+			);
+			if (
+				this.navigationDestination.directDistanceKm === null ||
+				Math.abs(this.navigationDestination.directDistanceKm - distance) > 0.001
+			) {
+				this.navigationDestination = createNavigationDestination(
+					this.navigationDestination.location,
+					distance
+				);
+			}
+		}
 	}
 
 	private worldLocation(): WorldLocation {
@@ -1195,9 +1269,7 @@ export class GameEngine {
 		}
 
 		this.sky.update(this.player.camera.camera.position, deltaSeconds);
-		if (this.activeSession instanceof PlanetWorldSession) {
-			this.currentGeographicLocation = this.geographicLocationFor(this.activeSession);
-		}
+		this.refreshCurrentGeographicLocation();
 		this.updateMiniMap(frameStartedAt);
 		this.updateWorldDayAnnouncement(frameStartedAt);
 		this.renderer.updateSurfaceWeather(this.sky.surfaceWeather);
@@ -2101,20 +2173,32 @@ export class GameEngine {
 	}
 
 	private updateMiniMap(now: number): void {
-		if (now - this.lastMiniMapAt < 500) return;
+		const localMapOpen = this.status === 'world-map';
+		const intervalMilliseconds = localMapOpen ? 5000 : 500;
+		if (now - this.lastMiniMapAt < intervalMilliseconds) return;
 		this.lastMiniMapAt = now;
-		const size = 9;
+
+		// The normal HUD sample stays tiny. Opening Map asks for a wider, still
+		// local north-up survey centred on the player's physical position.
+		const size = localMapOpen ? 51 : 9;
+		const cellSizeMeters = localMapOpen ? 100 : 8;
 		const cells: import('./game-types').MiniMapCell[] = [];
 		const centre = this.player.state.position;
 		for (let z = 0; z < size; z += 1)
 			for (let x = 0; x < size; x += 1) {
-				const wx = Math.floor(centre.x + (x - (size - 1) / 2) * 8);
-				const wz = Math.floor(centre.z + (z - (size - 1) / 2) * 8);
+				const wx = Math.floor(centre.x + (x - (size - 1) / 2) * cellSizeMeters);
+				const wz = Math.floor(centre.z + (z - (size - 1) / 2) * cellSizeMeters);
 				const height = this.world.terrainGenerator.heightAt(wx, wz);
-				cells.push({ x, z, terrain: height <= 1 ? 'water' : 'land' });
+				cells.push({
+					x,
+					z,
+					terrain: height <= 1 ? 'water' : 'land',
+					elevationMeters: height
+				});
 			}
 		this.miniMap = {
 			size,
+			cellSizeMeters,
 			cells,
 			playerYaw: this.player.state.bodyYaw,
 			northRadians: 0,

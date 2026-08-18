@@ -13,6 +13,7 @@ import type { HumanConditionSaveState } from '../human/HumanConditionState';
 import type { UrbanElevatorSaveState } from '../world/civilization/UrbanElevatorState';
 import type { TravelPlan } from '../world/travel/TravelPlan';
 import type { NavigationDestination } from '../world/navigation/NavigationDestination';
+import type { LocalWorldPlanetAnchorSaveState } from '../world/geography/LocalWorldPlanetAnchor';
 
 /**
  * Minimal environment surface the persistence layer talks to. The concrete
@@ -59,6 +60,11 @@ export interface PersistableRoutePlan {
 	restore(plan: TravelPlan | null | undefined): void;
 }
 
+export interface PersistableLocalWorldPlanetAnchor {
+	get(): LocalWorldPlanetAnchorSaveState | null;
+	restore(anchor: LocalWorldPlanetAnchorSaveState | null | undefined): void;
+}
+
 export class GamePersistence {
 	private dirty = false;
 	private status: SaveStatus = 'idle';
@@ -72,6 +78,7 @@ export class GamePersistence {
 	private urbanElevator: PersistableUrbanElevator | null = null;
 	private navigationDestination: PersistableNavigationDestination | null = null;
 	private routePlan: PersistableRoutePlan | null = null;
+	private localWorldPlanetAnchor: PersistableLocalWorldPlanetAnchor | null = null;
 	private readonly store = new IndexedDbWorldStore();
 
 	constructor(
@@ -126,6 +133,10 @@ export class GamePersistence {
 		this.routePlan = routePlan;
 	}
 
+	setLocalWorldPlanetAnchor(anchor: PersistableLocalWorldPlanetAnchor): void {
+		this.localWorldPlanetAnchor = anchor;
+	}
+
 	async load(): Promise<WorldSave | null> {
 		const save = await this.store.load(this.worldId);
 
@@ -156,6 +167,7 @@ export class GamePersistence {
 			this.localWater?.restore(save.localWater);
 			this.humanCondition?.restore(save.human);
 			this.urbanElevator?.restore(save.urbanElevator);
+			this.localWorldPlanetAnchor?.restore(save.localWorldPlanetAnchor);
 			this.navigationDestination?.restore(save.navigationDestination);
 			this.routePlan?.restore(save.routePlan);
 		} else {
@@ -163,6 +175,7 @@ export class GamePersistence {
 			this.localWater?.restore(undefined);
 			this.humanCondition?.restore(undefined);
 			this.urbanElevator?.restore(undefined);
+			this.localWorldPlanetAnchor?.restore(undefined);
 			this.navigationDestination?.restore(undefined);
 			this.routePlan?.restore(undefined);
 		}
@@ -231,6 +244,7 @@ export class GamePersistence {
 			localWater: this.localWater?.serialize(),
 			human: this.humanCondition?.serialize(),
 			urbanElevator: this.urbanElevator?.serialize(),
+			localWorldPlanetAnchor: this.localWorldPlanetAnchor?.get() ?? undefined,
 			navigationDestination: this.navigationDestination?.get() ?? undefined,
 			routePlan: this.routePlan?.get() ?? undefined,
 			updatedAt

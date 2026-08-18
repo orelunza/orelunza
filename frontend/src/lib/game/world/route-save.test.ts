@@ -60,4 +60,28 @@ describe('navigation save compatibility', () => {
 			(save as unknown as { routePlan?: typeof routePlan }).routePlan?.destination.worldAnchorId
 		).toBe('b');
 	});
+	it('accepts the persisted anchor of a local world', () => {
+		const localWorldPlanetAnchor = {
+			version: 1,
+			surface: {
+				version: 1,
+				id: 'earth/face:0/16/1/1',
+				latitudeRadians: 0.1,
+				longitudeRadians: 0.2,
+				referenceElevationMeters: 1000,
+				level: 16
+			},
+			localOrigin: { x: 10, y: 20, z: 30 },
+			countryId: 'UGA',
+			countryName: 'Uganda',
+			settlementId: 'kampala',
+			settlementName: 'Kampala',
+			biomeName: 'Tropical Savanna'
+		};
+		const save = parseWorldSave(JSON.stringify({ ...base, localWorldPlanetAnchor }));
+		expect(
+			(save as unknown as { localWorldPlanetAnchor?: typeof localWorldPlanetAnchor })
+				.localWorldPlanetAnchor?.countryName
+		).toBe('Uganda');
+	});
 });

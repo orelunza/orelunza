@@ -22,16 +22,25 @@ const destinationRequest = {
 	totalDistanceKm: 42
 };
 
+function mapCapableEngine() {
+	const engine = Object.create(GameEngine.prototype) as any;
+	engine.pointerLock = { exit: vi.fn(), request: vi.fn() };
+	engine.lastMiniMapAt = 0;
+	engine.updateMiniMap = vi.fn();
+	engine.persistence = { markDirty: vi.fn() };
+	engine.emitSnapshot = vi.fn();
+	return engine;
+}
+
 describe('GameEngine destination selection', () => {
-	it('sets a destination without moving the player or creating a route', () => {
-		const engine = Object.create(GameEngine.prototype) as any;
+	it('sets a destination without moving the player and opens the local map', () => {
+		const engine = mapCapableEngine();
 		const sessionA = { id: 'A' };
-		engine.status = 'world-map';
+		engine.status = 'globe';
 		engine.activeSession = sessionA;
+		engine.currentGeographicLocation = origin;
 		engine.navigationDestination = null;
 		engine.travelPlan = null;
-		engine.persistence = { markDirty: vi.fn() };
-		engine.emitSnapshot = vi.fn();
 		engine.travelToPlanet = vi.fn();
 
 		engine.setNavigationDestination(destinationRequest);
@@ -42,36 +51,35 @@ describe('GameEngine destination selection', () => {
 		expect(engine.navigationDestination.directDistanceKm).toBe(42);
 		expect(engine.travelPlan).toBeNull();
 		expect(engine.status).toBe('world-map');
+		expect(engine.pointerLock.exit).toHaveBeenCalledOnce();
+		expect(engine.updateMiniMap).toHaveBeenCalledOnce();
 		expect(engine.persistence.markDirty).toHaveBeenCalledOnce();
 	});
 
-	it('keeps the same destination while moving between map and globe', () => {
-		const engine = Object.create(GameEngine.prototype) as any;
+	it('keeps the same destination while moving between local map and globe', () => {
+		const engine = mapCapableEngine();
 		const destination = { location: { ...origin, worldAnchorId: 'B' }, directDistanceKm: 5 };
 		engine.status = 'world-map';
 		engine.navigationDestination = destination;
-		engine.pointerLock = { exit: vi.fn(), request: vi.fn() };
-		engine.emitSnapshot = vi.fn();
 
 		engine.openGlobe();
 		expect(engine.status).toBe('globe');
 		expect(engine.navigationDestination).toBe(destination);
 
-		engine.closeWorldMap();
-		expect(engine.status).toBe('playing');
+		engine.openWorldMap();
+		expect(engine.status).toBe('world-map');
 		expect(engine.navigationDestination).toBe(destination);
 	});
 
-	it('replaces a destination directly from the 2D world map', () => {
-		const engine = Object.create(GameEngine.prototype) as any;
-		engine.status = 'world-map';
+	it('replaces a destination and returns to the local map', () => {
+		const engine = mapCapableEngine();
+		engine.status = 'globe';
+		engine.currentGeographicLocation = origin;
 		engine.navigationDestination = {
 			location: { ...origin, worldAnchorId: 'old' },
 			directDistanceKm: 1
 		};
 		engine.travelPlan = null;
-		engine.persistence = { markDirty: vi.fn() };
-		engine.emitSnapshot = vi.fn();
 
 		engine.setNavigationDestination(destinationRequest);
 
@@ -80,8 +88,24 @@ describe('GameEngine destination selection', () => {
 		expect(engine.status).toBe('world-map');
 	});
 
+	it('does not invent a 0,0 origin when the local world is not anchored', () => {
+		const engine = mapCapableEngine();
+		engine.status = 'globe';
+		engine.currentGeographicLocation = null;
+		engine.navigationDestination = null;
+		engine.travelPlan = null;
+
+		engine.setNavigationDestination({
+			...destinationRequest,
+			totalDistanceKm: undefined
+		});
+
+		expect(engine.navigationDestination.directDistanceKm).toBeNull();
+		expect(engine.status).toBe('world-map');
+	});
+
 	it('clears the destination without moving the player', () => {
-		const engine = Object.create(GameEngine.prototype) as any;
+		const engine = mapCapableEngine();
 		const sessionA = { id: 'A' };
 		engine.status = 'world-map';
 		engine.activeSession = sessionA;
@@ -90,8 +114,6 @@ describe('GameEngine destination selection', () => {
 			directDistanceKm: 5
 		};
 		engine.travelPlan = null;
-		engine.persistence = { markDirty: vi.fn() };
-		engine.emitSnapshot = vi.fn();
 
 		engine.clearNavigationDestination();
 

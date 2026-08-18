@@ -12,6 +12,7 @@ import type { UrbanElevatorSaveState } from './civilization/UrbanElevatorState';
 import { isUrbanElevatorSaveState } from './civilization/UrbanElevatorState';
 import type { TravelPlan } from './travel/TravelPlan';
 import type { NavigationDestination } from './navigation/NavigationDestination';
+import type { LocalWorldPlanetAnchorSaveState } from './geography/LocalWorldPlanetAnchor';
 
 export interface WorldSaveV1 {
 	version: 1;
@@ -57,6 +58,8 @@ export interface WorldSaveV3 {
 	human?: HumanConditionSaveState;
 	/** Added by City Lot 4; optional for every older V3 save. */
 	urbanElevator?: UrbanElevatorSaveState;
+	/** Planet position of a legacy/local flat world. Optional for older saves. */
+	localWorldPlanetAnchor?: LocalWorldPlanetAnchorSaveState;
 	/** Chosen place only. It does not imply that a physical route exists. */
 	navigationDestination?: NavigationDestination;
 	/** Legacy/actual route state kept separate from destination intent. */
@@ -134,6 +137,9 @@ export function isWorldSaveV3(value: unknown): value is WorldSaveV3 {
 		(candidate.localWater === undefined || isLocalWaterSaveState(candidate.localWater)) &&
 		(candidate.human === undefined || isHumanConditionSaveState(candidate.human)) &&
 		(candidate.urbanElevator === undefined || isUrbanElevatorSaveState(candidate.urbanElevator)) &&
+		(candidate.localWorldPlanetAnchor === undefined ||
+			(typeof candidate.localWorldPlanetAnchor === 'object' &&
+				candidate.localWorldPlanetAnchor !== null)) &&
 		Array.isArray(candidate.placedBlocks) &&
 		Array.isArray(candidate.removedBlocks)
 	);

@@ -48,10 +48,12 @@ export interface MiniMapCell {
 	x: number;
 	z: number;
 	terrain: 'land' | 'water';
+	elevationMeters: number;
 }
 
 export interface MiniMapSnapshot {
 	size: number;
+	cellSizeMeters: number;
 	cells: MiniMapCell[];
 	playerYaw: number;
 	northRadians: number;

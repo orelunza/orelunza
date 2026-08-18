@@ -11,6 +11,7 @@
 	import LoadingWorld from '$lib/components/game/LoadingWorld.svelte';
 	import PauseMenu from '$lib/components/game/PauseMenu.svelte';
 	import PlanetPreviewCanvas from '$lib/components/game/PlanetPreviewCanvas.svelte';
+	import RemotePlanetView from '$lib/components/game/RemotePlanetView.svelte';
 	import WorldMapOverlay from '$lib/components/game/WorldMapOverlay.svelte';
 	import WorldTransitionOverlay from '$lib/components/game/WorldTransitionOverlay.svelte';
 	import type { PlanetTravelRequest } from '$lib/game/planet/surface/PlanetTravelRequest';
@@ -45,7 +46,7 @@
 				token: number;
 		  }
 		| {
-				type: 'set-destination';
+				type: 'set-destination' | 'anchor-current-world';
 				destination: PlanetTravelRequest;
 				token: number;
 		  }
@@ -84,6 +85,7 @@
 	let appearance = $state<CharacterAppearanceV1 | null>(null);
 	let homeLocation = $state<WorldLocation | null>(null);
 	let command = $state<GameCommand | undefined>(undefined);
+	let remoteViewLocation = $state<PlanetTravelRequest | null>(null);
 	let commandToken = 0;
 	let controller: AbortController | null = null;
 
@@ -175,6 +177,7 @@
 	}
 
 	function openMap(): void {
+		remoteViewLocation = null;
 		if (snapshot?.status === 'world-map' || loading || !appearance) {
 			return;
 		}
@@ -182,10 +185,12 @@
 		command = { type: 'open-world-map', token: ++commandToken };
 	}
 	function openGlobe(): void {
+		remoteViewLocation = null;
 		command = { type: 'open-globe', token: ++commandToken };
 	}
 
 	function closeWorldGlobe(): void {
+		remoteViewLocation = null;
 		if (snapshot?.status !== 'world-map' && snapshot?.status !== 'globe') {
 			return;
 		}
@@ -194,7 +199,16 @@
 	}
 
 	function setDestination(destination: PlanetTravelRequest): void {
+		remoteViewLocation = null;
 		command = { type: 'set-destination', destination, token: ++commandToken };
+	}
+
+	function viewLocation(destination: PlanetTravelRequest): void {
+		remoteViewLocation = destination;
+	}
+
+	function anchorCurrentWorld(destination: PlanetTravelRequest): void {
+		command = { type: 'anchor-current-world', destination, token: ++commandToken };
 	}
 
 	function clearDestination(): void {
@@ -211,7 +225,7 @@
 		void initialize();
 
 		const handleWorldGlobeShortcut = (event: KeyboardEvent): void => {
-			if (event.repeat || (event.code !== 'KeyM' && event.code !== 'KeyG')) {
+			if (event.repeat || !['KeyM', 'KeyG', 'Escape'].includes(event.code)) {
 				return;
 			}
 
@@ -221,6 +235,15 @@
 				)
 			)
 				return;
+			if (event.code === 'Escape' && remoteViewLocation) {
+				remoteViewLocation = null;
+				return;
+			}
+			if (event.code === 'Escape') return;
+			if (event.code === 'KeyG' && remoteViewLocation) {
+				remoteViewLocation = null;
+				return;
+			}
 			if (event.code === 'KeyG') {
 				if (snapshot?.status === 'globe') void closeWorldGlobe();
 				else openGlobe();
@@ -231,7 +254,7 @@
 				return;
 			}
 			if (snapshot?.status === 'globe') {
-				void closeWorldGlobe();
+				void openMap();
 			} else if (
 				(snapshot?.status === 'playing' || snapshot?.status === 'paused') &&
 				snapshot.human.lifeState !== 'unconscious' &&
@@ -463,16 +486,35 @@
 
 	{#if appearance && (snapshot?.status === 'globe' || snapshot?.status === 'travelling')}
 		<div class="absolute inset-0 z-[70]" data-testid="world-globe-mode">
-			<PlanetPreviewCanvas
-				mode="navigation"
-				currentLocation={snapshot.geographicLocation}
-				travelling={snapshot.status === 'travelling'}
-				travelError={snapshot.error}
-				onClose={() => {
-					void closeWorldGlobe();
-				}}
-				onSetDestination={setDestination}
-			/>
+			{#if snapshot.status === 'globe' && remoteViewLocation}
+				<RemotePlanetView
+					location={remoteViewLocation}
+					onWorld={() => void closeWorldGlobe()}
+					onMap={() => void openMap()}
+					onGlobe={() => {
+						remoteViewLocation = null;
+					}}
+					onSetDestination={setDestination}
+				/>
+			{:else}
+				<PlanetPreviewCanvas
+					mode="navigation"
+					currentLocation={snapshot.geographicLocation}
+					savedDestination={snapshot.destination}
+					travelling={snapshot.status === 'travelling'}
+					travelError={snapshot.error}
+					onClose={() => {
+						void closeWorldGlobe();
+					}}
+					onMap={() => {
+						void openMap();
+					}}
+					onView={viewLocation}
+					onSetDestination={setDestination}
+					onSetCurrentLocation={anchorCurrentWorld}
+					onClearDestination={clearDestination}
+				/>
+			{/if}
 		</div>
 	{/if}
 	{#if appearance && snapshot?.status === 'world-map' && snapshot}
@@ -480,7 +522,6 @@
 			{snapshot}
 			onClose={() => void closeWorldGlobe()}
 			onGlobe={openGlobe}
-			onSetDestination={setDestination}
 			onClearDestination={clearDestination}
 		/>
 	{/if}

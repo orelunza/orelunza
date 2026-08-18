@@ -1,140 +1,56 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import type { GameSnapshot } from '$lib/game/game-types';
-	import { StaticCountryDataProvider } from '$lib/game/geography/countries/StaticCountryDataProvider';
-	import {
-		createPendingSurfaceDestination,
-		type PlanetSurfaceDestination
-	} from '$lib/game/planet/surface/PlanetSurfaceDestination';
-	import type { PlanetTravelRequest } from '$lib/game/planet/surface/PlanetTravelRequest';
-	import {
-		fitLocations,
-		createViewport,
-		geographicAtPixel,
-		pan,
-		recenter,
-		viewportBounds,
-		zoomAt,
-		type MapViewport
-	} from '$lib/game/world/map/MapViewport';
-	import { detailForZoom } from '$lib/game/world/map/MapLod';
-	import {
-		WorldMapDataProvider,
-		type MapCoordinate,
-		type MapFeature
-	} from '$lib/game/world/map/WorldMapDataProvider';
-	import { project, unproject } from '$lib/game/world/map/WorldMapProjection';
-	import type { WorldLocation } from '$lib/game/world/geography/WorldLocation';
-	import type { SettlementAnchor } from '$lib/game/world/geography/SettlementCatalog';
-	import { TravelDestinationResolver } from '$lib/game/world/travel/TravelDestinationResolver';
+	import { knownSettlements } from '$lib/game/world/geography/SettlementCatalog';
+	import { compassDirection, localDestinationVector } from '$lib/game/world/map/LocalMapNavigation';
+	import { findLocalMapPath, localMapTarget } from '$lib/game/world/map/LocalMapPath';
 
 	interface Props {
 		snapshot: GameSnapshot;
 		onClose?: () => void;
 		onGlobe?: () => void;
-		onSetDestination?: (destination: PlanetTravelRequest) => void | Promise<void>;
 		onClearDestination?: () => void | Promise<void>;
 	}
 
-	let { snapshot, onClose, onGlobe, onSetDestination, onClearDestination }: Props = $props();
-	let destination = $derived(snapshot.destination);
+	let { snapshot, onClose, onGlobe, onClearDestination }: Props = $props();
 	let canvas = $state<HTMLCanvasElement | null>(null);
-	let viewport = $state<MapViewport | null>(null);
-	let selectedDestination = $state<PlanetSurfaceDestination | null>(null);
-	let selectedRequest = $state<PlanetTravelRequest | null>(null);
-	let selectedSettlement = $state<SettlementAnchor | null>(null);
-	let selectedDistanceKm = $state<number | null>(null);
-	let selectionLoading = $state(false);
 	let actionLoading = $state(false);
-	let message = $state<string | null>(null);
 	let redraw: (() => void) | null = null;
-	const provider = new WorldMapDataProvider();
 
-	function playerLocation(): WorldLocation | null {
-		const geographic = snapshot.geographicLocation;
-		if (!geographic) return null;
-		return {
-			countryId: '',
-			countryName: geographic.countryName ?? '',
-			settlementId: geographic.settlementId ?? 'current',
-			settlementName: geographic.settlementName ?? '',
-			latitude: geographic.latitude,
-			longitude: geographic.longitude,
-			elevationMeters: geographic.elevationMeters,
-			worldAnchorId: geographic.settlementId ?? 'current',
-			biomeName: geographic.biomeName
-		};
+	const destination = $derived(snapshot.destination);
+	const geographic = $derived(snapshot.geographicLocation);
+	const mapSpanMeters = $derived(snapshot.miniMap.size * snapshot.miniMap.cellSizeMeters);
+	const destinationDirectionData = $derived(destinationDirection());
+
+	function distanceLabel(kilometres: number | null): string {
+		if (kilometres === null || !Number.isFinite(kilometres)) return '';
+		if (kilometres < 1) return `${Math.round(kilometres * 1000).toLocaleString()} m`;
+		if (kilometres < 10) return `${kilometres.toFixed(1)} km`;
+		return `${Math.round(kilometres).toLocaleString()} km`;
 	}
 
-	function selectionMatchesDestination(): boolean {
-		if (!selectedRequest || !destination) return false;
-		const latitude = (selectedRequest.coordinate.latitudeRadians * 180) / Math.PI;
-		const longitude = (selectedRequest.coordinate.longitudeRadians * 180) / Math.PI;
-		return (
-			Math.abs(latitude - destination.location.latitude) < 1e-5 &&
-			Math.abs(longitude - destination.location.longitude) < 1e-5
-		);
+	function destinationDirection(): { bearing: number; compass: string } | null {
+		if (!geographic || !destination) return null;
+		const vector = localDestinationVector(geographic, destination.location);
+		return { bearing: vector.bearingDegrees, compass: compassDirection(vector.bearingDegrees) };
 	}
 
-	function coordinateLabel(value: number, positive: string, negative: string): string {
-		return `${Math.abs(value).toFixed(4)}° ${value >= 0 ? positive : negative}`;
-	}
-
-	function selectedDegrees(): { latitude: number; longitude: number } | null {
-		if (!selectedDestination) return null;
-		return {
-			latitude: (selectedDestination.coordinate.latitudeRadians * 180) / Math.PI,
-			longitude: (selectedDestination.coordinate.longitudeRadians * 180) / Math.PI
-		};
-	}
-
-	async function setSelectedDestination(): Promise<void> {
-		if (!selectedRequest || actionLoading) return;
-		actionLoading = true;
-		message = null;
-		try {
-			await onSetDestination?.(selectedRequest);
-			selectedDestination = null;
-			selectedRequest = null;
-			selectedSettlement = null;
-			selectedDistanceKm = null;
-			message = 'Destination set. Your position has not changed.';
-		} catch (error) {
-			message = error instanceof Error ? error.message : 'Unable to set this destination.';
-		} finally {
-			actionLoading = false;
-			redraw?.();
-		}
-	}
-
-	async function clearSavedDestination(): Promise<void> {
+	async function clearDestination(): Promise<void> {
 		if (!destination || actionLoading) return;
 		actionLoading = true;
-		message = null;
 		try {
 			await onClearDestination?.();
-		} catch (error) {
-			message = error instanceof Error ? error.message : 'Unable to clear the destination.';
 		} finally {
 			actionLoading = false;
-			redraw?.();
 		}
-	}
-
-	function clearSelection(): void {
-		selectedDestination = null;
-		selectedRequest = null;
-		selectedSettlement = null;
-		selectedDistanceKm = null;
-		selectionLoading = false;
-		message = null;
-		redraw?.();
 	}
 
 	$effect(() => {
-		destination;
-		snapshot.geographicLocation?.latitude;
-		snapshot.geographicLocation?.longitude;
+		snapshot.miniMap;
+		snapshot.player.position.x;
+		snapshot.player.position.z;
+		snapshot.destination?.location.latitude;
+		snapshot.destination?.location.longitude;
 		redraw?.();
 	});
 
@@ -143,770 +59,310 @@
 		const ctx = canvas.getContext('2d');
 		if (!ctx) return;
 
-		const initial = playerLocation() ?? destination?.location;
-		viewport = createViewport(initial?.latitude ?? 0, initial?.longitude ?? 0, 1);
-		const initialBox = canvas.getBoundingClientRect();
-		if (destination && initial && initialBox.width > 0 && initialBox.height > 0) {
-			viewport = fitLocations(
-				viewport,
-				[initial, destination.location],
-				initialBox.width / initialBox.height
-			);
-		}
-
-		const resolver = new TravelDestinationResolver();
-		let pointers = new Map<number, { x: number; y: number; movement: number }>();
-		let lastPinch = 0;
-		let texture: HTMLImageElement | null = null;
-		let selectionRequest = 0;
-		const terrain = new Image();
-		terrain.src = '/planet-data/preview/land-cover-overview.png';
-		terrain.onload = () => {
-			texture = terrain;
-			draw();
+		const text = (
+			value: string,
+			x: number,
+			y: number,
+			font = '600 12px system-ui',
+			align: CanvasTextAlign = 'left'
+		) => {
+			ctx.save();
+			ctx.font = font;
+			ctx.textAlign = align;
+			ctx.textBaseline = 'middle';
+			ctx.lineJoin = 'round';
+			ctx.lineWidth = 4;
+			ctx.strokeStyle = 'rgba(3,8,10,.88)';
+			ctx.fillStyle = '#f8fafc';
+			ctx.strokeText(value, x, y);
+			ctx.fillText(value, x, y);
+			ctx.restore();
 		};
 
-		const countryProvider = new StaticCountryDataProvider();
-		void countryProvider
-			.load()
-			.then((payload) => {
-				provider.setCountries(payload.countries);
-				draw();
-			})
-			.catch(() => undefined);
-
-		const scaleFor = (box: DOMRect) => 2 ** viewport!.zoom * box.height;
-		const point = (lat: number, lon: number, box: DOMRect) => {
-			const p = project(lat, lon);
-			const scale = scaleFor(box);
-			let dx = p.x - viewport!.center.x;
-			if (dx > 0.5) dx -= 1;
-			if (dx < -0.5) dx += 1;
+		const cellScreen = (x: number, z: number, box: DOMRect) => {
+			const size = Math.max(1, snapshot.miniMap.size);
+			const cellWidth = box.width / size;
+			const cellHeight = box.height / size;
 			return {
-				x: dx * scale + box.width / 2,
-				y: (p.y - viewport!.center.y) * scale + box.height / 2
+				x: (x + 0.5) * cellWidth,
+				y: (size - z - 0.5) * cellHeight
 			};
 		};
 
-		const path = (coordinates: readonly MapCoordinate[], box: DOMRect, close = false) => {
-			coordinates.forEach((coordinate, index) => {
-				const p = point(coordinate.latitude, coordinate.longitude, box);
-				if (!index) ctx.moveTo(p.x, p.y);
-				else ctx.lineTo(p.x, p.y);
-			});
-			if (close) ctx.closePath();
-		};
+		const drawRelief = (box: DOMRect) => {
+			const size = Math.max(1, snapshot.miniMap.size);
+			const cells = snapshot.miniMap.cells;
+			const cellWidth = box.width / size;
+			const cellHeight = box.height / size;
+			const land = cells.filter((cell) => cell.terrain === 'land');
+			const minimum = land.length ? Math.min(...land.map((cell) => cell.elevationMeters)) : 0;
+			const maximum = land.length
+				? Math.max(...land.map((cell) => cell.elevationMeters))
+				: minimum + 1;
+			const range = Math.max(1, maximum - minimum);
 
-		const drawTerrain = (image: HTMLImageElement, box: DOMRect) => {
-			const scale = scaleFor(box);
-			const imageWidth = image.naturalWidth || image.width;
-			const imageHeight = image.naturalHeight || image.height;
-			if (!imageWidth || !imageHeight) return;
-
-			const worldLeft = box.width / 2 - viewport!.center.x * scale;
-			const firstCopy = Math.floor(-worldLeft / scale) - 1;
-			const lastCopy = Math.ceil((box.width - worldLeft) / scale) + 1;
-			const stripHeight = 3;
-
-			ctx.globalAlpha = 0.72;
-			for (let y = 0; y < box.height; y += stripHeight) {
-				const nextY = Math.min(box.height, y + stripHeight);
-				const projectedTop = Math.max(
-					0,
-					Math.min(1, viewport!.center.y + (y - box.height / 2) / scale)
-				);
-				const projectedBottom = Math.max(
-					0,
-					Math.min(1, viewport!.center.y + (nextY - box.height / 2) / scale)
-				);
-				const topLatitude = unproject(viewport!.center.x, projectedTop).latitude;
-				const bottomLatitude = unproject(viewport!.center.x, projectedBottom).latitude;
-				const sourceTop = ((90 - topLatitude) / 180) * imageHeight;
-				const sourceBottom = ((90 - bottomLatitude) / 180) * imageHeight;
-				const sourceY = Math.max(0, Math.min(imageHeight - 1, sourceTop));
-				const sourceHeight = Math.max(1, Math.min(imageHeight - sourceY, sourceBottom - sourceTop));
-
-				for (let copy = firstCopy; copy <= lastCopy; copy += 1) {
-					ctx.drawImage(
-						image,
-						0,
-						sourceY,
-						imageWidth,
-						sourceHeight,
-						worldLeft + copy * scale,
-						y,
-						scale,
-						nextY - y
-					);
+			for (const cell of cells) {
+				if (cell.terrain === 'water') {
+					ctx.fillStyle = '#31566a';
+				} else {
+					const elevation = (cell.elevationMeters - minimum) / range;
+					const lightness = 27 + elevation * 24;
+					const saturation = 18 + (1 - elevation) * 10;
+					ctx.fillStyle = `hsl(92 ${saturation}% ${lightness}%)`;
 				}
+				ctx.fillRect(
+					cell.x * cellWidth,
+					(size - 1 - cell.z) * cellHeight,
+					Math.ceil(cellWidth + 0.75),
+					Math.ceil(cellHeight + 0.75)
+				);
 			}
-			ctx.globalAlpha = 1;
-		};
 
-		const drawFeature = (feature: MapFeature, box: DOMRect) => {
-			if (feature.type === 'country' && feature.country) {
-				ctx.strokeStyle = 'rgba(232,242,225,.38)';
-				ctx.lineWidth = viewport!.zoom < 5 ? 1 : 0.6;
-				for (const polygon of feature.country.polygons)
-					for (const ring of polygon) {
-						ctx.beginPath();
-						path(
-							ring.map(([longitude, latitude]) => ({ latitude, longitude })),
-							box,
-							true
-						);
-						ctx.stroke();
-					}
-				return;
-			}
-			if (feature.type === 'road' && feature.line) {
-				ctx.strokeStyle = '#d8c48a';
-				ctx.lineWidth = 2;
-				ctx.beginPath();
-				path(feature.line, box);
-				ctx.stroke();
-				return;
-			}
-			if (feature.type === 'building' && feature.footprint) {
-				ctx.fillStyle = 'rgba(231,210,161,.9)';
-				ctx.beginPath();
-				path(feature.footprint, box, true);
-				ctx.fill();
-				return;
-			}
-			const p = point(feature.latitude, feature.longitude, box);
-			ctx.fillStyle = 'rgba(217,249,157,.82)';
-			ctx.beginPath();
-			ctx.arc(p.x, p.y, feature.importance && feature.importance >= 90 ? 3.5 : 2.5, 0, Math.PI * 2);
-			ctx.fill();
-		};
-
-		const drawMarker = (
-			latitude: number,
-			longitude: number,
-			box: DOMRect,
-			kind: 'player' | 'destination' | 'selection',
-			label?: string
-		) => {
-			const p = point(latitude, longitude, box);
-			if (p.x < -36 || p.x > box.width + 36 || p.y < -36 || p.y > box.height + 36) return;
+			// Lightweight contour lines make the local terrain readable even when the
+			// whole area belongs to the same biome.
+			const byKey = new Map(cells.map((cell) => [`${cell.x}:${cell.z}`, cell]));
 			ctx.save();
-
-			if (kind === 'player') {
-				ctx.fillStyle = '#0ea5e9';
-				ctx.strokeStyle = '#ffffff';
-				ctx.lineWidth = 3;
-				ctx.beginPath();
-				ctx.arc(p.x, p.y, 7, 0, Math.PI * 2);
-				ctx.fill();
-				ctx.stroke();
-				ctx.strokeStyle = 'rgba(14,165,233,.55)';
-				ctx.lineWidth = 2;
-				ctx.beginPath();
-				ctx.arc(p.x, p.y, 13, 0, Math.PI * 2);
-				ctx.stroke();
-			} else if (kind === 'destination') {
-				ctx.translate(p.x, p.y);
-				ctx.rotate(Math.PI / 4);
-				ctx.fillStyle = 'rgba(7,16,24,.88)';
-				ctx.strokeStyle = '#f6c65e';
-				ctx.lineWidth = 3;
-				ctx.fillRect(-7, -7, 14, 14);
-				ctx.strokeRect(-7, -7, 14, 14);
-				ctx.rotate(-Math.PI / 4);
-				ctx.translate(-p.x, -p.y);
-			} else {
-				ctx.strokeStyle = '#f97316';
-				ctx.lineWidth = 3;
-				ctx.beginPath();
-				ctx.arc(p.x, p.y, 9, 0, Math.PI * 2);
-				ctx.stroke();
-				ctx.lineWidth = 2;
-				ctx.beginPath();
-				ctx.moveTo(p.x - 13, p.y);
-				ctx.lineTo(p.x - 5, p.y);
-				ctx.moveTo(p.x + 5, p.y);
-				ctx.lineTo(p.x + 13, p.y);
-				ctx.moveTo(p.x, p.y - 13);
-				ctx.lineTo(p.x, p.y - 5);
-				ctx.moveTo(p.x, p.y + 5);
-				ctx.lineTo(p.x, p.y + 13);
-				ctx.stroke();
-			}
-
-			if (label) {
-				ctx.font = '700 12px system-ui';
-				ctx.fillStyle = '#ffffff';
-				ctx.shadowColor = 'rgba(0,0,0,.92)';
-				ctx.shadowBlur = 5;
-				ctx.fillText(label, p.x + 15, p.y - 10);
+			ctx.strokeStyle = 'rgba(255,255,255,.12)';
+			ctx.lineWidth = 1;
+			for (const cell of land) {
+				const band = Math.floor(cell.elevationMeters / 8);
+				const east = byKey.get(`${cell.x + 1}:${cell.z}`);
+				const north = byKey.get(`${cell.x}:${cell.z + 1}`);
+				const x = cell.x * cellWidth;
+				const y = (size - 1 - cell.z) * cellHeight;
+				if (east && Math.floor(east.elevationMeters / 8) !== band) {
+					ctx.beginPath();
+					ctx.moveTo(x + cellWidth, y);
+					ctx.lineTo(x + cellWidth, y + cellHeight);
+					ctx.stroke();
+				}
+				if (north && Math.floor(north.elevationMeters / 8) !== band) {
+					ctx.beginPath();
+					ctx.moveTo(x, y);
+					ctx.lineTo(x + cellWidth, y);
+					ctx.stroke();
+				}
 			}
 			ctx.restore();
 		};
 
+		const drawNearbySettlements = (box: DOMRect) => {
+			if (!geographic) return;
+			const halfSpan = Math.max(1, mapSpanMeters / 2);
+			for (const settlement of knownSettlements()) {
+				const vector = localDestinationVector(geographic, settlement);
+				if (Math.abs(vector.eastMeters) > halfSpan || Math.abs(vector.northMeters) > halfSpan)
+					continue;
+				const x = box.width / 2 + (vector.eastMeters / halfSpan) * (box.width / 2);
+				const y = box.height / 2 - (vector.northMeters / halfSpan) * (box.height / 2);
+				if (Math.hypot(x - box.width / 2, y - box.height / 2) < 30) continue;
+				text(settlement.name, x, y, '650 11px system-ui', 'center');
+			}
+		};
+
+		const drawGuidance = (box: DOMRect) => {
+			if (!destination || !geographic) return;
+			const vector = localDestinationVector(geographic, destination.location);
+			const target = localMapTarget(snapshot.miniMap, vector.eastMeters, vector.northMeters);
+			const path = findLocalMapPath(snapshot.miniMap, target);
+
+			if (path.length > 1) {
+				ctx.save();
+				ctx.strokeStyle = 'rgba(255,255,255,.92)';
+				ctx.lineWidth = 4;
+				ctx.lineCap = 'round';
+				ctx.lineJoin = 'round';
+				ctx.shadowColor = 'rgba(0,0,0,.55)';
+				ctx.shadowBlur = 4;
+				ctx.beginPath();
+				for (let index = 0; index < path.length; index += 1) {
+					const point = cellScreen(path[index].x, path[index].z, box);
+					if (index === 0) ctx.moveTo(point.x, point.y);
+					else ctx.lineTo(point.x, point.y);
+				}
+				ctx.stroke();
+				ctx.restore();
+			}
+
+			const endpoint = cellScreen(target.x, target.z, box);
+			ctx.save();
+			ctx.translate(endpoint.x, endpoint.y);
+			if (target.inside) {
+				ctx.strokeStyle = '#fb923c';
+				ctx.lineWidth = 3;
+				ctx.beginPath();
+				ctx.arc(0, 0, 9, 0, Math.PI * 2);
+				ctx.stroke();
+			} else {
+				const centreX = box.width / 2;
+				const centreY = box.height / 2;
+				ctx.rotate(Math.atan2(endpoint.y - centreY, endpoint.x - centreX));
+				ctx.fillStyle = '#fb923c';
+				ctx.beginPath();
+				ctx.moveTo(11, 0);
+				ctx.lineTo(-7, -7);
+				ctx.lineTo(-7, 7);
+				ctx.closePath();
+				ctx.fill();
+			}
+			ctx.restore();
+
+			const name =
+				destination.location.settlementName || destination.location.countryName || 'Destination';
+			const rightSide = endpoint.x > box.width * 0.68;
+			const labelX = endpoint.x + (rightSide ? -15 : 15);
+			const align: CanvasTextAlign = rightSide ? 'right' : 'left';
+			text(name, labelX, endpoint.y - 7, '700 12px system-ui', align);
+			const distance = distanceLabel(destination.directDistanceKm);
+			if (distance) text(distance, labelX, endpoint.y + 10, '500 11px system-ui', align);
+		};
+
+		const drawPlayer = (box: DOMRect) => {
+			const x = box.width / 2;
+			const y = box.height / 2;
+			const heading = snapshot.miniMap.playerYaw - snapshot.miniMap.northRadians;
+			ctx.save();
+			ctx.translate(x, y);
+			ctx.rotate(heading);
+			ctx.fillStyle = '#38bdf8';
+			ctx.strokeStyle = '#ffffff';
+			ctx.lineWidth = 2.5;
+			ctx.beginPath();
+			ctx.moveTo(0, -15);
+			ctx.lineTo(-9, 10);
+			ctx.lineTo(0, 6);
+			ctx.lineTo(9, 10);
+			ctx.closePath();
+			ctx.fill();
+			ctx.stroke();
+			ctx.restore();
+		};
+
 		const draw = () => {
-			if (!viewport) return;
 			const box = canvas!.getBoundingClientRect();
 			if (!box.width || !box.height) return;
-			const dpr = devicePixelRatio;
+			const dpr = Math.min(devicePixelRatio, 2);
 			canvas!.width = Math.round(box.width * dpr);
 			canvas!.height = Math.round(box.height * dpr);
 			ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-			ctx.fillStyle = '#163f5a';
+			ctx.fillStyle = '#1f352f';
 			ctx.fillRect(0, 0, box.width, box.height);
-			if (texture) drawTerrain(texture, box);
+			drawRelief(box);
+			drawNearbySettlements(box);
+			drawGuidance(box);
+			drawPlayer(box);
 
-			const player = playerLocation();
-			const bounds = viewportBounds(viewport, box.width / box.height);
-			const features = provider.query(bounds, viewport.zoom, { plan: null, player });
-			const countryFeatures = features.filter((feature) => feature.type === 'country');
-			for (const feature of countryFeatures) drawFeature(feature, box);
-			for (const feature of features.filter(
-				(feature) => feature.type === 'road' || feature.type === 'building'
-			))
-				drawFeature(feature, box);
+			text('N', box.width / 2, 18, '800 12px system-ui', 'center');
+			ctx.save();
+			ctx.strokeStyle = 'rgba(255,255,255,.9)';
+			ctx.lineWidth = 2;
+			ctx.beginPath();
+			ctx.moveTo(box.width / 2, 29);
+			ctx.lineTo(box.width / 2, 43);
+			ctx.stroke();
+			ctx.restore();
 
-			const occupiedLabels: { left: number; top: number; right: number; bottom: number }[] = [];
-			const overlapsLabel = (candidate: {
-				left: number;
-				top: number;
-				right: number;
-				bottom: number;
-			}) =>
-				occupiedLabels.some(
-					(label) =>
-						candidate.left < label.right + 4 &&
-						candidate.right > label.left - 4 &&
-						candidate.top < label.bottom + 3 &&
-						candidate.bottom > label.top - 3
-				);
-			const drawCountryLabel = (feature: MapFeature) => {
-				if (!feature.label) return;
-				const p = point(feature.latitude, feature.longitude, box);
-				if (p.x < 0 || p.x > box.width || p.y < 0 || p.y > box.height) return;
-
-				const detail = detailForZoom(viewport!.zoom);
-				const fontSize = detail === 'far' ? 8 : detail === 'medium' ? 10 : 12;
-				const maximumCharacters = detail === 'far' ? 16 : detail === 'medium' ? 22 : 28;
-				const words = feature.label.split(/\s+/).filter(Boolean);
-				const lines: string[] = [];
-				let line = '';
-				for (const word of words) {
-					const next = line ? `${line} ${word}` : word;
-					if (line && next.length > maximumCharacters) {
-						lines.push(line);
-						line = word;
-					} else line = next;
-				}
-				if (line) lines.push(line);
-				if (!lines.length) return;
-
-				ctx.save();
-				ctx.font = `700 ${fontSize}px system-ui`;
-				ctx.textAlign = 'center';
-				ctx.textBaseline = 'middle';
-				ctx.lineJoin = 'round';
-				ctx.lineWidth = detail === 'far' ? 2.5 : 3;
-				ctx.strokeStyle = 'rgba(7,16,24,.78)';
-				ctx.fillStyle = detail === 'far' ? 'rgba(255,255,255,.78)' : 'rgba(255,255,255,.88)';
-				const lineHeight = fontSize + 2;
-				const top = p.y - ((lines.length - 1) * lineHeight) / 2;
-				let maximumWidth = 0;
-				for (const [index, countryLine] of lines.entries()) {
-					const y = top + index * lineHeight;
-					maximumWidth = Math.max(maximumWidth, ctx.measureText(countryLine).width);
-					ctx.strokeText(countryLine, p.x, y);
-					ctx.fillText(countryLine, p.x, y);
-				}
-				occupiedLabels.push({
-					left: p.x - maximumWidth / 2,
-					top: top - lineHeight / 2,
-					right: p.x + maximumWidth / 2,
-					bottom: top + (lines.length - 1) * lineHeight + lineHeight / 2
-				});
-				ctx.restore();
-			};
-
-			for (const feature of countryFeatures) drawCountryLabel(feature);
-
-			const drawSettlementLabel = (feature: MapFeature) => {
-				if (!feature.label) return;
-				const p = point(feature.latitude, feature.longitude, box);
-				if (p.x < 0 || p.x > box.width || p.y < 0 || p.y > box.height) return;
-
-				ctx.font = '600 12px system-ui';
-				const textWidth = Math.ceil(ctx.measureText(feature.label).width);
-				const textHeight = 14;
-				const candidates = [
-					{ x: p.x + 8, y: p.y - 8 },
-					{ x: p.x + 8, y: p.y + 18 },
-					{ x: p.x - textWidth - 8, y: p.y - 8 },
-					{ x: p.x - textWidth - 8, y: p.y + 18 },
-					{ x: p.x + 8, y: p.y - 24 },
-					{ x: p.x - textWidth - 8, y: p.y - 24 },
-					{ x: p.x + 8, y: p.y + 34 },
-					{ x: p.x - textWidth - 8, y: p.y + 34 }
-				];
-
-				let chosen = candidates.find((candidate) => {
-					const bounds = {
-						left: candidate.x,
-						top: candidate.y - textHeight,
-						right: candidate.x + textWidth,
-						bottom: candidate.y + 2
-					};
-					return (
-						bounds.left >= 4 &&
-						bounds.right <= box.width - 4 &&
-						bounds.top >= 4 &&
-						bounds.bottom <= box.height - 4 &&
-						!overlapsLabel(bounds)
-					);
-				});
-
-				if (!chosen) {
-					chosen = {
-						x: Math.max(4, Math.min(box.width - textWidth - 4, p.x + 8)),
-						y: Math.max(textHeight + 4, Math.min(box.height - 4, p.y - 8))
-					};
-				}
-
-				const labelBounds = {
-					left: chosen.x,
-					top: chosen.y - textHeight,
-					right: chosen.x + textWidth,
-					bottom: chosen.y + 2
-				};
-				occupiedLabels.push(labelBounds);
-
-				ctx.save();
-				ctx.lineWidth = 3;
-				ctx.lineJoin = 'round';
-				ctx.strokeStyle = 'rgba(7,16,24,.9)';
-				ctx.fillStyle = '#ffffff';
-				ctx.strokeText(feature.label, chosen.x, chosen.y);
-				ctx.fillText(feature.label, chosen.x, chosen.y);
-				ctx.restore();
-			};
-
-			for (const feature of features.filter((feature) => feature.type === 'settlement'))
-				drawSettlementLabel(feature);
-
-			if (destination) {
-				drawMarker(
-					destination.location.latitude,
-					destination.location.longitude,
-					box,
-					'destination',
-					'Destination'
-				);
-			}
-
-			const selected = selectedDegrees();
-			if (selected && !selectionMatchesDestination())
-				drawMarker(selected.latitude, selected.longitude, box, 'selection');
-			if (player) drawMarker(player.latitude, player.longitude, box, 'player', 'You are here');
+			const scaleMeters = 1000;
+			const scalePixels = (scaleMeters / Math.max(1, mapSpanMeters)) * box.width;
+			ctx.save();
+			ctx.strokeStyle = '#ffffff';
+			ctx.lineWidth = 2;
+			ctx.beginPath();
+			ctx.moveTo(18, box.height - 20);
+			ctx.lineTo(18 + scalePixels, box.height - 20);
+			ctx.stroke();
+			ctx.restore();
+			text('1 km', 18, box.height - 33, '600 10px system-ui');
 		};
 
 		redraw = draw;
 		const resize = new ResizeObserver(draw);
 		resize.observe(canvas);
-
-		const select = async (event: PointerEvent) => {
-			if (!viewport) return;
-			const box = canvas!.getBoundingClientRect();
-			const geographic = geographicAtPixel(
-				viewport,
-				event.clientX - box.left,
-				event.clientY - box.top,
-				box.width,
-				box.height
-			);
-			const coordinate = {
-				latitudeRadians: (geographic.latitude * Math.PI) / 180,
-				longitudeRadians: (geographic.longitude * Math.PI) / 180,
-				altitudeMeters: 0
-			};
-			const id = ++selectionRequest;
-			selectedDestination = createPendingSurfaceDestination(coordinate);
-			selectedRequest = null;
-			selectedSettlement = null;
-			selectedDistanceKm = null;
-			selectionLoading = true;
-			message = 'Reading land, elevation and region data…';
-			draw();
-			try {
-				const resolved = await resolver.resolve(coordinate, playerLocation());
-				if (id !== selectionRequest) return;
-				selectedDestination = resolved.destination;
-				selectedRequest = resolved.request;
-				selectedSettlement = resolved.settlement;
-				selectedDistanceKm = resolved.distanceKm;
-				message =
-					resolved.destination.status === 'ocean'
-						? 'This point is on water. It can be inspected, but it cannot be set as a land destination yet.'
-						: null;
-			} catch {
-				if (id !== selectionRequest) return;
-				selectedDestination = null;
-				selectedRequest = null;
-				selectedSettlement = null;
-				selectedDistanceKm = null;
-				message = 'Unable to read this destination.';
-			} finally {
-				if (id === selectionRequest) selectionLoading = false;
-				draw();
-			}
-		};
-
-		const down = (event: PointerEvent) => {
-			pointers.set(event.pointerId, { x: event.clientX, y: event.clientY, movement: 0 });
-			canvas!.setPointerCapture(event.pointerId);
-		};
-		const move = (event: PointerEvent) => {
-			const prior = pointers.get(event.pointerId);
-			if (!prior || !viewport) return;
-			const dx = event.clientX - prior.x;
-			const dy = event.clientY - prior.y;
-			pointers.set(event.pointerId, {
-				x: event.clientX,
-				y: event.clientY,
-				movement: prior.movement + Math.abs(dx) + Math.abs(dy)
-			});
-			if (pointers.size === 1) {
-				viewport = pan(viewport, dx, dy, canvas!.clientHeight);
-			} else {
-				const pair = [...pointers.values()];
-				const distance = Math.hypot(pair[0].x - pair[1].x, pair[0].y - pair[1].y);
-				if (lastPinch) viewport = zoomAt(viewport, Math.sign(distance - lastPinch) * 0.12);
-				lastPinch = distance;
-			}
-			draw();
-		};
-		const up = (event: PointerEvent) => {
-			const pointer = pointers.get(event.pointerId);
-			const wasSinglePointer = pointers.size === 1;
-			pointers.delete(event.pointerId);
-			if (pointers.size < 2) lastPinch = 0;
-			if (canvas!.hasPointerCapture(event.pointerId))
-				canvas!.releasePointerCapture(event.pointerId);
-			if (
-				event.type !== 'pointercancel' &&
-				wasSinglePointer &&
-				pointer &&
-				pointer.movement < 5 &&
-				event.button === 0
-			)
-				void select(event);
-		};
-		const wheel = (event: WheelEvent) => {
-			event.preventDefault();
-			if (viewport) viewport = zoomAt(viewport, event.deltaY < 0 ? 1 : -1);
-			draw();
-		};
-
-		canvas.addEventListener('pointerdown', down);
-		canvas.addEventListener('pointermove', move);
-		canvas.addEventListener('pointerup', up);
-		canvas.addEventListener('pointercancel', up);
-		canvas.addEventListener('wheel', wheel, { passive: false });
 		draw();
-
 		return () => {
-			selectionRequest += 1;
 			redraw = null;
 			resize.disconnect();
-			canvas?.removeEventListener('pointerdown', down);
-			canvas?.removeEventListener('pointermove', move);
-			canvas?.removeEventListener('pointerup', up);
-			canvas?.removeEventListener('pointercancel', up);
-			canvas?.removeEventListener('wheel', wheel);
-			resolver.dispose();
-			countryProvider.dispose();
 		};
 	});
-
-	function changeZoom(delta: number) {
-		if (viewport) viewport = zoomAt(viewport, delta);
-		redraw?.();
-	}
-
-	function recenterPlayer() {
-		const player = playerLocation();
-		if (viewport && player) viewport = recenter(viewport, player.latitude, player.longitude);
-		redraw?.();
-	}
-
-	function fitDestination() {
-		if (!viewport || !destination || !canvas) return;
-		const player = playerLocation();
-		viewport = fitLocations(
-			viewport,
-			player ? [player, destination.location] : [destination.location],
-			canvas.clientWidth / canvas.clientHeight
-		);
-		redraw?.();
-	}
 </script>
 
 <div
-	class="map-enter absolute inset-0 z-[70] bg-[#071018] p-[max(0.75rem,env(safe-area-inset-top))] text-white"
+	class="absolute inset-0 z-[70] bg-[#071018] p-[max(0.75rem,env(safe-area-inset-top))] text-white"
 >
 	<section
 		class="mx-auto flex h-full w-full max-w-6xl flex-col overflow-hidden rounded-xl border border-white/10 bg-[#10202a] shadow-2xl"
 	>
-		<header class="flex shrink-0 items-start justify-between gap-3 p-3 sm:p-5">
+		<header class="flex shrink-0 items-center justify-between gap-3 px-4 py-3 sm:px-5">
 			<div class="min-w-0">
-				<p class="m-0 text-xs font-semibold tracking-[.18em] text-amber-200 uppercase">
-					World map · {viewport ? detailForZoom(viewport.zoom) : 'loading'}
+				<p class="m-0 text-[.68rem] font-semibold tracking-[.18em] text-sky-200 uppercase">
+					Map · north up
 				</p>
-				<h1 class="mt-1 text-xl font-semibold wrap-break-word sm:text-2xl">World map</h1>
-				{#if playerLocation()}
-					{@const current = playerLocation()!}
-					<p class="mt-1 mb-0 text-xs text-white/70">
-						Current position: {current.settlementName || current.countryName || snapshot.zoneName}
-					</p>
-					<p class="mt-0.5 mb-0 text-xs text-white/55">
-						{coordinateLabel(current.latitude, 'N', 'S')} · {coordinateLabel(
-							current.longitude,
-							'E',
-							'W'
-						)} · {Math.round(current.elevationMeters).toLocaleString()} m{current.countryName
-							? ` · ${current.countryName}`
-							: ''}
-					</p>
-				{:else}
-					<p class="mt-1 mb-0 text-xs font-semibold text-amber-200">
-						Exact geographic position unavailable
-					</p>
-					<p class="mt-0.5 mb-0 text-xs text-white/55">
-						{snapshot.zoneName} is a local world without a planetary anchor. Orelunza will not invent
-						a latitude or longitude.
-					</p>
-				{/if}
-				<p class="mt-1 mb-0 text-xs text-white/55">
-					Click land to inspect a place. Setting a destination does not move the player.
-				</p>
-			</div>
-			<button type="button" class="control" aria-label="Close map" onclick={onClose}
-				><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg><span
-					>Close</span
-				></button
-			>
-		</header>
-
-		<div class="relative min-h-0 flex-1 overflow-hidden border-y border-white/10">
-			<canvas
-				bind:this={canvas}
-				class="h-full w-full cursor-crosshair touch-none"
-				aria-label="Interactive world map. Click land to select a destination, drag to pan, and use controls or the wheel to zoom."
-			></canvas>
-			<div class="controls" aria-label="Map controls">
-				<button type="button" class="control" aria-label="Zoom in" onclick={() => changeZoom(1)}
-					><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg></button
-				><button type="button" class="control" aria-label="Zoom out" onclick={() => changeZoom(-1)}
-					><svg viewBox="0 0 24 24"><path d="M5 12h14" /></svg></button
-				><button
-					type="button"
-					class="control"
-					aria-label="Recenter on your position"
-					disabled={!playerLocation()}
-					onclick={recenterPlayer}
-					><svg viewBox="0 0 24 24"
-						><path d="M12 3v4m0 10v4M3 12h4m10 0h4M12 8a4 4 0 1 1 0 8 4 4 0 0 1 0-8Z" /></svg
-					></button
-				>{#if destination}<button
-						type="button"
-						class="control"
-						aria-label="Fit your position and destination"
-						onclick={fitDestination}
-						><svg viewBox="0 0 24 24"
-							><path d="M5 5h5M5 5v5m14-5h-5m5 0v5M5 19h5m-5 0v-5m14 5h-5m5 0v-5" /></svg
-						></button
-					>{/if}
-			</div>
-		</div>
-
-		<footer
-			class="destination-sheet shrink-0 gap-3 p-3 sm:flex sm:items-end sm:justify-between sm:p-5"
-		>
-			<div class="min-w-0 flex-1">
-				{#if selectedDestination}
-					{@const selected = selectedDegrees()}
-					<p class="m-0 text-xs font-semibold tracking-[.16em] text-orange-200 uppercase">
-						Inspected location
-					</p>
-					{#if selectedRequest && selected}
-						<p class="mt-1 mb-0 text-lg font-semibold wrap-break-word">
-							{selectedSettlement?.name ??
-								selectedRequest.countryName ??
-								selectedRequest.biomeName ??
-								'Planet surface'}
-						</p>
-						{#if selectedSettlement && selectedRequest.countryName}
-							<p class="m-0 text-sm text-white/65">{selectedRequest.countryName}</p>
-						{/if}
-						<p class="m-0 text-sm text-white/60">
-							{coordinateLabel(selected.latitude, 'N', 'S')} · {coordinateLabel(
-								selected.longitude,
-								'E',
-								'W'
-							)} · {Math.round(selectedRequest.elevationMeters).toLocaleString()} m
-						</p>
-						<p class="m-0 text-sm text-white/70">
-							{selectedRequest.biomeName ?? 'Unknown biome'}{selectedDistanceKm !== null
-								? ` · ${Math.round(selectedDistanceKm).toLocaleString()} km straight-line distance`
-								: ''}
-						</p>
-					{:else if selected}
-						<p class="mt-1 mb-0 text-sm text-white/70">
-							{coordinateLabel(selected.latitude, 'N', 'S')} · {coordinateLabel(
-								selected.longitude,
-								'E',
-								'W'
-							)}
-						</p>
-					{/if}
-				{:else if destination}
-					<p class="m-0 text-xs font-semibold tracking-[.16em] text-amber-200 uppercase">
-						Destination
-					</p>
-					<p class="mt-1 mb-0 text-lg font-semibold wrap-break-word">
+				<h1 class="mt-0.5 truncate text-xl font-semibold">{snapshot.miniMap.zoneName}</h1>
+				{#if destination && destinationDirectionData}
+					<p class="m-0 truncate text-xs text-white/60">
 						{destination.location.settlementName ||
 							destination.location.countryName ||
-							'Destination'}
+							'Destination'} · {destinationDirectionData.compass} · {distanceLabel(
+							destination.directDistanceKm
+						)}
 					</p>
-					{#if destination.location.settlementName && destination.location.countryName}
-						<p class="m-0 text-sm text-white/65">{destination.location.countryName}</p>
-					{/if}
-					<p class="m-0 text-sm text-white/60">
-						{coordinateLabel(destination.location.latitude, 'N', 'S')} · {coordinateLabel(
-							destination.location.longitude,
-							'E',
-							'W'
-						)} · {Math.round(destination.location.elevationMeters).toLocaleString()} m
-					</p>
-					<p class="m-0 text-sm text-white/70">
-						{destination.location.biomeName ?? 'Unknown biome'}{destination.directDistanceKm !==
-						null
-							? ` · ${Math.round(destination.directDistanceKm).toLocaleString()} km straight-line distance`
-							: ''}
-					</p>
-					<p class="mt-1 mb-0 text-xs text-white/50">
-						No route or transport has been assumed. You remain at your current position.
-					</p>
-				{:else}
-					{#if playerLocation()}
-						<p class="m-0 text-sm text-white/60">
-							The blue "You are here" marker is your only physical position. Click land to inspect a
-							place, then set it as a destination if you want to remember where you intend to go.
-						</p>
-					{:else}
-						<p class="m-0 text-sm text-amber-100/80">
-							This local world has no geographic anchor yet, so the world map cannot truthfully
-							place your body on Earth. A real position must be established before a blue player
-							marker can appear.
-						</p>
-					{/if}
 				{/if}
-				{#if message}<p class="mt-2 mb-0 text-sm text-amber-200">{message}</p>{/if}
 			</div>
+			<nav class="view-nav" aria-label="World views">
+				<button type="button" onclick={onClose}>World</button>
+				<button type="button" class="active" aria-current="page">Map</button>
+				<button type="button" onclick={onGlobe}>Globe</button>
+			</nav>
+		</header>
 
-			<div class="mt-3 flex flex-wrap gap-2 sm:mt-0 sm:justify-end">
-				{#if selectedDestination}
-					<button type="button" class="control" onclick={clearSelection}>Clear selection</button>
-				{/if}
-				{#if selectedRequest && !selectionMatchesDestination()}
-					<button
-						type="button"
-						class="control primary"
-						disabled={selectionLoading || actionLoading}
-						onclick={() => void setSelectedDestination()}
-						>{actionLoading ? 'Setting…' : 'Set destination'}</button
-					>
-				{:else if destination && !selectedDestination}
-					<button
-						type="button"
-						class="control"
-						disabled={actionLoading}
-						onclick={() => void clearSavedDestination()}>Clear destination</button
-					>
-				{/if}
-				<button type="button" class="control" onclick={onGlobe}>Globe</button>
-				<button type="button" class="control" onclick={onClose}>Close map</button>
-			</div>
-		</footer>
+		<div class="relative min-h-0 flex-1 overflow-hidden border-t border-white/10">
+			<canvas
+				bind:this={canvas}
+				class="h-full w-full"
+				aria-label="Local topographic map centred on the player"
+			></canvas>
+			{#if destination}
+				<button
+					type="button"
+					class="absolute right-3 bottom-3 rounded-md bg-black/55 px-3 py-2 text-xs text-white/75 backdrop-blur-sm hover:bg-black/70 disabled:opacity-50"
+					disabled={actionLoading}
+					onclick={() => void clearDestination()}>Clear destination</button
+				>
+			{/if}
+		</div>
 	</section>
 </div>
 
 <style>
-	.map-enter {
-		animation: map-enter 0.35s ease-out;
-	}
-	.control {
-		min-height: 2.75rem;
-		min-width: 2.75rem;
+	.view-nav {
 		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		gap: 0.4rem;
-		border-radius: 0.4rem;
-		padding: 0.5rem 0.7rem;
+		flex: 0 0 auto;
+		gap: 0.15rem;
+		border: 1px solid rgb(255 255 255 / 0.12);
+		border-radius: 0.5rem;
+		background: rgb(0 0 0 / 0.18);
+		padding: 0.15rem;
+	}
+	.view-nav button {
+		border-radius: 0.35rem;
+		padding: 0.42rem 0.65rem;
+		font-size: 0.78rem;
+		color: rgb(255 255 255 / 0.72);
+	}
+	.view-nav button:hover,
+	.view-nav button:focus-visible {
+		background: rgb(255 255 255 / 0.1);
 		color: white;
-		background: rgb(255 255 255 / 0.08);
+		outline: none;
 	}
-	.control:hover,
-	.control:focus-visible {
-		outline: 2px solid #f6c65e;
-		outline-offset: 2px;
-		background: rgb(255 255 255 / 0.16);
-	}
-	.control:disabled {
-		cursor: wait;
-		opacity: 0.55;
-	}
-	.control svg {
-		width: 1.15rem;
-		height: 1.15rem;
-		fill: none;
-		stroke: currentColor;
-		stroke-width: 2;
-		stroke-linecap: round;
-	}
-	.primary {
-		background: #f97316;
-		color: #111;
+	.view-nav .active {
+		background: rgb(125 211 252 / 0.18);
+		color: #bae6fd;
 		font-weight: 700;
 	}
-	.controls {
-		position: absolute;
-		right: 0.75rem;
-		top: 0.75rem;
-		display: grid;
-		gap: 0.35rem;
-	}
-	@keyframes map-enter {
-		from {
-			opacity: 0;
-			transform: scale(1.01);
-		}
-		to {
-			opacity: 1;
-			transform: none;
-		}
-	}
-	@media (max-width: 480px) {
-		.destination-sheet {
-			padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
-		}
-		.controls {
-			right: 0.5rem;
-			top: 0.5rem;
-		}
-	}
-	@media (prefers-reduced-motion: reduce) {
-		.map-enter {
-			animation: none;
+	@media (max-width: 560px) {
+		.view-nav button {
+			padding-inline: 0.48rem;
 		}
 	}
 </style>
