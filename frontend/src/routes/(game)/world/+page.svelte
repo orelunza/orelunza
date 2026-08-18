@@ -45,13 +45,12 @@
 				token: number;
 		  }
 		| {
-				type: 'plan-route';
+				type: 'set-destination';
 				destination: PlanetTravelRequest;
 				token: number;
 		  }
 		| {
-				type: 'travel-to-planet';
-				destination: PlanetTravelRequest;
+				type: 'clear-destination';
 				token: number;
 		  }
 		| {
@@ -187,15 +186,19 @@
 	}
 
 	function closeWorldGlobe(): void {
-		if (snapshot?.status !== 'world-map') {
+		if (snapshot?.status !== 'world-map' && snapshot?.status !== 'globe') {
 			return;
 		}
 
 		command = { type: 'close-world-map', token: ++commandToken };
 	}
 
-	function travelTo(destination: PlanetTravelRequest): void {
-		command = { type: 'plan-route', destination, token: ++commandToken };
+	function setDestination(destination: PlanetTravelRequest): void {
+		command = { type: 'set-destination', destination, token: ++commandToken };
+	}
+
+	function clearDestination(): void {
+		command = { type: 'clear-destination', token: ++commandToken };
 	}
 
 	async function logout(): Promise<void> {
@@ -468,12 +471,18 @@
 				onClose={() => {
 					void closeWorldGlobe();
 				}}
-				onTravel={travelTo}
+				onSetDestination={setDestination}
 			/>
 		</div>
 	{/if}
 	{#if appearance && snapshot?.status === 'world-map' && snapshot}
-		<WorldMapOverlay {snapshot} onClose={() => void closeWorldGlobe()} onGlobe={openGlobe} />
+		<WorldMapOverlay
+			{snapshot}
+			onClose={() => void closeWorldGlobe()}
+			onGlobe={openGlobe}
+			onSetDestination={setDestination}
+			onClearDestination={clearDestination}
+		/>
 	{/if}
 	{#if appearance && snapshot?.status === 'travelling'}
 		<WorldTransitionOverlay />

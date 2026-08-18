@@ -59,6 +59,11 @@ import type { PlanetTravelRequest } from './planet/surface/PlanetTravelRequest';
 import type { TravelPlan } from './world/travel/TravelPlan';
 import { createTravelPlan } from './world/travel/TravelPlan';
 import type { WorldLocation } from './world/geography/WorldLocation';
+import { greatCircleDistanceKm } from './world/geography/GeographicDistance';
+import {
+	createNavigationDestination,
+	type NavigationDestination
+} from './world/navigation/NavigationDestination';
 import { LocalWaterSystem, type LocalWaterDebugApi } from './world/water';
 import { CivilizationInteractionSystem } from './world/civilization/CivilizationInteractionSystem';
 import { nextWardrobeOutfit } from './world/civilization/OutfitWardrobe';
@@ -143,6 +148,7 @@ export class GameEngine {
 	private readonly planetSessions = new Map<string, PlanetWorldSession>();
 	private currentGeographicLocation: import('./game-types').GeographicLocationSnapshot | null =
 		null;
+	private navigationDestination: NavigationDestination | null = null;
 	private travelPlan: TravelPlan | null = null;
 	private lastMiniMapAt = Number.NEGATIVE_INFINITY;
 	private miniMap: import('./game-types').MiniMapSnapshot = {
@@ -695,10 +701,47 @@ export class GameEngine {
 		this.emitSnapshot();
 	}
 
+	setNavigationDestination(request: PlanetTravelRequest): void {
+		if (this.status !== 'globe' && this.status !== 'world-map') return;
+		const destination = this.worldLocationFromTravelRequest(request);
+		const directDistanceKm =
+			request.totalDistanceKm ??
+			greatCircleDistanceKm(this.worldLocation(), {
+				latitude: destination.latitude,
+				longitude: destination.longitude
+			});
+		this.navigationDestination = createNavigationDestination(destination, directDistanceKm);
+
+		// Choosing a place does not create a physical route. Any old approximate
+		// plan is invalid once the destination intent changes.
+		if (this.travelPlan?.status === 'planned') this.travelPlan = null;
+		this.persistence.markDirty();
+		this.status = 'world-map';
+		this.emitSnapshot();
+	}
+
+	clearNavigationDestination(): void {
+		if (this.status !== 'globe' && this.status !== 'world-map') return;
+		this.navigationDestination = null;
+		if (this.travelPlan?.status === 'planned') this.travelPlan = null;
+		this.persistence.markDirty();
+		this.emitSnapshot();
+	}
+
+	/** @deprecated Destination selection is not route planning. */
 	planRoute(request: PlanetTravelRequest): void {
-		if (this.status !== 'globe') return;
-		const origin = this.worldLocation();
-		const destination: WorldLocation = {
+		this.setNavigationDestination(request);
+	}
+
+	closeWorldMap(): void {
+		if (this.status !== 'world-map' && this.status !== 'globe') return;
+		this.status = 'playing';
+		this.pointerLock.request();
+		this.emitSnapshot();
+	}
+
+	private worldLocationFromTravelRequest(request: PlanetTravelRequest): WorldLocation {
+		return {
 			countryId: request.countryId ?? 'unknown',
 			countryName: request.countryName ?? 'Unknown',
 			settlementId: request.settlementId ?? 'surface',
@@ -709,16 +752,6 @@ export class GameEngine {
 			worldAnchorId: request.settlementId ?? 'surface',
 			biomeName: request.biomeName
 		};
-		this.travelPlan = createTravelPlan(origin, destination, request.totalDistanceKm ?? 0);
-		this.status = 'world-map';
-		this.emitSnapshot();
-	}
-
-	closeWorldMap(): void {
-		if (this.status !== 'world-map' && this.status !== 'globe') return;
-		this.status = 'playing';
-		this.pointerLock.request();
-		this.emitSnapshot();
 	}
 
 	async travelToPlanet(request: PlanetTravelRequest): Promise<void> {
@@ -731,17 +764,7 @@ export class GameEngine {
 		const previousSession = this.activeSession;
 		const previousWorld = this.world;
 		const origin = this.worldLocation();
-		const destinationLocation: WorldLocation = {
-			countryId: request.countryId ?? 'unknown',
-			countryName: request.countryName ?? 'Unknown',
-			settlementId: request.settlementId ?? 'surface',
-			settlementName: request.settlementName ?? 'Destination',
-			latitude: (request.coordinate.latitudeRadians * 180) / Math.PI,
-			longitude: (request.coordinate.longitudeRadians * 180) / Math.PI,
-			elevationMeters: request.elevationMeters,
-			worldAnchorId: request.settlementId ?? 'surface',
-			biomeName: request.biomeName
-		};
+		const destinationLocation = this.worldLocationFromTravelRequest(request);
 		this.travelPlan = createTravelPlan(origin, destinationLocation, request.totalDistanceKm ?? 0);
 		this.travelPlan.status = 'active';
 		try {
@@ -767,6 +790,7 @@ export class GameEngine {
 				}
 				await this.activateWorldSession(next, next.region.spawnPosition);
 				this.currentGeographicLocation = this.geographicLocationFor(next);
+				this.navigationDestination = null;
 				if (this.travelPlan) {
 					this.travelPlan.travelledDistanceKm = this.travelPlan.totalDistanceKm;
 					this.travelPlan.remainingDistanceKm = 0;
@@ -857,9 +881,27 @@ export class GameEngine {
 		persistence.setLocalWater(this.localWater);
 		persistence.setHumanCondition(this.human);
 		persistence.setUrbanElevator(this.urbanElevator);
+		persistence.setNavigationDestination({
+			get: () => this.navigationDestination,
+			restore: (destination) => {
+				this.navigationDestination = destination ?? null;
+			}
+		});
 		persistence.setRoutePlan({
 			get: () => this.travelPlan,
 			restore: (plan) => {
+				// Older builds stored a mere destination as a "planned route". Migrate
+				// that intent without pretending a route had actually been computed.
+				if (plan?.status === 'planned') {
+					if (!this.navigationDestination) {
+						this.navigationDestination = createNavigationDestination(
+							plan.destination,
+							plan.totalDistanceKm
+						);
+					}
+					this.travelPlan = null;
+					return;
+				}
 				this.travelPlan = plan ?? null;
 			}
 		});
@@ -1902,6 +1944,7 @@ export class GameEngine {
 			this.sky.worldTime.minuteKey,
 			this.dayAnnouncement?.id ?? '',
 			this.world.terrainGenerator.zoneAt(position.x, position.z),
+			this.navigationDestination?.location.worldAnchorId ?? '',
 			interactionTarget
 				? `block:${interactionTarget.block.x},${interactionTarget.block.y},${interactionTarget.block.z}:${interactionTarget.open ? 1 : 0}`
 				: this.target?.kind === 'vegetation'
@@ -1977,6 +2020,12 @@ export class GameEngine {
 			),
 			geographicLocation: this.currentGeographicLocation
 				? { ...this.currentGeographicLocation }
+				: null,
+			destination: this.navigationDestination
+				? {
+						...this.navigationDestination,
+						location: { ...this.navigationDestination.location }
+					}
 				: null,
 			travel: this.travelPlan
 				? {

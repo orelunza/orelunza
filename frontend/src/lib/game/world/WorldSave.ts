@@ -11,6 +11,7 @@ import { isHumanConditionSaveState } from '../human/HumanConditionState';
 import type { UrbanElevatorSaveState } from './civilization/UrbanElevatorState';
 import { isUrbanElevatorSaveState } from './civilization/UrbanElevatorState';
 import type { TravelPlan } from './travel/TravelPlan';
+import type { NavigationDestination } from './navigation/NavigationDestination';
 
 export interface WorldSaveV1 {
 	version: 1;
@@ -56,6 +57,9 @@ export interface WorldSaveV3 {
 	human?: HumanConditionSaveState;
 	/** Added by City Lot 4; optional for every older V3 save. */
 	urbanElevator?: UrbanElevatorSaveState;
+	/** Chosen place only. It does not imply that a physical route exists. */
+	navigationDestination?: NavigationDestination;
+	/** Legacy/actual route state kept separate from destination intent. */
 	routePlan?: TravelPlan;
 	updatedAt: number;
 }

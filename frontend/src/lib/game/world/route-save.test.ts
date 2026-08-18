@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseWorldSave } from './WorldSave';
+
 const base = {
 	version: 3,
 	worldId: 'a',
@@ -13,10 +14,35 @@ const base = {
 	environment: {},
 	updatedAt: 1
 };
-describe('route save compatibility', () => {
-	it('loads a legacy V3 save without a route', () =>
-		expect(parseWorldSave(JSON.stringify(base))).not.toBeNull());
-	it('preserves an optional planned route without moving the saved player', () => {
+
+describe('navigation save compatibility', () => {
+	it('loads a legacy V3 save without a destination or route', () => {
+		expect(parseWorldSave(JSON.stringify(base))).not.toBeNull();
+	});
+
+	it('preserves a destination independently from player position', () => {
+		const navigationDestination = {
+			location: {
+				countryId: 'b',
+				countryName: 'B',
+				settlementId: 'b',
+				settlementName: 'B',
+				latitude: 1,
+				longitude: 2,
+				elevationMeters: 3,
+				worldAnchorId: 'b'
+			},
+			directDistanceKm: 222
+		};
+		const save = parseWorldSave(JSON.stringify({ ...base, navigationDestination }));
+		expect(save?.player.position.x).toBe(0);
+		expect(
+			(save as unknown as { navigationDestination?: typeof navigationDestination })
+				.navigationDestination?.location.worldAnchorId
+		).toBe('b');
+	});
+
+	it('still accepts the old optional planned-route field for migration', () => {
 		const routePlan = {
 			id: 'a:b',
 			origin: { worldAnchorId: 'a' },
@@ -30,7 +56,6 @@ describe('route save compatibility', () => {
 			transportMode: 'walking'
 		};
 		const save = parseWorldSave(JSON.stringify({ ...base, routePlan }));
-		expect(save?.player.position.x).toBe(0);
 		expect(
 			(save as unknown as { routePlan?: typeof routePlan }).routePlan?.destination.worldAnchorId
 		).toBe('b');

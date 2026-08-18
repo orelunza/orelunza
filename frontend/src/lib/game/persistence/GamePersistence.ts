@@ -12,6 +12,7 @@ import type { LocalWaterSaveState } from '../world/water/LocalWaterState';
 import type { HumanConditionSaveState } from '../human/HumanConditionState';
 import type { UrbanElevatorSaveState } from '../world/civilization/UrbanElevatorState';
 import type { TravelPlan } from '../world/travel/TravelPlan';
+import type { NavigationDestination } from '../world/navigation/NavigationDestination';
 
 /**
  * Minimal environment surface the persistence layer talks to. The concrete
@@ -47,6 +48,12 @@ export interface PersistableUrbanElevator {
 	serialize(): UrbanElevatorSaveState;
 	restore(state: UrbanElevatorSaveState | null | undefined): void;
 }
+
+export interface PersistableNavigationDestination {
+	get(): NavigationDestination | null;
+	restore(destination: NavigationDestination | null | undefined): void;
+}
+
 export interface PersistableRoutePlan {
 	get(): TravelPlan | null;
 	restore(plan: TravelPlan | null | undefined): void;
@@ -63,6 +70,7 @@ export class GamePersistence {
 	private localWater: PersistableLocalWater | null = null;
 	private humanCondition: PersistableHumanCondition | null = null;
 	private urbanElevator: PersistableUrbanElevator | null = null;
+	private navigationDestination: PersistableNavigationDestination | null = null;
 	private routePlan: PersistableRoutePlan | null = null;
 	private readonly store = new IndexedDbWorldStore();
 
@@ -109,6 +117,11 @@ export class GamePersistence {
 	setUrbanElevator(urbanElevator: PersistableUrbanElevator): void {
 		this.urbanElevator = urbanElevator;
 	}
+
+	setNavigationDestination(destination: PersistableNavigationDestination): void {
+		this.navigationDestination = destination;
+	}
+
 	setRoutePlan(routePlan: PersistableRoutePlan): void {
 		this.routePlan = routePlan;
 	}
@@ -143,12 +156,15 @@ export class GamePersistence {
 			this.localWater?.restore(save.localWater);
 			this.humanCondition?.restore(save.human);
 			this.urbanElevator?.restore(save.urbanElevator);
+			this.navigationDestination?.restore(save.navigationDestination);
 			this.routePlan?.restore(save.routePlan);
 		} else {
 			this.vegetationRemovals?.restore([]);
 			this.localWater?.restore(undefined);
 			this.humanCondition?.restore(undefined);
 			this.urbanElevator?.restore(undefined);
+			this.navigationDestination?.restore(undefined);
+			this.routePlan?.restore(undefined);
 		}
 
 		this.lastSavedPayload = JSON.stringify(this.buildSave(save.updatedAt));
@@ -215,6 +231,7 @@ export class GamePersistence {
 			localWater: this.localWater?.serialize(),
 			human: this.humanCondition?.serialize(),
 			urbanElevator: this.urbanElevator?.serialize(),
+			navigationDestination: this.navigationDestination?.get() ?? undefined,
 			routePlan: this.routePlan?.get() ?? undefined,
 			updatedAt
 		};

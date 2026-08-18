@@ -14,26 +14,17 @@
 		WebGLRenderer
 	} from 'three';
 	import type { GeographicLocationSnapshot } from '$lib/game/game-types';
-	import { PlanetGeographyQuery } from '$lib/game/geography/PlanetGeographyQuery';
-	import { CountryResolver } from '$lib/game/geography/countries/CountryResolver';
-	import { PlanetEcologyQuery } from '$lib/game/geography/ecology/PlanetEcologyQuery';
-	import { PlanetSurfaceContextResolver } from '$lib/game/geography/ecology/PlanetSurfaceContextResolver';
 	import { PlanetDestinationMarker } from '$lib/game/rendering/planet/PlanetDestinationMarker';
 	import { PlanetRenderer } from '$lib/game/rendering/planet/PlanetRenderer';
 	import {
 		createPendingSurfaceDestination,
 		rayToPlanetDestination,
-		resolveSurfaceDestination,
 		type PlanetSurfaceDestination
 	} from '$lib/game/planet/surface/PlanetSurfaceDestination';
 	import type { PlanetTravelRequest } from '$lib/game/planet/surface/PlanetTravelRequest';
-	import {
-		settlementForCountry,
-		type SettlementAnchor
-	} from '$lib/game/world/geography/SettlementCatalog';
-	import { greatCircleDistanceKm } from '$lib/game/world/geography/GeographicDistance';
+	import type { SettlementAnchor } from '$lib/game/world/geography/SettlementCatalog';
+	import { TravelDestinationResolver } from '$lib/game/world/travel/TravelDestinationResolver';
 	import type { WorldLocation } from '$lib/game/world/geography/WorldLocation';
-	import PlanetTravelHud from './PlanetTravelHud.svelte';
 
 	interface Props {
 		mode?: 'onboarding' | 'navigation';
@@ -43,6 +34,8 @@
 		travelling?: boolean;
 		travelError?: string | null;
 		onClose?: () => void;
+		onSetDestination?: (destination: PlanetTravelRequest) => void | Promise<void>;
+		/** @deprecated Use onSetDestination for navigation mode. */
 		onTravel?: (destination: PlanetTravelRequest) => void | Promise<void>;
 		onSelection?: (destination: PlanetTravelRequest | null) => void;
 	}
@@ -54,6 +47,7 @@
 		travelling = false,
 		travelError = null,
 		onClose,
+		onSetDestination,
 		onTravel,
 		onSelection
 	}: Props = $props();
@@ -63,6 +57,7 @@
 	let message = $state<string | null>(null);
 	let settlement = $state<SettlementAnchor | null>(null);
 	let distanceKm = $state<number | null>(null);
+	let travelRequest = $state<PlanetTravelRequest | null>(null);
 	$effect(() => {
 		if (!travelling && travelError) {
 			loading = false;
@@ -102,10 +97,7 @@
 		const sun = new DirectionalLight(0xffffff, 3.4);
 		sun.position.set(180, 120, 240);
 		scene.add(sun);
-		const geography = new PlanetGeographyQuery();
-		const countries = new CountryResolver();
-		const ecology = new PlanetEcologyQuery();
-		const context = new PlanetSurfaceContextResolver(countries, ecology);
+		const destinationResolver = new TravelDestinationResolver();
 		const raycaster = new Raycaster();
 		const ndc = new Vector2();
 		let orbitYaw = currentLocation ? (-currentLocation.longitude * Math.PI) / 180 : 0.38;
@@ -115,7 +107,7 @@
 		let distance = 285;
 		let pointer: number | null = null;
 		let previous = new Vector2();
-		let travel = 0;
+		let dragDistance = 0;
 		let frame = 0;
 		let request = 0;
 		const resize = () => {
@@ -144,65 +136,48 @@
 			if (!coordinate) return;
 			const id = ++request;
 			destination = createPendingSurfaceDestination(coordinate);
+			travelRequest = null;
+			settlement = null;
+			distanceKm = null;
 			message = 'Reading land and elevation data…';
 			destinationMarker.setDestination(coordinate, true);
 			try {
-				const sample = await geography.sample(coordinate);
-				const details = await context.resolve(coordinate, sample);
+				const resolved = await destinationResolver.resolve(coordinate, currentLocation);
 				if (id !== request) return;
-				destination = resolveSurfaceDestination(coordinate, sample, 0.55, details);
-				settlement = details.country ? settlementForCountry(details.country) : null;
-				distanceKm =
-					currentLocation && settlement ? greatCircleDistanceKm(currentLocation, settlement) : null;
-				message = destination.status === 'ocean' ? 'Ocean travel is not available yet.' : null;
-				if (mode === 'onboarding') {
-					onSelection?.(
-						destination.status === 'land'
-							? {
-									coordinate: destination.coordinate,
-									elevationMeters: destination.sample!.elevationMeters,
-									countryId: details.country?.id ?? null,
-									countryName: details.country?.name ?? null,
-									biomeId: details.biome,
-									biomeName: details.biomeLabel,
-									settlementId: settlement?.id ?? null,
-									settlementName: settlement?.name ?? null
-								}
-							: null
-					);
-				}
+				destination = resolved.destination;
+				settlement = resolved.settlement;
+				distanceKm = resolved.distanceKm;
+				travelRequest = resolved.request;
+				message =
+					destination.status === 'ocean'
+						? 'This point is on water. It can be inspected, but it cannot be set as a land destination yet.'
+						: null;
+				if (mode === 'onboarding') onSelection?.(travelRequest);
 			} catch {
 				if (id === request) {
 					message = 'Unable to read this destination.';
 					destination = null;
+					travelRequest = null;
+					settlement = null;
+					distanceKm = null;
 				}
 			}
 		};
 		const confirm = async () => {
-			if (!destination || destination.status !== 'land' || loading) return;
+			if (!travelRequest || loading) return;
 			loading = true;
 			message = null;
 			try {
-				await onTravel?.({
-					coordinate: destination.coordinate,
-					elevationMeters: destination.sample!.elevationMeters,
-					countryId: destination.ecology?.country?.id ?? null,
-					countryName: destination.ecology?.country?.name ?? null,
-					biomeId: destination.ecology?.biome ?? null,
-					biomeName: destination.ecology?.biomeLabel ?? null,
-					settlementId: settlement?.id ?? null,
-					settlementName: settlement?.name ?? null,
-					totalDistanceKm: distanceKm ?? undefined
-				});
+				await (onSetDestination ?? onTravel)?.(travelRequest);
 			} catch (error) {
-				message = error instanceof Error ? error.message : 'Travel failed.';
+				message = error instanceof Error ? error.message : 'Unable to set this destination.';
 				loading = false;
 			}
 		};
 		const down = (e: PointerEvent) => {
 			pointer = e.pointerId;
 			previous.set(e.clientX, e.clientY);
-			travel = 0;
+			dragDistance = 0;
 			canvas!.setPointerCapture(e.pointerId);
 		};
 		const move = (e: PointerEvent) => {
@@ -210,7 +185,7 @@
 			const x = e.clientX - previous.x,
 				y = e.clientY - previous.y;
 			previous.set(e.clientX, e.clientY);
-			travel += Math.abs(x) + Math.abs(y);
+			dragDistance += Math.abs(x) + Math.abs(y);
 			orbitYaw -= x * 0.005;
 			orbitPolar = Math.max(0.08, Math.min(Math.PI - 0.08, orbitPolar + y * 0.005));
 		};
@@ -218,7 +193,7 @@
 			if (pointer !== e.pointerId) return;
 			pointer = null;
 			canvas!.releasePointerCapture(e.pointerId);
-			if (e.type !== 'pointercancel' && travel < 5 && e.button === 0) void select(e);
+			if (e.type !== 'pointercancel' && dragDistance < 5 && e.button === 0) void select(e);
 		};
 		const wheel = (e: WheelEvent) => {
 			e.preventDefault();
@@ -265,9 +240,7 @@
 			window.removeEventListener('keydown', key);
 			destinationMarker.dispose();
 			currentMarker.dispose();
-			geography.dispose();
-			countries.dispose();
-			ecology.dispose();
+			destinationResolver.dispose();
 			planet.dispose();
 			renderer.dispose();
 		};
@@ -289,7 +262,7 @@
 			</p>
 			<h1 class="mt-1 text-xl font-semibold">World map</h1>
 			<p class="mb-0 text-sm text-white/65">
-				Click land to choose a destination. Drag to rotate, scroll to zoom.
+				Click land to inspect a place. Drag to rotate, scroll to zoom.
 			</p>
 			{#if currentLocation}<p class="mt-2 mb-0 text-xs text-emerald-200">
 					You are here · {currentLocation.countryName ??
@@ -302,25 +275,41 @@
 				onclick={onClose}>Close · M</button
 			>
 		</section>{/if}
-	<div class="pointer-events-none absolute right-4 bottom-4">
-		{#if mode === 'navigation'}<PlanetTravelHud
-				{destination}
-				{loading}
-				{message}
-				onEnter={confirm}
-			/>{/if}
-		{#if mode === 'navigation' && settlement}
-			<section
-				class="pointer-events-auto mt-2 rounded-xl border border-white/10 bg-black/65 p-4 text-white backdrop-blur-md"
-			>
-				<p class="m-0 text-xs font-semibold tracking-[.2em] text-sky-200 uppercase">Destination</p>
-				<p class="mt-2 mb-0 text-lg font-semibold">{settlement.name}</p>
-				<p class="m-0 text-sm text-white/60">{settlement.countryName}</p>
-				{#if currentLocation && distanceKm !== null}<p class="mt-3 mb-0 text-sm">
-						From {currentLocation.settlementName ?? currentLocation.countryName ?? 'your location'} ·
-						<strong>{Math.round(distanceKm).toLocaleString()} km</strong>
-					</p>{/if}
-			</section>
-		{/if}
-	</div>
+	{#if mode === 'navigation' && destination}
+		<section
+			class="pointer-events-auto absolute right-4 bottom-4 w-[min(24rem,calc(100vw-2rem))] rounded-xl border border-white/10 bg-black/65 p-4 text-white backdrop-blur-md"
+		>
+			<p class="m-0 text-xs font-semibold tracking-[.2em] text-sky-200 uppercase">
+				Inspected location
+			</p>
+			{#if travelRequest}
+				<p class="mt-2 mb-0 text-lg font-semibold">
+					{settlement?.name ??
+						travelRequest.countryName ??
+						travelRequest.biomeName ??
+						'Planet surface'}
+				</p>
+				{#if settlement && travelRequest.countryName}
+					<p class="m-0 text-sm text-white/60">{travelRequest.countryName}</p>
+				{/if}
+				<p class="mt-2 mb-0 text-sm text-white/70">
+					{travelRequest.biomeName ?? 'Unknown biome'}{distanceKm !== null
+						? ` · ${Math.round(distanceKm).toLocaleString()} km straight-line distance`
+						: ''}
+				</p>
+				<p class="mt-1 mb-0 text-xs text-white/50">Setting this destination does not move you.</p>
+				<button
+					type="button"
+					class="mt-3 rounded-md bg-sky-300 px-3 py-2 text-sm font-semibold text-[#061018] hover:bg-sky-200 disabled:cursor-wait disabled:opacity-55"
+					disabled={loading}
+					onclick={() => void confirm()}>{loading ? 'Setting…' : 'Set destination'}</button
+				>
+			{:else}
+				<p class="mt-2 mb-0 text-sm text-white/65">
+					{message ?? 'Reading land, elevation and region data…'}
+				</p>
+			{/if}
+			{#if message && travelRequest}<p class="mt-2 mb-0 text-sm text-amber-200">{message}</p>{/if}
+		</section>
+	{/if}
 </div>

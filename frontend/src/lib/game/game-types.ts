@@ -103,6 +103,7 @@ export interface GameSnapshot {
 	regionName: string;
 	zoneName: string;
 	geographicLocation: GeographicLocationSnapshot | null;
+	destination: import('./world/navigation/NavigationDestination').NavigationDestination | null;
 	travel: import('./world/travel/TravelPlan').TravelPlan | null;
 	miniMap: MiniMapSnapshot;
 	environment: WorldEnvironmentSnapshot;

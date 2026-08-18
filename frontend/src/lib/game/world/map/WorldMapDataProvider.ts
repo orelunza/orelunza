@@ -60,16 +60,13 @@ export class WorldMapDataProvider {
 				...features.filter((feature) => contains(bounds, feature.latitude, feature.longitude))
 			);
 		}
-		if (rules.countries) result.push(...this.countryFeatures(bounds));
-		for (const location of routeLocations(context))
-			if (contains(bounds, location.latitude, location.longitude))
-				result.push(
-					locationFeature(
-						location,
-						location.worldAnchorId === context.player?.worldAnchorId ? 100 : 90
-					)
-				);
-		return prioritize(result, rules.maximumFeatures);
+		const localFeatures = prioritize(result, rules.maximumFeatures);
+		if (!rules.countries) return localFeatures;
+
+		// Country boundaries and labels are reference geography, not optional detail.
+		// Keep every visible country outside the local-feature cap so a world view
+		// never drops countries merely because settlements or generated geometry exist.
+		return [...localFeatures, ...this.countryFeatures(bounds)];
 	}
 	private featuresForCell(
 		cell: MapCellKey,
@@ -149,24 +146,6 @@ function settlementFeature(settlement: SettlementAnchor): MapFeature {
 		source: 'generated',
 		importance: settlement.type === 'city' ? 70 : 20
 	};
-}
-function locationFeature(location: WorldLocation, importance: number): MapFeature {
-	return {
-		id: `location/${location.worldAnchorId}`,
-		type: 'settlement',
-		latitude: location.latitude,
-		longitude: location.longitude,
-		label: location.settlementName,
-		source: 'generated',
-		importance
-	};
-}
-function routeLocations(context: MapQueryContext): WorldLocation[] {
-	return context.plan
-		? [context.plan.origin, context.plan.destination]
-		: context.player
-			? [context.player]
-			: [];
 }
 function spatialLevel(zoom: number): number {
 	return zoom < 5 ? 2 : zoom < 12 ? 5 : 9;

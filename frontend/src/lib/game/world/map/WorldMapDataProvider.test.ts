@@ -25,6 +25,26 @@ describe('WorldMapDataProvider', () => {
 			URBAN_BUILDINGS.length
 		);
 	});
+
+	it('keeps every visible country even when the local feature budget is smaller', () => {
+		const provider = new WorldMapDataProvider();
+		provider.setCountries(
+			Array.from({ length: 120 }, (_, index) => ({
+				id: `country-${index}`,
+				isoA3: null,
+				name: `Country ${index}`,
+				continent: 'Test',
+				bounds: [-170, -80, 170, 80] as const,
+				label: [index - 60, 0] as const,
+				polygons: []
+			}))
+		);
+		const features = provider.query({ west: -180, east: 180, south: -85, north: 85 }, 3, {
+			player,
+			plan: null
+		});
+		expect(features.filter((feature) => feature.type === 'country')).toHaveLength(120);
+	});
 	it('does not issue building features at far zoom and remains bounded', () => {
 		const provider = new WorldMapDataProvider();
 		const far = provider.query({ west: -180, east: 180, south: -85, north: 85 }, 3, {

@@ -1,19 +1,22 @@
 import { boundsFor, project, unproject, type MapPoint } from './WorldMapProjection';
 import type { WorldLocation } from '../geography/WorldLocation';
+
 export interface MapViewport {
 	center: MapPoint;
 	zoom: number;
 }
+
 export function createViewport(latitude: number, longitude: number, zoom = 3): MapViewport {
 	return { center: project(latitude, longitude), zoom };
 }
+
 export function pan(
 	viewport: MapViewport,
 	dxPixels: number,
 	dyPixels: number,
-	width: number
+	mapHeightPixels: number
 ): MapViewport {
-	const scale = 2 ** viewport.zoom * width;
+	const scale = 2 ** viewport.zoom * Math.max(1, mapHeightPixels);
 	return {
 		...viewport,
 		center: {
@@ -22,18 +25,39 @@ export function pan(
 		}
 	};
 }
+
 export function zoomAt(viewport: MapViewport, delta: number): MapViewport {
 	return { ...viewport, zoom: Math.max(1, Math.min(17, viewport.zoom + delta)) };
 }
+
 export function geographicCenter(viewport: MapViewport) {
 	return unproject(viewport.center.x, viewport.center.y);
 }
+
+export function geographicAtPixel(
+	viewport: MapViewport,
+	xPixels: number,
+	yPixels: number,
+	widthPixels: number,
+	heightPixels: number
+): { latitude: number; longitude: number } {
+	const width = Math.max(1, widthPixels);
+	const height = Math.max(1, heightPixels);
+	const scale = 2 ** viewport.zoom * height;
+	return unproject(
+		wrap(viewport.center.x + (xPixels - width / 2) / scale),
+		Math.max(0, Math.min(1, viewport.center.y + (yPixels - height / 2) / scale))
+	);
+}
+
 export function viewportBounds(viewport: MapViewport, aspect: number) {
 	return boundsFor(viewport.center, viewport.zoom, Math.max(0.1, aspect));
 }
+
 export function recenter(viewport: MapViewport, latitude: number, longitude: number): MapViewport {
 	return { ...viewport, center: project(latitude, longitude) };
 }
+
 export function fitLocations(
 	viewport: MapViewport,
 	locations: readonly Pick<WorldLocation, 'latitude' | 'longitude'>[],
@@ -60,9 +84,11 @@ export function fitLocations(
 		zoom: Math.max(1, Math.min(17, Math.log2(1 / span)))
 	};
 }
+
 function wrap(value: number): number {
 	return ((value % 1) + 1) % 1;
 }
+
 function unwrap(value: number, reference: number): number {
 	let result = value;
 	while (result - reference > 0.5) result -= 1;

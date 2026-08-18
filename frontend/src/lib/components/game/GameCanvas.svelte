@@ -12,13 +12,12 @@
 				token: number;
 		  }
 		| {
-				type: 'plan-route';
+				type: 'set-destination';
 				destination: PlanetTravelRequest;
 				token: number;
 		  }
 		| {
-				type: 'travel-to-planet';
-				destination: PlanetTravelRequest;
+				type: 'clear-destination';
 				token: number;
 		  }
 		| {
@@ -132,11 +131,11 @@
 			case 'open-globe':
 				engine.openGlobe();
 				break;
-			case 'plan-route':
-				engine.planRoute(command.destination);
+			case 'set-destination':
+				engine.setNavigationDestination(command.destination);
 				break;
-			case 'travel-to-planet':
-				void engine.travelToPlanet(command.destination);
+			case 'clear-destination':
+				engine.clearNavigationDestination();
 				break;
 
 			case 'resume':

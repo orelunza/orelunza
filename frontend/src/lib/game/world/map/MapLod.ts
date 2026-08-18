@@ -11,7 +11,7 @@ export function lodFeatures(zoom: number) {
 	return {
 		detail,
 		settlements: true,
-		countries: detail !== 'close',
+		countries: true,
 		water: true,
 		roads: detail !== 'far',
 		buildings: detail === 'close',
