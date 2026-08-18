@@ -359,7 +359,7 @@
 			camera.position.setFromSphericalCoords(distance, orbitPolar, orbitYaw);
 			camera.lookAt(0, 0, 0);
 			planet.update(camera, Math.max(1, canvas!.clientHeight));
-			countryLabelLayer.update(distance);
+			countryLabelLayer.update(camera, canvas!.clientWidth, canvas!.clientHeight);
 			currentLabel.update(distance);
 			destinationLabel.update(distance);
 			renderer.render(scene, camera);
